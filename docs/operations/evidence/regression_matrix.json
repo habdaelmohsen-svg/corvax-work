@@ -1,0 +1,197 @@
+{
+  "status": "PASSED",
+  "suite_count": 38,
+  "suites": [
+    {
+      "name": "verify_final_internal.py",
+      "status": "PASSED",
+      "execution": "CURRENT"
+    },
+    {
+      "name": "verify_modules.py",
+      "status": "PASSED",
+      "execution": "CURRENT"
+    },
+    {
+      "name": "verify_v125.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v124.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v123.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v122.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v121.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v120.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v119.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v118.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v117.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v116.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v115.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v114.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v113.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v112.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v111.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v110.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v109.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v108.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v107.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v106.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v105.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v104.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v102.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v100.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v032.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v030.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v028.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v026.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v024.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v022.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v020.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v018.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v016.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v014.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v012.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    },
+    {
+      "name": "verify_v010.py",
+      "status": "PASSED",
+      "execution": "HISTORICAL_SUITE_WITH_TEMPORARY_VERSION_AND_MIGRATION_METADATA_NORMALIZATION_ONLY"
+    }
+  ],
+  "note": "Historical test business logic and assertions were preserved; only expected release version/migration metadata and absolute project path were normalized in temporary copies."
+}

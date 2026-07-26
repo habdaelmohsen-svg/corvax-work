@@ -1,0 +1,58 @@
+databases:
+  - name: corvax-db
+    plan: starter
+    databaseName: corvax
+    user: corvax
+
+services:
+  - type: web
+    name: corvax-business-platform
+    runtime: docker
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /health/ready
+    preDeployCommand: alembic upgrade head
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: corvax-db
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        sync: false
+      - key: JWT_PRIVATE_KEY_PEM
+        sync: false
+      - key: JWT_PUBLIC_KEYS_JSON
+        sync: false
+      - key: JWT_ACTIVE_KID
+        sync: false
+      - key: FIELD_ENCRYPTION_KEYS_JSON
+        sync: false
+      - key: FIELD_ENCRYPTION_ACTIVE_KID
+        sync: false
+      - key: SEED_DEMO_DATA
+        value: false
+      - key: AUTO_CREATE_SCHEMA
+        value: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: TRUSTED_HOSTS
+        sync: false
+      - key: FORCE_HTTPS
+        value: true
+      - key: DOCS_ENABLED
+        value: false
+      - key: ACCESS_TOKEN_MINUTES
+        value: 15
+      - key: REFRESH_TOKEN_DAYS
+        value: 7
+      - key: RATE_LIMIT_ENABLED
+        value: true
+      - key: MRP_INLINE_EXECUTION
+        value: false
+      - key: PAYROLL_STRICT_WORKFLOW
+        value: true
+      - key: ENFORCE_SENSITIVE_ROLE_MFA
+        value: true

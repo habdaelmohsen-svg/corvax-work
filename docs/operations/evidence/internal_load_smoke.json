@@ -1,0 +1,26 @@
+{
+  "scope": "INTERNAL_DISPOSABLE_SQLITE_SMOKE",
+  "status": "PASSED",
+  "requests": 400,
+  "concurrency": 20,
+  "duration_seconds": 5.14,
+  "throughput_rps": 77.83,
+  "latency_ms": {
+    "mean": 251.22,
+    "p50": 197.35,
+    "p95": 694.25,
+    "p99": 942.64,
+    "max": 1449.0
+  },
+  "status_counts": {
+    "200": 400
+  },
+  "failure_count": 0,
+  "failure_samples": [],
+  "limitations": [
+    "Not PostgreSQL",
+    "Not production infrastructure",
+    "Not a soak or stress test",
+    "No real customer data"
+  ]
+}

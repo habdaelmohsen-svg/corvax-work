@@ -1,0 +1,18 @@
+{
+  "status": "BLOCKED_BY_EXTERNAL_ENVIRONMENT_AND_SIGNOFF",
+  "internal_software_preparation": "COMPLETE",
+  "postgresql_smoke": "NOT_EXECUTED_NO_POSTGRESQL_INSTANCE_OR_CLIENT_BINARIES",
+  "production_load_stress_soak": "NOT_EXECUTED_REQUIRES_PRODUCTION_LIKE_POSTGRESQL_STAGING",
+  "opening_balances": "NOT_EXECUTED_REQUIRES_APPROVED_REAL_DATA",
+  "uat_signoff": "NOT_EXECUTED_REQUIRES_BUSINESS_USERS",
+  "parallel_run": "NOT_EXECUTED_REQUIRES_LIVE_CYCLE",
+  "penetration_test": "NOT_EXECUTED_REQUIRES_INDEPENDENT_SECURITY_PROVIDER",
+  "official_integrations": "NOT_ACTIVATED_REQUIRES_CREDENTIALS_AND_CERTIFICATION",
+  "available_scripts": [
+    "backend/scripts/postgres_smoke.py",
+    "backend/scripts/postgres_dr_drill.py",
+    "backend/scripts/internal_load_smoke.py",
+    "backend/scripts/verify_restore.py",
+    "backend/scripts/opening_balance_import.py"
+  ]
+}

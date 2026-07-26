@@ -1,0 +1,30 @@
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/dist
+.git
+.gitignore
+
+# Secrets and credentials must never enter the image (audit finding M-08)
+.env
+.env.*
+!.env.example
+!.env.production.template
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Local databases and backups
+*.db
+*.sqlite
+*.sqlite3
+backend/data/
+backend/data/backups/
+
+# Test and delivery artefacts
+_CORVAX_DELIVERY/
+.corvax-backups/
+docs/screenshots/

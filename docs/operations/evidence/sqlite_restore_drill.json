@@ -1,0 +1,8 @@
+{
+  "status": "PASSED",
+  "integrity": "ok",
+  "table_count": 261,
+  "migration_head": "AUTO_SCHEMA_NO_ALEMBIC_STAMP",
+  "sha256": "315bbdc6566022f1ef61493c19016cf01915f16527e8f4b1e94b7e36e1eb39b4",
+  "scope": "DISPOSABLE_SQLITE_RESTORE_DRILL"
+}

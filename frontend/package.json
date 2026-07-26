@@ -1,0 +1,32 @@
+{
+  "name": "corvax-business-platform-frontend",
+  "private": true,
+  "version": "1.0.0-agreement-completion-rc27.4",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "6.0.3",
+    "lucide-react": "1.24.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-router-dom": "7.18.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.4",
+    "zustand": "5.0.8",
+    "xlsx": "0.18.5",
+    "jspdf": "4.2.1",
+    "jspdf-autotable": "5.0.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3"
+  },
+  "engines": {
+    "node": ">=22.12.0 <23",
+    "npm": ">=10 <12"
+  }
+}

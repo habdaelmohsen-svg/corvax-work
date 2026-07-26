@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: corvax-business-platform
+    runtime: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health/ready
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: staging
+      - key: SEED_DEMO_DATA
+        value: true
+      - key: AUTO_CREATE_SCHEMA
+        value: false
+      - key: ALLOWED_ORIGINS
+        value: https://corvax-business-platform.onrender.com
+      - key: TRUSTED_HOSTS
+        value: corvax-business-platform.onrender.com,localhost,127.0.0.1
+      - key: FORCE_HTTPS
+        value: false
+      - key: DOCS_ENABLED
+        value: true
+      - key: RATE_LIMIT_ENABLED
+        value: true
+      - key: MRP_INLINE_EXECUTION
+        value: true
+      - key: ENFORCE_SENSITIVE_ROLE_MFA
+        value: false
