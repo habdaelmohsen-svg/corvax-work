@@ -6,9 +6,15 @@ type QueueItem={module:string;item_type:string;id:number;number:string;status:st
 
 export function WorkspacePage({ar,companyId}:{ar:boolean;companyId:number}){
   const [items,setItems]=useState<QueueItem[]>([]);const [counts,setCounts]=useState<Record<string,number>>({});
-  const [query,setQuery]=useState('');const [results,setResults]=useState<QueueItem[]>([]);const [busy,setBusy]=useState(false);const [message,setMessage]=useState('');
+  // FIX: the header search bar navigated to /workbench?q=... but this page never
+  // read the parameter, so the typed text was silently dropped and the page
+  // opened empty. It now seeds the box from the URL and searches immediately.
+  const initialQuery=(()=>{try{return new URLSearchParams(window.location.search).get('q')||''}catch{return ''}})();
+  const [query,setQuery]=useState(initialQuery);const [results,setResults]=useState<QueueItem[]>([]);const [busy,setBusy]=useState(false);const [message,setMessage]=useState('');
   const load=async()=>{setBusy(true);try{const r=await fetch(`/api/v1/workspace/work-queue?company_id=${companyId}&limit=200`,{headers:authHeaders()});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Work queue failed');setItems(data.items||[]);setCounts(data.by_module||{});setMessage('')}catch(e:any){setMessage(e.message)}finally{setBusy(false)}};
   useEffect(()=>{load()},[companyId]);
+  // Search straight away when the user arrived from the header search bar.
+  useEffect(()=>{if(initialQuery.trim().length>=2){search()}},[]);  // eslint-disable-line react-hooks/exhaustive-deps
   async function search(){if(query.trim().length<2){setResults([]);return}setBusy(true);try{const r=await fetch(`/api/v1/workspace/search?company_id=${companyId}&q=${encodeURIComponent(query.trim())}`,{headers:authHeaders()});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Search failed');setResults(data.results||[]);setMessage('')}catch(e:any){setMessage(e.message)}finally{setBusy(false)}}
   const totalAmount=useMemo(()=>items.reduce((n,x)=>n+Number(x.amount||0),0),[items]);
   const shown=query.trim().length>=2?results:items;

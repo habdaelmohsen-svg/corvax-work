@@ -94,7 +94,7 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
           if (items.length === 0) return null;
           const holdsActive = items.some((item) => item.key === view);
           const open = openGroups[group.key] ?? holdsActive;
-          return <div key={group.key} className="nav-group">
+          return <div key={group.key} className="nav-group" data-group={group.key}>
             <button
               type="button"
               className={`nav-group-head${open ? ' open' : ''}${holdsActive ? ' has-active' : ''}`}
@@ -136,7 +136,7 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
     <section className="workspace">
       <header className="app-header">
         <button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label={ar ? 'فتح القائمة' : 'Open menu'}><Menu size={20}/></button>
-        <div className="global-search"><Search size={18}/><input value={globalQuery} onChange={(e)=>setGlobalQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter'&&globalQuery.trim().length>=2){navigate(`/workbench?q=${encodeURIComponent(globalQuery.trim())}`)}}} aria-label={ar ? 'البحث في النظام' : 'Search system'} placeholder={ar ? 'البحث في النظام...' : 'Search in system...'}/><kbd><Command size={12}/> K</kbd></div>
+        <div className="global-search"><Search size={18}/><input value={globalQuery} onChange={(e)=>setGlobalQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter'&&globalQuery.trim().length>=2){navigate(`/workbench?q=${encodeURIComponent(globalQuery.trim())}`,{replace:false})}}} aria-label={ar ? 'البحث في النظام' : 'Search system'} placeholder={ar ? 'البحث في النظام...' : 'Search in system...'}/><kbd><Command size={12}/> K</kbd></div>
         <div className="header-actions">
           <button className="icon-action" title={ar ? 'المفضلة' : 'Favorites'}><Sparkles size={18}/></button>
           

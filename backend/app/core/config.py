@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # Recovery door: when true, the administrator password is reset on every
     # start. Intended to unlock a locked-out owner. Turn it off afterwards.
     bootstrap_force_admin_reset: bool = False
+    # Guard for the trial-data reset endpoint. Off by default; turn on only when
+    # you deliberately want to clear demo data, then turn it off again.
+    allow_data_reset: bool = False
     auto_create_schema: bool = True
     allowed_origins: str = "*"
     trusted_hosts: str = "*"
