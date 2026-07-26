@@ -485,7 +485,7 @@ fb2a1c4ff0f273780e945ef1b2a9c3d3cee94c2c6e7a9f301db9406273696db1  ./frontend/src
 67875b59737ed5d013b7e0513e0b951a97b7326c86dd548252220d663bf20bc9  ./frontend/src/main.tsx
 875603cac8de044390f6b920397dbf429055e3b3bd97bc3469f2c6ce042e3a50  ./frontend/src/styles/auth.css
 867c5df3f4ad2e0f7368a8c2faf19bac4fb35f44b0737dafb2b541c8dd1c78d5  ./frontend/src/styles/company-selector.css
-49b5d9b5c915a847f7b13965bc77d956ae53d999dac8f2b7b1c15e2f57e19977  ./frontend/src/styles/dashboard.css
+7a4559ccf37d335faa70713fdfe3edc09bc1c69811db4017a1a1238cd900c05f  ./frontend/src/styles/dashboard.css
 6b761cefefdf8de504aa6991d1a63eacc35c911e854b26e4f42dac246d735d9e  ./frontend/src/styles/rc27_4_ai_assistant_h5.css
 5cf471c870ffff987d2fd5ee528c219044116493da9e562689eba5ad77da2d60  ./frontend/src/styles/rc27_4_design_h4_1.css
 4e0c3328af66e1281e7d03c5759050856b2f2b7255a556d677324001286f259f  ./frontend/src/styles/rc27_4_hardening.css

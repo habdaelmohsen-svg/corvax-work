@@ -244,55 +244,68 @@
 .dash nav .nav-group-items > button.active::before { background: #7d97ea; }
 
 /* -------------------------------------------------------------- light sidebar
-   The sidebar was navy in both themes, so in day mode it fought the white page
-   and the icons were washed out. In light mode it is now white with dark text;
-   icons keep their colour in BOTH themes so sections stay recognisable. */
+   The sidebar is navy in dark mode. In light mode it becomes white.
 
-/* Light mode = the dash WITHOUT .theme-dark */
+   IMPORTANT: `.dash aside` sets `color:#fff`, and several children (the CORVAX
+   wordmark, the divider, the theme switch, the footer) rely on white or on
+   translucent-white borders. Flipping only the background made all of that
+   invisible - the logo vanished on white. Every one of those is re-coloured
+   below, not just the background. */
+
 .dash:not(.theme-dark) aside {
   background: #ffffff;
+  color: #1b2436;                      /* was #fff -> invisible on white */
   border-inline-end: 1px solid var(--border);
 }
 
-.dash:not(.theme-dark) .brand span,
-.dash:not(.theme-dark) .brand.dark span { color: #64708f; }
+/* --- wordmark ------------------------------------------------------------ */
+.dash:not(.theme-dark) .brand-sidebar {
+  border-bottom-color: var(--border);  /* was translucent white */
+}
+.dash:not(.theme-dark) .brand-sidebar strong { color: #16203a; }
+.dash:not(.theme-dark) .brand-sidebar span   { color: #b8860b !important; }
+.dash:not(.theme-dark) .corvax-symbol {
+  background: #16203a;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(22, 32, 58, .18);
+}
+.dash:not(.theme-dark) .nav-section-label { color: #8792ad; }
 
+/* --- navigation ---------------------------------------------------------- */
 .dash:not(.theme-dark) nav button,
-.dash:not(.theme-dark) .logout {
-  color: #1b2436;
-}
+.dash:not(.theme-dark) .logout { color: #1b2436; }
 .dash:not(.theme-dark) nav button small { color: #7b869f; }
-
-.dash:not(.theme-dark) nav button:hover {
-  background: #eef2fb;
-  color: #0f1626;
-}
+.dash:not(.theme-dark) nav button:hover { background: #eef2fb; color: #0f1626; }
 .dash:not(.theme-dark) nav button.active {
   background: #e5ecfd;
-  color: #17203a;
+  color: #16203a;
   font-weight: 700;
 }
+.dash:not(.theme-dark) .nav-chevron { color: #aab3c7; }
 
-.dash:not(.theme-dark) button.nav-group-head { color: #5b6party680; }
+/* --- groups -------------------------------------------------------------- */
 .dash:not(.theme-dark) button.nav-group-head { color: #5b6680; }
 .dash:not(.theme-dark) button.nav-group-head:hover,
-.dash:not(.theme-dark) button.nav-group-head.has-active { color: #17203a; }
-.dash:not(.theme-dark) .nav-group-count {
-  background: #e8edf8;
-  color: #47536e;
-}
-.dash:not(.theme-dark) .nav-group-items > button::before { background: #dbe2f0; }
+.dash:not(.theme-dark) button.nav-group-head.has-active { color: #16203a; }
+.dash:not(.theme-dark) .nav-group-count { background: #e8edf8; color: #47536e; }
+.dash:not(.theme-dark) .nav-group-items > button::before { background: #dde4f1; }
 .dash:not(.theme-dark) .nav-group-items > button.active::before { background: #3157d5; }
 
-.dash:not(.theme-dark) .sidebar-footer,
-.dash:not(.theme-dark) .sidebar-user { border-color: var(--border); }
-.dash:not(.theme-dark) .sidebar-user strong { color: #17203a; }
+/* --- footer, user card, theme switch ------------------------------------- */
+.dash:not(.theme-dark) .sidebar-footer { border-top-color: var(--border); }
+.dash:not(.theme-dark) .sidebar-user strong { color: #16203a; }
 .dash:not(.theme-dark) .sidebar-user span { color: #7b869f; }
-.dash:not(.theme-dark) .theme-switch { color: #47536e; }
+.dash:not(.theme-dark) .theme-switch {
+  border-color: var(--border);
+  background: #f5f7fc;
+  color: #47536e;
+}
+.dash:not(.theme-dark) .theme-switch i { background: #d3dbeb; }
+.dash:not(.theme-dark) .sidebar-version { color: #9aa4bb; }
 
-/* Coloured icons in BOTH themes -------------------------------------------
-   Section icons used to inherit the text colour, so they read as one grey mass.
-   Each group now carries its own hue, which makes the sidebar scannable. */
+/* ------------------------------------------------------------ section icons
+   Icons previously inherited the text colour, so the sidebar read as one grey
+   mass. Each group now carries a hue in BOTH themes, which makes it scannable. */
 .dash nav .nav-icon svg { color: #6b7fd7; }
 
 .dash nav .nav-group[data-group="finance"]     .nav-icon svg { color: #3157d5; }
@@ -306,7 +319,7 @@
 .dash nav .nav-group[data-group="governance"]  .nav-icon svg { color: #5b6680; }
 .dash nav .nav-group[data-group="system"]      .nav-icon svg { color: #7a6aa8; }
 
-/* Slightly brighter hues on the dark sidebar so they stay legible. */
+/* Brighter on navy so they stay legible in dark mode. */
 .dash.theme-dark nav .nav-icon svg { color: #93a6ee; }
 .dash.theme-dark nav .nav-group[data-group="finance"]     .nav-icon svg { color: #7d9cff; }
 .dash.theme-dark nav .nav-group[data-group="tax"]         .nav-icon svg { color: #e2b455; }
@@ -319,5 +332,4 @@
 .dash.theme-dark nav .nav-group[data-group="governance"]  .nav-icon svg { color: #a6b0c8; }
 .dash.theme-dark nav .nav-group[data-group="system"]      .nav-icon svg { color: #b4a6e0; }
 
-/* The active item keeps its icon readable against the highlight. */
 .dash nav button.active .nav-icon svg { color: currentColor; }
