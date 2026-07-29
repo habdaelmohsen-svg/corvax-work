@@ -8,7 +8,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v016.db"
+DB_PATH = Path("/tmp") / "verify_v016.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SEED_DEMO_DATA"] = "true"
@@ -28,19 +28,19 @@ def ok(response, expected=200):
 with TestClient(app) as client:
     login = ok(client.post("/api/v1/auth/login", json={"email":"admin@corvaxplatform.com","password":"Corvax@123"}))
     admin = {"Authorization": f"Bearer {login['access_token']}"}
-    assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.3"
+    assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4"
 
     # Create independent approver and security test users.
     cfo = ok(client.post("/api/v1/admin/users", headers=admin, json={
         "name_ar":"مدير مالي تجريبي","name_en":"Demo CFO","email":"cfo@corvaxplatform.com","password":"StrongCFO@2026!",
-        "memberships":[{"company_id":1,"role_code":"CFO"},{"company_id":4,"role_code":"CFO"}],
+        "require_password_change": False, "memberships":[{"company_id":1,"role_code":"CFO"},{"company_id":4,"role_code":"CFO"}],
     }), 201)
     cfo_login = ok(client.post("/api/v1/auth/login", json={"email":"cfo@corvaxplatform.com","password":"StrongCFO@2026!"}))
     cfo_headers = {"Authorization": f"Bearer {cfo_login['access_token']}"}
 
     security_user = ok(client.post("/api/v1/admin/users", headers=admin, json={
         "name_ar":"مستخدم أمان","name_en":"Security User","email":"security@corvaxplatform.com","password":"Security@2026!",
-        "memberships":[{"company_id":1,"role_code":"ACCOUNTANT"}],
+        "require_password_change": False, "memberships":[{"company_id":1,"role_code":"ACCOUNTANT"}],
     }), 201)
     sec_login = ok(client.post("/api/v1/auth/login", json={"email":"security@corvaxplatform.com","password":"Security@2026!"}))
     sec_headers = {"Authorization": f"Bearer {sec_login['access_token']}"}
@@ -54,7 +54,7 @@ with TestClient(app) as client:
 
     locked = ok(client.post("/api/v1/admin/users", headers=admin, json={
         "name_ar":"مستخدم قفل","name_en":"Lock User","email":"lock@corvaxplatform.com","password":"LockUser@2026!",
-        "memberships":[{"company_id":1,"role_code":"ACCOUNTANT"}],
+        "require_password_change": False, "memberships":[{"company_id":1,"role_code":"ACCOUNTANT"}],
     }), 201)
     for _ in range(5):
         assert client.post("/api/v1/auth/login", json={"email":"lock@corvaxplatform.com","password":"wrong-pass"}).status_code == 401

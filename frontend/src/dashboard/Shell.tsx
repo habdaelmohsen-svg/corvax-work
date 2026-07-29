@@ -1,14 +1,16 @@
-import {useEffect, useMemo, useState} from 'react';
-import {useLocation, useNavigate} from 'react-router-dom';
+import {useCallback, useEffect, useMemo, useState} from 'react';
 import {
-  Bell, Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, Command,
-  LogOut, Mail, Menu, Moon, Search, Sparkles, Sun,
+  Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, Command,
+  LogOut, Menu, Moon, Search, Sun,
 } from 'lucide-react';
 import {apiFetch} from '../api/client';
+import {CorvaxAiAssistantHost} from '../components/ai-assistant';
 import {NAV_GROUPS, navItems} from './navigation';
 import {DashboardRoutes} from './routes';
 import {useDashboardUi} from './store';
 import type {CompanyScope, Lang, View} from './types';
+
+const routeFromHash = () => (window.location.hash.replace(/^#\/?/, '').split('?')[0] || 'executive') as View;
 
 export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   lang: Lang;
@@ -17,18 +19,23 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   onLogout: () => void;
 }) {
   const ar = lang === 'ar';
-  const location = useLocation();
-  const navigate = useNavigate();
+  const [view, setView] = useState<View>(routeFromHash);
+  const navigate = useCallback((path: string, options?: {replace?: boolean}) => {
+    const hash = `#${path.startsWith('/') ? path : `/${path}`}`;
+    if (options?.replace) window.history.replaceState(null, '', hash);
+    else window.location.hash = hash;
+    setView(routeFromHash());
+  }, []);
   const {menuOpen, darkMode, setMenuOpen, toggleTheme} = useDashboardUi();
   const [apiOnline, setApiOnline] = useState(false);
   const [globalQuery,setGlobalQuery]=useState('');
-  const company = JSON.parse(localStorage.getItem('corvax_company') || '{}');
+  const [navigationNotice, setNavigationNotice] = useState('');
+  const company = useMemo(() => JSON.parse(localStorage.getItem('corvax_company') || '{}'), []);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const scope = (company.id || 'holding') as CompanyScope;
   const apiCompanyId = Number(company.apiId || 1);
-  const user = JSON.parse(localStorage.getItem('corvax_user') || '{}');
+  const user = useMemo(() => JSON.parse(localStorage.getItem('corvax_user') || '{}'), []);
   const userName = user.name || user.name_ar || user.name_en || (ar ? 'مستخدم CORVAX' : 'CORVAX User');
-  const view = (location.pathname.split('/').filter(Boolean)[0] || 'executive') as View;
   // AUDIT H-06: the sidebar used to show all 44 sections to everyone regardless of
   // permissions. A user without access still saw the section and only met a 403
   // after clicking. Sections are now hidden unless the user holds a matching
@@ -61,13 +68,27 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   }, []);
 
   useEffect(() => {
+    const syncRoute = () => setView(routeFromHash());
+    window.addEventListener('hashchange', syncRoute);
+    return () => window.removeEventListener('hashchange', syncRoute);
+  }, []);
+
+  useEffect(() => {
     if (!availableNav.some((item) => item.key === view)) navigate('/executive', {replace: true});
   }, [availableNav, navigate, view]);
 
-  function selectView(next: View) {
+  const selectView = useCallback((next: View) => {
+    if (!availableNav.some((item) => item.key === next)) {
+      setNavigationNotice(ar
+        ? 'لا تملك صلاحية الوصول إلى هذه الصفحة ضمن الشركة الحالية.'
+        : 'You do not have access to this page for the current company.');
+      setMenuOpen(false);
+      return;
+    }
+    setNavigationNotice('');
     navigate(`/${next}`);
     setMenuOpen(false);
-  }
+  }, [ar, availableNav, navigate, setMenuOpen]);
 
   return <main className={`dash ${darkMode ? 'theme-dark' : ''}`} dir={ar ? 'rtl' : 'ltr'}>
     <aside className={menuOpen ? 'open' : ''}>
@@ -137,11 +158,12 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
       <header className="app-header">
         <button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label={ar ? 'فتح القائمة' : 'Open menu'}><Menu size={20}/></button>
         <div className="global-search"><Search size={18}/><input value={globalQuery} onChange={(e)=>setGlobalQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter'&&globalQuery.trim().length>=2){navigate(`/workbench?q=${encodeURIComponent(globalQuery.trim())}`,{replace:false})}}} aria-label={ar ? 'البحث في النظام' : 'Search system'} placeholder={ar ? 'البحث في النظام...' : 'Search in system...'}/><kbd><Command size={12}/> K</kbd></div>
+        <CorvaxAiAssistantHost lang={lang}/>
         <div className="header-actions">
-          <button className="icon-action" title={ar ? 'المفضلة' : 'Favorites'}><Sparkles size={18}/></button>
           
           
-          <button className="icon-action" title={ar ? 'التقويم' : 'Calendar'}><CalendarDays size={18}/></button>
+          
+          
           <button className="company-switcher" onClick={onChangeCompany}><span className="company-badge"><Building2 size={18}/></span><span><strong>{ar ? (company.name_ar || 'المجموعة القابضة') : (company.name_en || 'Holding Group')}</strong><small>CORVAX Holding Co.</small></span><ChevronDown size={15}/></button>
           <button className="language-compact" onClick={() => setLang(ar ? 'en' : 'ar')}>{ar ? 'EN' : 'ع'}</button>
           <div className="user-profile"><div className="avatar">{String(userName).charAt(0)}</div><div><strong>{userName}</strong><small>{ar ? 'مستخدم معتمد' : 'Authorized user'}</small></div><ChevronDown size={14}/></div>
@@ -153,7 +175,8 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
         <div className="heading-side"><div className="current-date"><CalendarDays size={18}/><span><strong>{formattedDate}</strong><small>{new Date().toLocaleDateString(ar ? 'ar-SA' : 'en-GB')}</small></span></div><div className={`status-pill ${apiOnline ? '' : 'offline'}`}><CheckCircle2 size={16}/>{apiOnline ? (ar ? 'متصل' : 'Connected') : (ar ? 'غير متصل' : 'Offline')}</div></div>
       </div>
 
-      <DashboardRoutes ar={ar} companyId={apiCompanyId} scope={scope}/>
+      {navigationNotice&&<div className="navigation-notice" role="alert">{navigationNotice}</div>}
+      <DashboardRoutes ar={ar} companyId={apiCompanyId} scope={scope} view={view} onNavigate={selectView}/>
     </section>
   </main>;
 }

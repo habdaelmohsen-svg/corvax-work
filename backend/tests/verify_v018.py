@@ -4,7 +4,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v018.db"
+DB_PATH = Path("/tmp") / "verify_v018.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SEED_DEMO_DATA"] = "true"
@@ -21,7 +21,7 @@ def ok(r, status=200):
 with TestClient(app) as client:
     login = ok(client.post('/api/v1/auth/login', json={'email':'admin@corvaxplatform.com','password':'Corvax@123'}))
     h = {'Authorization': f"Bearer {login['access_token']}"}
-    assert ok(client.get('/health'))['version'] == '1.0.0-agreement-completion-rc27.3'
+    assert ok(client.get('/health'))['version'] == '1.0.0-agreement-completion-rc27.4'
     ok(client.post('/api/v1/fx-consolidation/rates', headers=h, json={
         'company_id':1,'currency_code':'USD','rate_date':'2026-07-12','rate':'3.75','source':'SAMA_REFERENCE'}), 201)
     ok(client.post('/api/v1/fx-consolidation/balances', headers=h, json={

@@ -7,7 +7,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v010.db"
+DB_PATH = Path("/tmp") / "verify_v010.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SECRET_KEY"] = "verification-secret-key"
@@ -25,7 +25,7 @@ def login(client: TestClient, email: str, password: str) -> dict[str, str]:
 
 with TestClient(app) as client:
     admin = login(client, "admin@corvaxplatform.com", "Corvax@123")
-    assert client.get("/health").json()["version"] == "1.0.0-agreement-completion-rc27.3"
+    assert client.get("/health").json()["version"] == "1.0.0-agreement-completion-rc27.4"
     assert len(client.get("/api/v1/companies", headers=admin).json()) == 4
 
     create_user = client.post(
@@ -36,7 +36,7 @@ with TestClient(app) as client:
             "name_en": "Demo CFO",
             "email": "cfo@corvaxplatform.com",
             "password": "CfoSecure@123",
-            "memberships": [{"company_id": 1, "role_code": "CFO"}],
+            "require_password_change": False, "memberships": [{"company_id": 1, "role_code": "CFO"}],
         },
     )
     assert create_user.status_code == 201, create_user.text

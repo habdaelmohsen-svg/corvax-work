@@ -8,7 +8,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v118.db"
+DB_PATH = Path("/tmp") / "verify_v118.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ.update({
     "DATABASE_URL": f"sqlite:///{DB_PATH}",
@@ -16,7 +16,7 @@ os.environ.update({
     "SEED_DEMO_DATA": "true",
     "AUTO_CREATE_SCHEMA": "true",
     "TRUSTED_HOSTS": "testserver,localhost,127.0.0.1",
-    "APP_VERSION": "1.0.0-agreement-completion-rc27.3",
+    "APP_VERSION": "1.0.0-agreement-completion-rc27.4",
     "ENABLE_RATE_LIMIT_TESTING": "true",
 })
 
@@ -57,7 +57,7 @@ def main():
     with TestClient(app) as client:
         login = ok(client.post("/api/v1/auth/login", json={"email": "admin@corvaxplatform.com", "password": "Corvax@123"}))
         h = {"Authorization": f"Bearer {login['access_token']}"}
-        assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.3"
+        assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4"
         with SessionLocal() as db:
             for period in db.query(FiscalPeriod).all():
                 period.status = "OPEN"

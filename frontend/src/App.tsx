@@ -3,7 +3,6 @@ import { Login } from './components/Login';
 import { ForcePasswordChange } from './dashboard/usersPage';
 import { CompanySelector } from './components/CompanySelector';
 import { Dashboard } from './components/Dashboard';
-import { CorvaxAiAssistantHost } from './components/ai-assistant';
 
 type Lang = 'ar' | 'en';
 type Screen = 'login' | 'password' | 'company' | 'dashboard';
@@ -74,8 +73,7 @@ export default function App() {
     }} />;
   }
   return (
-    <>
-      <Dashboard
+    <Dashboard
     lang={lang}
     setLang={setLang}
     onChangeCompany={() => setScreen('company')}
@@ -85,7 +83,5 @@ export default function App() {
       setScreen('login');
     }}
   />
-      <CorvaxAiAssistantHost lang={lang} />
-    </>
   );
 }

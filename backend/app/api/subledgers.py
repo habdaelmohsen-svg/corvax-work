@@ -294,6 +294,75 @@ def create_purchase_invoice(
     return {"id": invoice.id, "number": invoice.number, "status": invoice.status, "subtotal": invoice.subtotal, "vat_amount": invoice.vat_amount, "total": invoice.total}
 
 
+
+# ------------------------------------------------------- purchase posting guard
+# ACCOUNTING RISK THIS CLOSES
+#   The platform has a correct three-way flow:
+#       purchase order -> goods receipt (moves stock, credits 214010
+#       "Goods Received Not Invoiced") -> supplier invoice (clears 214010, credits AP)
+#   The supplier invoice, however, had no knowledge of receipts. Posting an
+#   invoice line straight onto an inventory account (113010) instead of clearing
+#   214010 debits inventory a SECOND time while the warehouse holds one physical
+#   quantity. The ledger and the stock ledger then drift apart permanently, and
+#   the gap is only found at a stock count months later.
+#
+#   Inventory accounts are therefore refused on a supplier invoice. Goods reach
+#   inventory through the receipt; the invoice settles the money.
+
+def _inventory_account_ids(db: Session, company_id: int) -> set[int]:
+    """Accounts that represent stock on hand and must not be touched by an invoice."""
+    from app.models.supply_chain import Item
+
+    ids: set[int] = set()
+    for (account_id,) in db.execute(
+        select(Item.inventory_account_id).where(
+            Item.company_id == company_id, Item.inventory_account_id.is_not(None)
+        )
+    ):
+        if account_id:
+            ids.add(int(account_id))
+    # 113010 is the seeded stock account and may exist before any item is defined.
+    stock = db.scalar(
+        select(Account).where(Account.company_id == company_id, Account.code == "113010")
+    )
+    if stock:
+        ids.add(stock.id)
+    return ids
+
+
+def guard_purchase_line_accounts(db: Session, company_id: int, lines) -> None:
+    """Refuse a supplier invoice that would debit stock outside the receipt flow."""
+    blocked = _inventory_account_ids(db, company_id)
+    if not blocked:
+        return
+    for line in lines:
+        account_id = getattr(line, "expense_account_id", None)
+        if account_id and int(account_id) in blocked:
+            account = db.get(Account, int(account_id))
+            code = account.code if account else account_id
+            raise HTTPException(
+                422,
+                {
+                    "message_ar": (
+                        f"لا يمكن ترحيل فاتورة شراء على حساب المخزون {code}. "
+                        "المخزون يزيد عند إثبات الاستلام لا عند الفاتورة. "
+                        "الطريق الصحيح: أمر شراء ← إثبات استلام (يزيد المخزون ويسجّل "
+                        "استلامات غير مفوترة 214010) ← ثم فاتورة على 214010 لتصفيته. "
+                        "أما الشراء الخدمي فيُرحَّل على حساب مصروف."
+                    ),
+                    "message_en": (
+                        f"A supplier invoice may not debit inventory account {code}. "
+                        "Stock increases at goods receipt, not at invoicing. Correct path: "
+                        "purchase order -> goods receipt (raises stock and credits 214010 "
+                        "Goods Received Not Invoiced) -> invoice against 214010 to clear it. "
+                        "Service purchases post to an expense account."
+                    ),
+                    "inventory_account": str(code),
+                    "use_instead": "214010",
+                },
+            )
+
+
 @router.post("/purchase-invoices/{invoice_id}/post")
 def post_purchase_invoice(
     invoice_id: int,
@@ -307,6 +376,8 @@ def post_purchase_invoice(
     if invoice.status != "DRAFT":
         raise HTTPException(409, "Purchase invoice is not a draft")
     ap = get_account(db, invoice.company_id, "211010")
+    # Refuse inventory accounts: stock is raised by the receipt, not the invoice.
+    guard_purchase_line_accounts(db, invoice.company_id, invoice.lines)
     input_vat = get_account(db, invoice.company_id, "114010")
     output_vat = get_account(db, invoice.company_id, "212010")
     lines = []

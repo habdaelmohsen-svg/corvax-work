@@ -20,6 +20,7 @@ from app.api.new_departments import router as new_departments_router  # H10
 from app.api.sales_commissions import router as sales_commissions_router  # H11
 from app.api.attachments import router as attachments_router  # H13
 from app.api.data_reset import router as data_reset_router
+from app.api.chart_of_accounts import router as chart_of_accounts_router
 from app.api.cip_projects import router as cip_projects_router  # H13
 from app.api.intercompany import router as intercompany_router
 from app.api.hr_operations import router as hr_operations_router
@@ -143,6 +144,7 @@ app.include_router(new_departments_router, prefix="/api/v1")  # H10
 app.include_router(sales_commissions_router, prefix="/api/v1")  # H11
 app.include_router(attachments_router, prefix="/api/v1")  # H13
 app.include_router(data_reset_router, prefix="/api/v1")
+app.include_router(chart_of_accounts_router, prefix="/api/v1")
 app.include_router(cip_projects_router, prefix="/api/v1")  # H13
 app.include_router(intercompany_router, prefix="/api/v1")
 app.include_router(revenue_recognition_router, prefix="/api/v1")

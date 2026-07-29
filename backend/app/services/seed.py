@@ -11,7 +11,7 @@ from app.core.time import utc_now
 from app.core.security import hash_password
 from app.models import (
     Account, AssetCategory, BankAccount, BillOfMaterial, BillOfMaterialLine, Branch, Budget, BudgetLine, Company, CostCenter,
-    DeliveryPlatform, Employee, EmployeeShiftAssignment, FiscalPeriod, FiscalYear, GymCafeProductProfile, GymDepartment, GymDepartmentPlanAccess, GymFacility, Item, JournalEntry, JournalLine, LeaveType, LegalRuleVersion, Member, MembershipPlan, MenuItem, Party, Permission, Role,
+    DeliveryPlatform, DemoDataRecord, Employee, EmployeeShiftAssignment, FiscalPeriod, FiscalYear, GymCafeProductProfile, GymDepartment, GymDepartmentPlanAccess, GymFacility, Item, JournalEntry, JournalLine, LeaveType, LegalRuleVersion, Member, MembershipPlan, MenuItem, Party, Permission, Role,
     Shift, SoDRule, StockMovement, User, UserCompanyRole, Warehouse, WorkCenter,
 )
 
@@ -158,6 +158,7 @@ PERMISSIONS = {
     "compliance.read": ("عرض الالتزام والضرائب", "View compliance and tax"),
     "compliance.manage": ("إدارة الالتزام والفوترة الإلكترونية", "Manage compliance and e-invoicing"),
     "backup.manage": ("إدارة النسخ الاحتياطية", "Manage backups"),
+    "data.reset": ("حذف بيانات العرض التجريبي", "Delete registered demo data"),
     "finance.manage_fx": ("إدارة العملات الأجنبية", "Manage foreign currency"),
     "consolidation.manage": ("إدارة التوحيد والمعاملات بين الشركات", "Manage consolidation and intercompany"),
     "grc.read": ("عرض المخاطر والضوابط والحوكمة", "View risk, controls and governance"),
@@ -344,6 +345,140 @@ def _create_journal(
             JournalLine(account_id=accounts[code].id, description=description, debit=debit, credit=credit)
         )
     db.add(entry)
+    db.flush()
+    _register_demo_record(db, company_id, "journal_entries", entry.id)
+    for line in entry.lines:
+        _register_demo_record(db, company_id, "journal_lines", line.id)
+
+
+def _register_demo_record(
+    db: Session,
+    company_id: int,
+    table_name: str,
+    record_id: int,
+) -> None:
+    """Mark a record created by the trusted system seeder as demonstrational."""
+    record_key = str(record_id)
+    exists = db.scalar(
+        select(DemoDataRecord.id).where(
+            DemoDataRecord.company_id == company_id,
+            DemoDataRecord.table_name == table_name,
+            DemoDataRecord.record_id == record_key,
+        )
+    )
+    if not exists:
+        db.add(
+            DemoDataRecord(
+                company_id=company_id,
+                table_name=table_name,
+                record_id=record_key,
+                source="SYSTEM_SEED",
+            )
+        )
+
+
+# Exact fingerprint of the ten GL journals created by historical CORVAX demo
+# seeders.  The upgrade path registers only an unchanged match.  A row edited by
+# a person is intentionally left unregistered and therefore cannot be purged.
+_SEEDED_JOURNAL_FINGERPRINTS = {
+    "0001": (date(2026, 1, 1), "OPENING", "Opening capital", Decimal("2000000"), 2),
+    "0002": (date(2026, 7, 2), "INV-001", "Sales invoice", Decimal("575000"), 3),
+    "0003": (date(2026, 7, 4), "RCPT-001", "Customer receipt", Decimal("575000"), 2),
+    "0004": (date(2026, 7, 5), "PUR-001", "Inventory purchased on credit", Decimal("300000"), 2),
+    "0005": (date(2026, 7, 6), "COGS-001", "Cost of sales", Decimal("220000"), 2),
+    "0006": (date(2026, 7, 7), "PAY-EMP", "Employee payments", Decimal("200000"), 2),
+    "0007": (date(2026, 7, 8), "RENT-001", "Rent paid", Decimal("80000"), 2),
+    "0008": (date(2026, 7, 9), "PPE-001", "Equipment purchase", Decimal("300000"), 2),
+    "0009": (date(2026, 7, 10), "LOAN-001", "Loan proceeds", Decimal("500000"), 2),
+    "0010": (date(2026, 7, 11), "SUP-PAY", "Supplier payment", Decimal("100000"), 2),
+}
+
+
+def _register_unchanged_historical_demo_journals(db: Session) -> None:
+    """Backfill explicit markers for old databases without guessing.
+
+    Matching all stable seeded attributes prevents a user-created or edited
+    journal from becoming deletable merely because its number resembles a demo
+    number.
+    """
+    for company in db.scalars(select(Company).order_by(Company.id)).all():
+        for suffix, fingerprint in _SEEDED_JOURNAL_FINGERPRINTS.items():
+            entry_date, reference, description, total, line_count = fingerprint
+            number = f"JV-{company.id}-2026-{suffix}"
+            entry = db.scalar(
+                select(JournalEntry).where(
+                    JournalEntry.company_id == company.id,
+                    JournalEntry.number == number,
+                    JournalEntry.entry_date == entry_date,
+                    JournalEntry.reference == reference,
+                    JournalEntry.description == description,
+                    JournalEntry.status == "POSTED",
+                    JournalEntry.total_debit == total,
+                    JournalEntry.total_credit == total,
+                )
+            )
+            if not entry or len(entry.lines) != line_count:
+                continue
+            _register_demo_record(db, company.id, "journal_entries", entry.id)
+            for line in entry.lines:
+                _register_demo_record(db, company.id, "journal_lines", line.id)
+
+
+def _register_unchanged_historical_demo_stock_movements(db: Session) -> None:
+    """Register only the two unchanged opening movements from older seeders."""
+    admin = db.scalar(
+        select(User).where(User.email == "admin@corvaxplatform.com")
+    )
+    if not admin:
+        return
+    fingerprints = (
+        ("RAW-001", Decimal("6000"), Decimal("10"), Decimal("60000")),
+        ("PACK-001", Decimal("10000"), Decimal("2"), Decimal("20000")),
+    )
+    for company in db.scalars(select(Company).order_by(Company.id)).all():
+        warehouse = db.scalar(
+            select(Warehouse).where(
+                Warehouse.company_id == company.id,
+                Warehouse.code == "MAIN",
+            )
+        )
+        if not warehouse:
+            continue
+        for item_code, quantity, unit_cost, total_cost in fingerprints:
+            item = db.scalar(
+                select(Item).where(
+                    Item.company_id == company.id,
+                    Item.code == item_code,
+                )
+            )
+            if not item:
+                continue
+            rows = db.scalars(
+                select(StockMovement).where(
+                    StockMovement.company_id == company.id,
+                    StockMovement.warehouse_id == warehouse.id,
+                    StockMovement.item_id == item.id,
+                    StockMovement.movement_date == date(2026, 7, 4),
+                    StockMovement.movement_type == "OPENING",
+                    StockMovement.quantity == quantity,
+                    StockMovement.unit_cost == unit_cost,
+                    StockMovement.total_cost == total_cost,
+                    StockMovement.reference_type == "OPENING_BALANCE",
+                    StockMovement.reference_id.is_(None),
+                    StockMovement.journal_id.is_(None),
+                    StockMovement.lot_number.is_(None),
+                    StockMovement.expiry_date.is_(None),
+                    StockMovement.inbound_shipment_id.is_(None),
+                    StockMovement.created_by == admin.id,
+                )
+            ).all()
+            if len(rows) == 1:
+                _register_demo_record(
+                    db,
+                    company.id,
+                    "stock_movements",
+                    rows[0].id,
+                )
 
 
 
@@ -359,7 +494,10 @@ def _ensure_operational_masters(db: Session, admin: User) -> None:
                 code="MAIN",
                 name_ar="المستودع الرئيسي",
                 name_en="Main Warehouse",
-                warehouse_type="RAW_AND_FINISHED" if company.company_type == "MANUFACTURING" else "GENERAL",
+                # Use the canonical vocabulary (inventory.py::WAREHOUSE_TYPES).
+                # GENERAL was the old spelling of MAIN and left fresh databases
+                # holding a value the write guard now rejects.
+                warehouse_type="RAW_AND_FINISHED" if company.company_type == "MANUFACTURING" else "MAIN",
                 active=True,
             )
             db.add(warehouse)
@@ -394,10 +532,19 @@ def _ensure_operational_masters(db: Session, admin: User) -> None:
             items[code] = item
 
         if not db.scalar(select(func.count(StockMovement.id)).where(StockMovement.company_id == company.id)):
-            db.add_all([
+            demo_movements = [
                 StockMovement(company_id=company.id, warehouse_id=warehouse.id, item_id=items["RAW-001"].id, movement_date=date(2026, 7, 4), movement_type="OPENING", quantity=Decimal("6000"), unit_cost=Decimal("10"), total_cost=Decimal("60000"), reference_type="OPENING_BALANCE", created_by=admin.id),
                 StockMovement(company_id=company.id, warehouse_id=warehouse.id, item_id=items["PACK-001"].id, movement_date=date(2026, 7, 4), movement_type="OPENING", quantity=Decimal("10000"), unit_cost=Decimal("2"), total_cost=Decimal("20000"), reference_type="OPENING_BALANCE", created_by=admin.id),
-            ])
+            ]
+            db.add_all(demo_movements)
+            db.flush()
+            for movement in demo_movements:
+                _register_demo_record(
+                    db,
+                    company.id,
+                    "stock_movements",
+                    movement.id,
+                )
 
         fy = db.scalar(select(FiscalYear).where(FiscalYear.company_id == company.id, FiscalYear.name == "FY 2026"))
         if fy and not db.scalar(select(Budget).where(Budget.company_id == company.id, Budget.name == "Operating Budget 2026")):
@@ -608,6 +755,8 @@ def _upgrade_existing_database(db: Session) -> None:
     admin = db.scalar(select(User).where(User.email == "admin@corvaxplatform.com")) or db.scalar(select(User).order_by(User.id))
     if admin:
         _ensure_operational_masters(db, admin)
+    _register_unchanged_historical_demo_journals(db)
+    _register_unchanged_historical_demo_stock_movements(db)
     db.commit()
 
 def seed_database(db: Session) -> None:

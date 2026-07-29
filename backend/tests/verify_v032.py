@@ -7,7 +7,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB = BACKEND_DIR / "data" / "verify_v032.db"
+DB = Path("/tmp") / "verify_v032.db"
 DB.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB}"
 os.environ["SEED_DEMO_DATA"] = "true"
@@ -32,7 +32,7 @@ with TestClient(app) as client:
     admin_login = ok(client.post("/api/v1/auth/login", json={"email": "admin@corvaxplatform.com", "password": "Corvax@123"}))
     admin_headers = {"Authorization": f"Bearer {admin_login['access_token']}"}
     health = ok(client.get("/health"))
-    assert health["version"] == "1.0.0-agreement-completion-rc27.3"
+    assert health["version"] == "1.0.0-agreement-completion-rc27.4"
     assert health.get("status") == "ok"
 
     ok(client.post("/api/v1/admin/users", headers=admin_headers, json={
@@ -40,7 +40,7 @@ with TestClient(app) as client:
         "name_en": "Verification CFO",
         "email": "cfo.v032@corvaxplatform.com",
         "password": "CfoVerify@123",
-        "memberships": [{"company_id": 1, "role_code": "CFO"}],
+        "require_password_change": False, "memberships": [{"company_id": 1, "role_code": "CFO"}],
     }), 201)
     cfo_login = ok(client.post("/api/v1/auth/login", json={"email": "cfo.v032@corvaxplatform.com", "password": "CfoVerify@123"}))
     cfo_headers = {"Authorization": f"Bearer {cfo_login['access_token']}"}

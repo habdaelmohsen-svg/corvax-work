@@ -38,8 +38,9 @@ class Settings(BaseSettings):
     # Recovery door: when true, the administrator password is reset on every
     # start. Intended to unlock a locked-out owner. Turn it off afterwards.
     bootstrap_force_admin_reset: bool = False
-    # Guard for the trial-data reset endpoint. Off by default; turn on only when
-    # you deliberately want to clear demo data, then turn it off again.
+    # Trial-data reset is an explicitly enabled non-production maintenance
+    # capability.  The API additionally enforces permission, confirmation,
+    # a fresh dry-run authorization and an exact demo-record registry.
     allow_data_reset: bool = False
     auto_create_schema: bool = True
     allowed_origins: str = "*"
@@ -132,6 +133,8 @@ class Settings(BaseSettings):
                 raise ValueError("Production TRUSTED_HOSTS cannot be wildcard")
             if self.seed_demo_data:
                 raise ValueError("Production SEED_DEMO_DATA must be false")
+            if self.allow_data_reset:
+                raise ValueError("Production ALLOW_DATA_RESET must be false")
             if self.auto_create_schema:
                 raise ValueError("Production AUTO_CREATE_SCHEMA must be false; use Alembic migrations only")
             if self.jwt_algorithm != "RS256":

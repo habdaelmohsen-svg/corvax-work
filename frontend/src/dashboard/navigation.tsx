@@ -1,7 +1,7 @@
 import {
   BadgeDollarSign, BookOpenCheck, Boxes, Building2, CalendarRange, ClipboardCheck,
   DatabaseBackup, Dumbbell, Factory, FileCheck2, KeyRound, Landmark, LayoutDashboard,
-  MonitorCog, Network, ShieldCheck, Workflow, ShoppingCart, TrendingUp, Users, UtensilsCrossed, WalletCards, RotateCcw, Percent, Flame, Calculator, Wrench, Truck, Scale, FileBarChart, HardHat, NotebookPen, UserCog } from 'lucide-react';
+  MonitorCog, Network, ShieldCheck, Workflow, ShoppingCart, TrendingUp, Users, UtensilsCrossed, WalletCards, RotateCcw, Percent, Flame, Calculator, Wrench, Truck, Scale, FileBarChart, HardHat, NotebookPen, UserCog, Eraser, Package} from 'lucide-react';
 import type { NavGroupKey, NavItem } from './types';
 
 // Sidebar groups, in display order. Sections without a group render above these,
@@ -26,6 +26,7 @@ export const navItems: NavItem[] = [
   { key: 'finalCompletion', ar: 'الإكمال الداخلي والجاهزية', en: 'Internal Completion & Readiness', icon: FileCheck2, scope: allScopes, group: 'system' },
   { key: 'executive', ar: 'مركز القرار', en: 'Executive Center', icon: LayoutDashboard, scope: allScopes },
   { key: 'core', ar: 'الشركات والإعدادات', en: 'Enterprise Core', icon: Building2, scope: allScopes , group: 'system' },
+  { key: 'chartOfAccounts', ar: 'شجرة الحسابات', en: 'Chart of Accounts', icon: Network, scope: allScopes, requires: ['finance'], group: 'finance' },
   { key: 'finance', ar: 'القوائم المالية', en: 'Financial Statements', icon: Landmark, scope: allScopes, group: 'finance', requires: ['finance'] },
   { key: 'cipProjects', ar: 'مشروعات تحت التنفيذ', en: 'Projects Under Construction', icon: HardHat, scope: allScopes, group: 'assets', requires: ['cip'] },
   { key: 'reports', ar: 'مركز التقارير', en: 'Reports Center', icon: FileBarChart, scope: allScopes, group: 'finance', requires: ['finance'] },
@@ -42,6 +43,7 @@ export const navItems: NavItem[] = [
   { key: 'assets', ar: 'الأصول الثابتة IAS 16', en: 'IAS 16 Fixed Assets', icon: BadgeDollarSign, scope: allScopes, group: 'assets', requires: ['assets'] },
   { key: 'prepaids', ar: 'المصروفات المدفوعة مقدمًا', en: 'Prepaid Expenses', icon: CalendarRange, scope: allScopes, group: 'assets', requires: ['prepaids'] },
   { key: 'accruals', ar: 'الاستحقاقات والقيود المتكررة', en: 'Accruals & Recurring Journals', icon: CalendarRange, scope: allScopes, group: 'assets', requires: ['accruals'] },
+  { key: 'items', ar: 'الأصناف والمواد الخام', en: 'Items & Raw Materials', icon: Package, scope: allScopes, requires: ['inventory'], group: 'procurement' },
   { key: 'inventory', ar: 'المخزون والمستودعات', en: 'Inventory', icon: Boxes, scope: allScopes, group: 'procurement', requires: ['inventory'] },
   { key: 'inventoryTraceability', ar: 'تتبع المخزون والشحنات', en: 'Inventory Traceability', icon: Boxes, scope: allScopes, group: 'procurement' },
   { key: 'operationalControls', ar: 'الاستيراد والجمارك والتكلفة', en: 'Import, Customs & Costing', icon: FileCheck2, scope: allScopes, group: 'procurement' },
@@ -60,6 +62,7 @@ export const navItems: NavItem[] = [
   { key: 'close', ar: 'الإقفال المالي', en: 'Financial Close', icon: FileCheck2, scope: allScopes, group: 'finance', requires: ['period'] },
   { key: 'assurance', ar: 'التأكيد المالي الحازم', en: 'Financial Assurance Gate', icon: ShieldCheck, scope: allScopes, group: 'finance' },
   { key: 'compliance', ar: 'الالتزام والضرائب', en: 'Compliance & Tax', icon: ShieldCheck, scope: allScopes, group: 'tax', requires: ['compliance'] },
+  { key: 'dataReset', ar: 'حذف البيانات التجريبية', en: 'Trial Data Reset', icon: Eraser, scope: allScopes, requires: ['data.reset'], group: 'system' },
   { key: 'security', ar: 'الأمان والنسخ الاحتياطي', en: 'Security & Backup', icon: DatabaseBackup, scope: allScopes, requires: ['security'] , group: 'system' },
   { key: 'users', ar: 'المستخدمون', en: 'Users', icon: UserCog, scope: allScopes, group: 'system', requires: ['users'] },
   { key: 'accessGovernance', ar: 'حوكمة الصلاحيات', en: 'Access Governance', icon: KeyRound, scope: allScopes, requires: ['access'] , group: 'governance' },

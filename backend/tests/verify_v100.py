@@ -7,12 +7,19 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v100.db"
+DB_PATH = Path("/tmp") / "verify_v100.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v100-release-candidate"
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
+
+import subprocess  # noqa: E402
+subprocess.run(
+    [sys.executable, "-m", "alembic", "upgrade", "head"],
+    cwd=BACKEND_DIR,
+    check=True,
+)
 
 from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
@@ -30,7 +37,7 @@ with TestClient(app) as client:
     assert ready.status_code == 200 and ready.json()["status"] == "ready"
     assert ready.headers.get("X-Request-ID")
     assert ready.headers.get("X-Content-Type-Options") == "nosniff"
-    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.3"
+    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.4"
 
     create_user = client.post(
         "/api/v1/admin/users",
@@ -40,7 +47,7 @@ with TestClient(app) as client:
             "name_en": "Verification IT Manager",
             "email": "it.manager@corvaxplatform.com",
             "password": "ITManagerSecure@123",
-            "memberships": [{"company_id": 1, "role_code": "IT_MANAGER"}],
+            "require_password_change": False, "memberships": [{"company_id": 1, "role_code": "IT_MANAGER"}],
         },
     )
     assert create_user.status_code == 201, create_user.text

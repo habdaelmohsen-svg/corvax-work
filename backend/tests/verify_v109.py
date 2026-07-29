@@ -8,14 +8,21 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v109.db"
+DB_PATH = Path("/tmp") / "verify_v109.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v109-finance-completion"
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.3"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4"
+
+import subprocess  # noqa: E402
+subprocess.run(
+    [sys.executable, "-m", "alembic", "upgrade", "head"],
+    cwd=BACKEND_DIR,
+    check=True,
+)
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
@@ -38,7 +45,7 @@ def create_user(client: TestClient, admin: dict[str, str], email: str, role_code
     response = client.post(
         "/api/v1/admin/users", headers=admin,
         json={"name_ar": role_code, "name_en": role_code, "email": email, "password": "SecureRole@123",
-              "memberships": [{"company_id": company_id, "role_code": role_code} for company_id in companies]},
+              "require_password_change": False, "memberships": [{"company_id": company_id, "role_code": role_code} for company_id in companies]},
     )
     assert response.status_code == 201, response.text
     return login(client, email, "SecureRole@123")
@@ -179,10 +186,11 @@ with TestClient(app) as client:
         assert db.scalar(select(func.count()).select_from(ConsolidationWorksheet).where(ConsolidationWorksheet.group_id == group_id, ConsolidationWorksheet.status == "APPROVED_FOR_CONSOLIDATION")) >= 2
 
     health = client.get("/health")
-    assert health.status_code == 200 and health.json()["version"] == "1.0.0-agreement-completion-rc27.3"
+    assert health.status_code == 200 and health.json()["version"] == "1.0.0-agreement-completion-rc27.4"
     assert health.json().get("status") == "ok"
     ready = client.get("/health/ready")
-    assert ready.status_code == 200 and ready.json()["migrations"] == "expected_head_e17300000001"
+    from app.core.migration_head import expected_migration_head
+    assert ready.status_code == 200 and ready.json()["migration_head"] == expected_migration_head()
 
 print("CORVAX v1.0 RC9 final consolidation and finance completion: ALL VERIFICATIONS PASSED")
 DB_PATH.unlink(missing_ok=True)

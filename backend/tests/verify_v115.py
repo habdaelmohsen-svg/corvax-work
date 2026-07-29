@@ -8,7 +8,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v115.db"
+DB_PATH = Path("/tmp") / "verify_v115.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ.update({
     "DATABASE_URL": f"sqlite:///{DB_PATH}",
@@ -16,7 +16,7 @@ os.environ.update({
     "SEED_DEMO_DATA": "true",
     "AUTO_CREATE_SCHEMA": "true",
     "TRUSTED_HOSTS": "testserver,localhost,127.0.0.1",
-    "APP_VERSION": "1.0.0-agreement-completion-rc27.3",
+    "APP_VERSION": "1.0.0-agreement-completion-rc27.4",
     "ENABLE_RATE_LIMIT_TESTING": "true",
 })
 
@@ -116,8 +116,8 @@ def main():
         assert session["department_id"] == swim_id and session["facility_id"] == lane_id
 
         booking = ok(client.post("/api/v1/gym/facility-bookings", headers=aj, json={
-            "company_id": COMPANY_ID, "facility_id": court_id, "starts_at": "2026-07-20T18:00:00",
-            "ends_at": "2026-07-20T19:30:00", "participants": 4, "member_id": member["id"],
+            "company_id": COMPANY_ID, "facility_id": court_id, "starts_at": "2026-07-30T18:00:00",
+            "ends_at": "2026-07-30T19:30:00", "participants": 4, "member_id": member["id"],
             "contract_id": contract["id"], "bank_account_id": bank_id, "notes": "RC15 padel booking",
         }))
         assert booking["status"] == "SUBMITTED" and Decimal(str(booking["net_amount"])) == Decimal("240.00")
@@ -126,8 +126,8 @@ def main():
         approved = ok(client.post(f"/api/v1/gym/facility-bookings/{booking['id']}/approve", headers=reviewer))
         assert approved["status"] == "CONFIRMED" and approved["sale_journal_id"]
         overlapping = client.post("/api/v1/gym/facility-bookings", headers=aj, json={
-            "company_id": COMPANY_ID, "facility_id": court_id, "starts_at": "2026-07-20T18:30:00",
-            "ends_at": "2026-07-20T19:30:00", "participants": 2, "bank_account_id": bank_id,
+            "company_id": COMPANY_ID, "facility_id": court_id, "starts_at": "2026-07-30T18:30:00",
+            "ends_at": "2026-07-30T19:30:00", "participants": 2, "bank_account_id": bank_id,
         })
         assert overlapping.status_code == 409
         cancelled = ok(client.post(f"/api/v1/gym/facility-bookings/{booking['id']}/cancel", headers=approver, json={"reason": "RC15 cancellation and refund verification"}))

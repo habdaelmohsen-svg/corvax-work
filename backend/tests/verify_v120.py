@@ -9,7 +9,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v120.db"
+DB_PATH = Path("/tmp") / "verify_v120.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ.update({
     "DATABASE_URL": f"sqlite:///{DB_PATH}",
@@ -17,7 +17,7 @@ os.environ.update({
     "SEED_DEMO_DATA": "true",
     "AUTO_CREATE_SCHEMA": "true",
     "TRUSTED_HOSTS": "testserver,localhost,127.0.0.1",
-    "APP_VERSION": "1.0.0-agreement-completion-rc27.3",
+    "APP_VERSION": "1.0.0-agreement-completion-rc27.4",
     "ENABLE_RATE_LIMIT_TESTING": "true",
 })
 
@@ -45,14 +45,14 @@ def main():
     with TestClient(app) as client:
         login = ok(client.post("/api/v1/auth/login", json={"email": "admin@corvaxplatform.com", "password": "Corvax@123"}))
         admin = {"Authorization": f"Bearer {login['access_token']}"}
-        assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.3"
+        assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4"
         second = ok(client.post("/api/v1/admin/users", headers=admin, json={
             "name_ar": "مراجع RC20", "name_en": "RC20 Independent Approver", "email": "rc20.approver@corvaxplatform.com",
-            "password": "Rc20Approver@123", "memberships": [{"company_id": 1, "role_code": "SUPER_ADMIN"}],
+            "password": "Rc20Approver@123", "require_password_change": False, "memberships": [{"company_id": 1, "role_code": "SUPER_ADMIN"}],
         }), 201)
         controller = ok(client.post("/api/v1/admin/users", headers=admin, json={
             "name_ar": "مراقب تكاليف RC20", "name_en": "RC20 Cost Controller", "email": "rc20.controller@corvaxplatform.com",
-            "password": "Rc20Controller@123", "memberships": [{"company_id": 1, "role_code": "FINANCIAL_CONTROLLER"}],
+            "password": "Rc20Controller@123", "require_password_change": False, "memberships": [{"company_id": 1, "role_code": "FINANCIAL_CONTROLLER"}],
         }), 201)
         approver_login = ok(client.post("/api/v1/auth/login", json={"email": "rc20.approver@corvaxplatform.com", "password": "Rc20Approver@123"}))
         approver = {"Authorization": f"Bearer {approver_login['access_token']}"}
@@ -105,9 +105,45 @@ def main():
         # Tax codes and foreign invoice no Saudi VAT.
         codes = ok(client.get("/api/v1/compliance/tax-codes?company_id=1", headers=admin))
         assert {"PFOR0", "PIMPR15", "PIMPS0", "PIMPE"}.issubset({x["code"] for x in codes})
+        with SessionLocal() as db:
+            accounts = {
+                row.code: row
+                for row in db.scalars(
+                    select(Account).where(Account.company_id == 1)
+                ).all()
+            }
+            receipt_journal = create_posted_journal(
+                db,
+                company_id=1,
+                user_id=1,
+                posting_date=date(2026, 11, 1),
+                reference="RC20-IMPORT-GRN",
+                description="Foreign inventory receipt before supplier invoice",
+                lines=[
+                    {"account_id": accounts["113010"].id, "debit": 10000, "credit": 0},
+                    {"account_id": accounts["214010"].id, "debit": 0, "credit": 10000},
+                ],
+            )
+            db.add(
+                StockMovement(
+                    company_id=1,
+                    warehouse_id=warehouse_id,
+                    item_id=raw_id,
+                    movement_date=date(2026, 11, 1),
+                    movement_type="PURCHASE_RECEIPT",
+                    quantity=1000,
+                    unit_cost=10,
+                    total_cost=10000,
+                    reference_type="GOODS_RECEIPT",
+                    reference_id=None,
+                    journal_id=receipt_journal.id,
+                    created_by=1,
+                )
+            )
+            db.commit()
         foreign_pi = ok(client.post("/api/v1/subledgers/purchase-invoices", headers=admin, json={
             "company_id": 1, "invoice_date": "2026-11-01", "due_date": "2026-12-01", "supplier_id": supplier_id, "supplier_invoice_number": "BR-FOREIGN-001",
-            "lines": [{"description":"Brazil supplier invoice - no Saudi VAT", "account_code":"113010", "quantity":1, "unit_price":10000, "tax_code":"PFOR0"}],
+            "lines": [{"description":"Brazil supplier invoice - no Saudi VAT", "account_code":"214010", "quantity":1, "unit_price":10000, "tax_code":"PFOR0"}],
         }), 201)
         ok(client.post(f"/api/v1/subledgers/purchase-invoices/{foreign_pi['id']}/post", headers=admin))
 

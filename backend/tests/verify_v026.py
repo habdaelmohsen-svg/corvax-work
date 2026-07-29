@@ -5,7 +5,7 @@ from pathlib import Path
 
 BACKEND_DIR=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(BACKEND_DIR))
-DB=BACKEND_DIR/'data'/'verify_v026.db'; DB.unlink(missing_ok=True)
+DB=Path('/tmp')/'verify_v026.db'; DB.unlink(missing_ok=True)
 os.environ['DATABASE_URL']=f'sqlite:///{DB}'
 os.environ['SEED_DEMO_DATA']='true'
 os.environ['SECRET_KEY']='verification-secret-key-v026-long-enough'
@@ -25,7 +25,7 @@ with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'}))
     h={'Authorization':f"Bearer {login['access_token']}"}
     health=ok(c.get('/health'))
-    assert health['version']=='1.0.0-agreement-completion-rc27.3'
+    assert health['version']=='1.0.0-agreement-completion-rc27.4'
     assert health.get("status") == "ok"
 
     with SessionLocal() as db:

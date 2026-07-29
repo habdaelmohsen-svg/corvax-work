@@ -12,14 +12,14 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 ROOT_DIR = BACKEND_DIR.parent
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v111.db"
+DB_PATH = Path("/tmp") / "verify_v111.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v111-audit-remediation"
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.3"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4"
 os.environ["MRP_INLINE_EXECUTION"] = "true"
 os.environ["ENABLE_RATE_LIMIT_TESTING"] = "true"
 
@@ -120,11 +120,7 @@ def main() -> None:
     with TestClient(app) as client:
         create_review_users()
         admin_login = login_payload(client, "admin@corvaxplatform.com")
-        reviewer_login = login_payload(client, "rc11-reviewer@corvaxplatform.com")
-        approver_login = login_payload(client, "rc11-approver@corvaxplatform.com")
         admin = auth(admin_login)
-        reviewer = auth(reviewer_login)
-        approver = auth(approver_login)
         json_admin = {**admin, "Content-Type": "application/json"}
         settings.rate_limit_write_per_minute = 1000
         settings.rate_limit_read_per_minute = 1000
@@ -133,15 +129,31 @@ def main() -> None:
         assert admin_login["access_token"].count(".") == 2
         header = jwt.get_unverified_header(admin_login["access_token"])
         assert header["alg"] == "RS256" and header["kid"] == settings.jwt_active_kid
-        first_refresh = admin_login["refresh_token"]
-        rotated = client.post("/api/v1/auth/refresh", json={"refresh_token": first_refresh})
+        first_refresh = client.cookies.get("corvax_refresh_token")
+        assert first_refresh
+        rotated = client.post("/api/v1/auth/refresh")
         assert rotated.status_code == 200, rotated.text
-        assert rotated.json()["refresh_token"] != first_refresh
-        assert client.post("/api/v1/auth/refresh", json={"refresh_token": first_refresh}).status_code == 401
+        second_refresh = client.cookies.get("corvax_refresh_token")
+        assert second_refresh and second_refresh != first_refresh
+        client.cookies.set(
+            "corvax_refresh_token",
+            first_refresh,
+            path="/api/v1/auth",
+        )
+        assert client.post("/api/v1/auth/refresh").status_code == 401
+        client.cookies.set(
+            "corvax_refresh_token",
+            second_refresh,
+            path="/api/v1/auth",
+        )
         admin_login = rotated.json()
         admin = auth(admin_login)
         json_admin = {**admin, "Content-Type": "application/json"}
         assert client.get("/api/v1/auth/me", headers=admin).status_code == 200
+        reviewer_login = login_payload(client, "rc11-reviewer@corvaxplatform.com")
+        approver_login = login_payload(client, "rc11-approver@corvaxplatform.com")
+        reviewer = auth(reviewer_login)
+        approver = auth(approver_login)
 
         verify_encryption()
         verify_race_safe_sequence()
@@ -305,11 +317,12 @@ def main() -> None:
         assert client.post(f"/api/v1/leases/advanced/subleases/{sub_id}/approve",headers=approver).status_code == 200
 
         release = client.get("/api/v1/system/release").json()
-        assert release["database_schema_head"] == "e17300000001"
-        assert release["version"] == "1.0.0-agreement-completion-rc27.3"
+        from app.core.migration_head import expected_migration_head
+        assert release["database_schema_head"] == expected_migration_head()
+        assert release["version"] == "1.0.0-agreement-completion-rc27.4"
         summary = client.get("/api/v1/modules/summary", headers=admin).json()
         assert summary["legacy_demo_endpoints"] == "REMOVED"
-        assert summary["migration_head"] == "e17300000001"
+        assert summary["migration_head"] == expected_migration_head()
         metrics = client.get("/metrics")
         assert metrics.status_code == 200 and "corvax_http_requests_total" in metrics.text
 

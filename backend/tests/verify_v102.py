@@ -7,7 +7,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v102.db"
+DB_PATH = Path("/tmp") / "verify_v102.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v102-assurance"
@@ -33,7 +33,7 @@ def create_user(client: TestClient, admin: dict[str, str], email: str, role_code
             "name_en": name,
             "email": email,
             "password": "AssuranceSecure@123",
-            "memberships": [{"company_id": 1, "role_code": role_code}],
+            "require_password_change": False, "memberships": [{"company_id": 1, "role_code": role_code}],
         },
     )
     assert response.status_code == 201, response.text
@@ -41,7 +41,7 @@ def create_user(client: TestClient, admin: dict[str, str], email: str, role_code
 
 with TestClient(app) as client:
     admin = login(client, "admin@corvaxplatform.com", "Corvax@123")
-    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.3"
+    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.4"
 
     create_user(client, admin, "accountant.assurance@corvaxplatform.com", "ACCOUNTANT", "Assurance Accountant")
     create_user(client, admin, "controller.assurance@corvaxplatform.com", "FINANCIAL_CONTROLLER", "Financial Controller")

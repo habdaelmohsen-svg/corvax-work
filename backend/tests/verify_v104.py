@@ -7,7 +7,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v104.db"
+DB_PATH = Path("/tmp") / "verify_v104.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v104-qms"
@@ -30,7 +30,7 @@ def login(client: TestClient, email: str, password: str) -> dict[str, str]:
 def create_user(client: TestClient, admin: dict[str, str], email: str, role_code: str) -> dict[str, str]:
     response = client.post(
         "/api/v1/admin/users", headers=admin,
-        json={"name_ar": role_code, "name_en": role_code, "email": email, "password": "QualitySecure@123", "memberships": [{"company_id": 4, "role_code": role_code}]},
+        json={"name_ar": role_code, "name_en": role_code, "email": email, "password": "QualitySecure@123", "require_password_change": False, "memberships": [{"company_id": 4, "role_code": role_code}]},
     )
     assert response.status_code == 201, response.text
     return login(client, email, "QualitySecure@123")

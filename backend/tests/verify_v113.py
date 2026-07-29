@@ -8,14 +8,14 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v113.db"
+DB_PATH = Path("/tmp") / "verify_v113.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v113-restaurant-pos"
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.3"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4"
 os.environ["ENABLE_RATE_LIMIT_TESTING"] = "true"
 
 from fastapi.testclient import TestClient  # noqa: E402

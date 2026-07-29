@@ -6,8 +6,8 @@ from decimal import Decimal
 from pathlib import Path
 
 BACKEND_DIR=Path(__file__).resolve().parents[1];sys.path.insert(0,str(BACKEND_DIR))
-DB_PATH=BACKEND_DIR/'data'/'verify_v122.db';DB_PATH.unlink(missing_ok=True)
-os.environ.update({'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc22-withholding','SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1','APP_VERSION':'1.0.0-agreement-completion-rc27.3','ENABLE_RATE_LIMIT_TESTING':'true'})
+DB_PATH=Path('/tmp')/'verify_v122.db';DB_PATH.unlink(missing_ok=True)
+os.environ.update({'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc22-withholding','SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1','APP_VERSION':'1.0.0-agreement-completion-rc27.4','ENABLE_RATE_LIMIT_TESTING':'true'})
 from fastapi.testclient import TestClient
 from sqlalchemy import select,func,text
 from app.db import SessionLocal
@@ -20,8 +20,8 @@ def ok(r,status=200):assert r.status_code==status,r.text;return r.json()
 def main():
   with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'}));admin={'Authorization':f"Bearer {login['access_token']}"}
-    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.3'
-    ok(c.post('/api/v1/admin/users',headers=admin,json={'name_ar':'مراجع الاستقطاع','name_en':'WHT Approver','email':'rc22.approver@corvaxplatform.com','password':'Rc22Approver@123','memberships':[{'company_id':1,'role_code':'SUPER_ADMIN'}]}),201)
+    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.4'
+    ok(c.post('/api/v1/admin/users',headers=admin,json={'name_ar':'مراجع الاستقطاع','name_en':'WHT Approver','email':'rc22.approver@corvaxplatform.com','password':'Rc22Approver@123','require_password_change':False,'memberships':[{'company_id':1,'role_code':'SUPER_ADMIN'}]}),201)
     al=ok(c.post('/api/v1/auth/login',json={'email':'rc22.approver@corvaxplatform.com','password':'Rc22Approver@123'}));approver={'Authorization':f"Bearer {al['access_token']}"}
     parties=ok(c.get('/api/v1/subledgers/parties?company_id=1&party_type=SUPPLIER',headers=admin));supplier=parties[0]
     banks=ok(c.get('/api/v1/subledgers/bank-accounts?company_id=1',headers=admin));bank=banks[0]

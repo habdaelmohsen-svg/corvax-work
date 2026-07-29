@@ -34,6 +34,8 @@ services:
         sync: false
       - key: SEED_DEMO_DATA
         value: false
+      - key: ALLOW_DATA_RESET
+        value: false
       - key: AUTO_CREATE_SCHEMA
         value: false
       - key: ALLOWED_ORIGINS

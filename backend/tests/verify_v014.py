@@ -8,7 +8,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v014.db"
+DB_PATH = Path("/tmp") / "verify_v014.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
@@ -33,7 +33,7 @@ def assert_ok(response, expected=200):
 with TestClient(app) as client:
     admin = login(client)
     health = assert_ok(client.get("/health"))
-    assert health["version"] == "1.0.0-agreement-completion-rc27.3"
+    assert health["version"] == "1.0.0-agreement-completion-rc27.4"
     assert health.get("status") == "ok"
 
     # Budget control from seeded approved budget.

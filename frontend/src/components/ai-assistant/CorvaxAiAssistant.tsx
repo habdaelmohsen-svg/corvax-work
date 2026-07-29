@@ -210,7 +210,9 @@ export function CorvaxAiAssistant({
         className="corvax-ai-launcher"
         aria-expanded={open}
         aria-controls="corvax-ai-panel"
+        aria-haspopup="dialog"
         aria-label={open ? copy.close : copy.open}
+        title={open ? copy.close : copy.open}
         onClick={() => (open ? closePanel() : onOpenChange(true))}
       >
         <span className="corvax-ai-launcher__mark" aria-hidden="true">C</span>

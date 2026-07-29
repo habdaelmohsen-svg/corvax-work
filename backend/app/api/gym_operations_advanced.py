@@ -496,6 +496,28 @@ def create_class_type(data: ClassTypeIn, user: User = Depends(get_current_user),
     return {"id": row.id, "department_id": row.department_id, "code": row.code, "name_ar": row.name_ar, "name_en": row.name_en, "duration_minutes": row.duration_minutes, "default_capacity": row.default_capacity}
 
 
+@router.get("/class-types")
+def list_class_types(company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "gym.read")
+    rows = db.scalars(
+        select(GymClassType)
+        .where(GymClassType.company_id == company_id, GymClassType.active.is_(True))
+        .order_by(GymClassType.code)
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "department_id": row.department_id,
+            "code": row.code,
+            "name_ar": row.name_ar,
+            "name_en": row.name_en,
+            "duration_minutes": row.duration_minutes,
+            "default_capacity": row.default_capacity,
+        }
+        for row in rows
+    ]
+
+
 class ClassSessionIn(BaseModel):
     company_id: int
     branch_id: int
@@ -651,7 +673,30 @@ def create_pt_package(data: PTPackageIn, user: User = Depends(get_current_user),
     if db.scalar(select(GymPTPackage).where(GymPTPackage.company_id == data.company_id, GymPTPackage.code == data.code)):
         raise HTTPException(409, "PT package code already exists")
     row = GymPTPackage(**data.model_dump(), active=True); db.add(row); db.flush(); db.commit()
-    return {"id": row.id, "code": row.code, "sessions_count": row.sessions_count, "net_price": row.net_price, "vat_rate": row.vat_rate}
+    return {"id": row.id, "code": row.code, "name_ar": row.name_ar, "name_en": row.name_en, "sessions_count": row.sessions_count, "validity_days": row.validity_days, "net_price": row.net_price, "vat_rate": row.vat_rate}
+
+
+@router.get("/pt-packages")
+def list_pt_packages(company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "gym.read")
+    rows = db.scalars(
+        select(GymPTPackage)
+        .where(GymPTPackage.company_id == company_id, GymPTPackage.active.is_(True))
+        .order_by(GymPTPackage.code)
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "code": row.code,
+            "name_ar": row.name_ar,
+            "name_en": row.name_en,
+            "sessions_count": row.sessions_count,
+            "validity_days": row.validity_days,
+            "net_price": row.net_price,
+            "vat_rate": row.vat_rate,
+        }
+        for row in rows
+    ]
 
 
 class PTSaleIn(BaseModel):

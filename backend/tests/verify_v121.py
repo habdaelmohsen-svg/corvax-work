@@ -6,11 +6,11 @@ from decimal import Decimal
 from pathlib import Path
 
 BACKEND_DIR=Path(__file__).resolve().parents[1]; sys.path.insert(0,str(BACKEND_DIR))
-DB_PATH=BACKEND_DIR/'data'/'verify_v121.db'; DB_PATH.unlink(missing_ok=True)
+DB_PATH=Path('/tmp')/'verify_v121.db'; DB_PATH.unlink(missing_ok=True)
 os.environ.update({
  'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc21-credit-notes',
  'SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1',
- 'APP_VERSION':'1.0.0-agreement-completion-rc27.3','ENABLE_RATE_LIMIT_TESTING':'true',
+ 'APP_VERSION':'1.0.0-agreement-completion-rc27.4','ENABLE_RATE_LIMIT_TESTING':'true',
 })
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func
@@ -25,8 +25,8 @@ def ok(r,status=200): assert r.status_code==status,r.text; return r.json()
 def main():
   with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'})); admin={'Authorization':f"Bearer {login['access_token']}"}
-    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.3'
-    u=ok(c.post('/api/v1/admin/users',headers=admin,json={'name_ar':'مراجع مرتجعات','name_en':'Returns Approver','email':'rc21.approver@corvaxplatform.com','password':'Rc21Approver@123','memberships':[{'company_id':1,'role_code':'SUPER_ADMIN'}]}),201)
+    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.4'
+    u=ok(c.post('/api/v1/admin/users',headers=admin,json={'name_ar':'مراجع مرتجعات','name_en':'Returns Approver','email':'rc21.approver@corvaxplatform.com','password':'Rc21Approver@123','require_password_change':False,'memberships':[{'company_id':1,'role_code':'SUPER_ADMIN'}]}),201)
     al=ok(c.post('/api/v1/auth/login',json={'email':'rc21.approver@corvaxplatform.com','password':'Rc21Approver@123'})); approver={'Authorization':f"Bearer {al['access_token']}"}
     with SessionLocal() as db:
       for p in db.query(FiscalPeriod).all(): p.status='OPEN'
@@ -67,13 +67,21 @@ def main():
     assert D(cash['available_amount'])==0
     ar=ok(c.get('/api/v1/subledgers/aging?company_id=1&ledger_type=AR&as_of_date=2026-08-09',headers=admin)); assert D(ar['reconciliation_difference'])==0
 
-    # Purchase invoice: stock carrying cost 120 includes landed cost, supplier credit is 100 + VAT.
-    pi=ok(c.post('/api/v1/subledgers/purchase-invoices',headers=admin,json={'company_id':1,'invoice_date':'2026-07-12','due_date':'2026-08-12','supplier_id':supplier_id,'supplier_invoice_number':'SUP-RC21-001','lines':[{'description':'10 purchased units','account_code':'113010','quantity':10,'unit_price':100,'tax_code':'P15'}]}),201)
+    # Correct receipt-first flow: receipt/landed cost capitalizes inventory,
+    # while the supplier invoice clears GRNI instead of debiting inventory.
+    with SessionLocal() as db:
+      accounts={row.code:row for row in db.scalars(select(Account).where(Account.company_id==1)).all()}
+      receipt_journal=create_posted_journal(db,company_id=1,user_id=1,posting_date=date(2026,7,12),reference='RC21-GRN-001',description='Receipt plus paid landed cost',lines=[
+        {'account_id':accounts['113010'].id,'debit':1200,'credit':0},
+        {'account_id':accounts['214010'].id,'debit':0,'credit':1000},
+        {'account_id':accounts['111010'].id,'debit':0,'credit':200},
+      ])
+      db.add(StockMovement(company_id=1,warehouse_id=wh_id,item_id=item_id,movement_date=date(2026,7,12),movement_type='PURCHASE_RECEIPT',quantity=10,unit_cost=120,total_cost=1200,reference_type='GOODS_RECEIPT',reference_id=None,journal_id=receipt_journal.id,created_by=1))
+      db.commit()
+    pi=ok(c.post('/api/v1/subledgers/purchase-invoices',headers=admin,json={'company_id':1,'invoice_date':'2026-07-12','due_date':'2026-08-12','supplier_id':supplier_id,'supplier_invoice_number':'SUP-RC21-001','lines':[{'description':'10 purchased units','account_code':'214010','quantity':10,'unit_price':100,'tax_code':'P15'}]}),201)
     ppost=ok(c.post(f"/api/v1/subledgers/purchase-invoices/{pi['id']}/post",headers=admin))
     with SessionLocal() as db:
       pline_id=db.execute(select(__import__('app.models',fromlist=['PurchaseInvoiceLine']).PurchaseInvoiceLine.id).where(__import__('app.models',fromlist=['PurchaseInvoiceLine']).PurchaseInvoiceLine.invoice_id==pi['id'])).scalar_one()
-      # Stock subledger at 120/unit; purchase invoice already supplies the inventory GL debit.
-      db.add(StockMovement(company_id=1,warehouse_id=wh_id,item_id=item_id,movement_date=date(2026,7,12),movement_type='PURCHASE_RECEIPT',quantity=10,unit_cost=120,total_cost=1200,reference_type='PURCHASE_INVOICE',reference_id=pi['id'],journal_id=None,created_by=1)); db.commit()
     ap_before=ok(c.get('/api/v1/subledgers/aging?company_id=1&ledger_type=AP&as_of_date=2026-08-09',headers=admin))
     pcn=ok(c.post('/api/v1/credit-notes',headers=admin,json={'company_id':1,'note_type':'PURCHASE','note_date':'2026-08-10','original_invoice_id':pi['id'],'reason_code':'SUPPLIER_RETURN','reason':'Return damaged purchase to supplier','external_reference':'SUP-CN-778','lines':[{'original_line_id':pline_id,'quantity':4,'item_id':item_id,'warehouse_id':wh_id,'inventory_disposition':'RETURN_TO_SUPPLIER'}]}),201)
     ok(c.post(f"/api/v1/credit-notes/documents/{pcn['id']}/submit",headers=admin)); pcn=ok(c.post(f"/api/v1/credit-notes/documents/{pcn['id']}/approve-post",headers=approver))

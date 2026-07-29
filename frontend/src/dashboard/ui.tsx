@@ -6,22 +6,30 @@ export const pct = (n: number) => `${n.toFixed(1)}%`;
 
 export function AgeLine({label,value,percent,tone}:{label:string;value:string;percent:string;tone:string}){return <div className="age-line"><span><i className={tone}/>{label}</span><strong>{value}</strong><b>{percent}</b></div>}
 
-export function QuickAction({icon,ar,arLabel,enLabel,tone}:{icon:ReactNode;ar:boolean;arLabel:string;enLabel:string;tone:string}){return <button className={`quick-action ${tone}`}><span>{icon}</span><strong>{ar?arLabel:enLabel}</strong><small>{ar?enLabel:arLabel}</small></button>}
+export function QuickAction({icon,ar,arLabel,enLabel,tone,onClick}:{icon:ReactNode;ar:boolean;arLabel:string;enLabel:string;tone:string;onClick:()=>void}){return <button type="button" className={`quick-action ${tone}`} onClick={onClick} aria-label={ar?arLabel:enLabel}><span>{icon}</span><strong>{ar?arLabel:enLabel}</strong><small>{ar?enLabel:arLabel}</small></button>}
 
 export function authHeaders():Record<string,string>{const token=sessionStorage.getItem('corvax_token');return token?{Authorization:`Bearer ${token}`}:{}}
 
 export function jsonHeaders():Record<string,string>{return {'Content-Type':'application/json',...authHeaders()}}
 
-export function Kpi({title,value,trend,good,icon,tone='blue',unit}:{title:string,value:string,trend:string,good:boolean,icon?:ReactNode,tone?:string,unit?:string}) {
+export function Kpi({title,value,trend,good,icon,tone='blue',unit,onClick}:{title:string,value:string,trend:string,good:boolean,icon?:ReactNode,tone?:string,unit?:string,onClick?:()=>void}) {
   const points = tone==='green' ? '0,29 10,27 20,30 30,23 40,24 50,18 60,20 70,13 80,15 90,8 100,3' : tone==='violet' ? '0,25 10,22 20,27 30,20 40,23 50,15 60,18 70,11 80,13 90,6 100,2' : tone==='amber' ? '0,27 10,23 20,28 30,21 40,24 50,16 60,19 70,12 80,14 90,7 100,3' : '0,27 10,24 20,29 30,22 40,25 50,17 60,20 70,13 80,15 90,8 100,2';
-  return <article className={`kpi-card tone-${tone}`}><div className="kpi-heading"><div><span>{title}</span></div>{icon&&<div className="kpi-icon">{icon}</div>}</div><div className="kpi-value"><strong>{value}</strong>{unit&&<span>{unit}</span>}</div><small className={good?'good':'bad'}>{good?'✓':'!'} {trend}</small><svg className="kpi-spark" viewBox="0 0 100 32" preserveAspectRatio="none"><polyline points={points}/></svg></article>;
+  const content = <><div className="kpi-heading"><div><span>{title}</span></div>{icon&&<div className="kpi-icon">{icon}</div>}</div><div className="kpi-value"><strong>{value}</strong>{unit&&<span>{unit}</span>}</div><small className={good?'good':'bad'}>{good?'✓':'!'} {trend}</small><svg className="kpi-spark" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true"><polyline points={points}/></svg></>;
+  return onClick
+    ? <button type="button" className={`kpi-card tone-${tone} is-clickable`} onClick={onClick} aria-label={title}>{content}</button>
+    : <article className={`kpi-card tone-${tone}`}>{content}</article>;
 }
 
 export function SimpleKpi({t,v}:{t:string,v:string}) { return <article><span>{t}</span><strong>{v}</strong></article>; }
 
-export function Panel({title,icon,children,className=''}:{title:string,icon:ReactNode,children:ReactNode,className?:string}) { return <section className={`panel ${className}`}><div className="panel-head"><div>{icon}<h3>{title}</h3></div></div>{children}</section>; }
+export function Panel({title,icon,children,className='',onOpen,openLabel}:{title:string,icon:ReactNode,children:ReactNode,className?:string,onOpen?:()=>void,openLabel?:string}) { return <section className={`panel ${className}`}><div className="panel-head"><div>{icon}<h3>{title}</h3></div>{onOpen&&<button type="button" className="panel-open" onClick={onOpen} aria-label={openLabel||title} title={openLabel||title}><ChevronRight size={17}/></button>}</div>{children}</section>; }
 
-export function AlertRow({severity,title,meta}:{severity:'high'|'medium'|'low',title:string,meta:string}) { return <div className="alert-row"><i className={severity}/><div><strong>{title}</strong><span>{meta}</span></div><ChevronRight size={16}/></div>; }
+export function AlertRow({severity,title,meta,onClick}:{severity:'high'|'medium'|'low',title:string,meta:string,onClick?:()=>void}) {
+  const content = <><i className={severity}/><div><strong>{title}</strong><span>{meta}</span></div><ChevronRight size={16}/></>;
+  return onClick
+    ? <button type="button" className="alert-row is-clickable" onClick={onClick} aria-label={title}>{content}</button>
+    : <div className="alert-row">{content}</div>;
+}
 
 export function MiniStatus({icon,title,value,status}:{icon:ReactNode,title:string,value:string,status:string}) { return <article className="mini-status"><div className="module-icon">{icon}</div><span>{title}</span><strong>{value}</strong><small>{status}</small></article>; }
 
@@ -44,4 +52,3 @@ export function CostBar({label,value,max}:{label:string,value:number,max:number}
 export function DataTable({headers,rows}:{headers:string[],rows:ReactNode[][]}) { const ar=headers.some(h=>/[\u0600-\u06FF]/.test(h)); return <div className="data-table responsive" role="table"><div className="tr th" role="row" style={{gridTemplateColumns:`repeat(${headers.length}, minmax(125px, 1fr))`}}>{headers.map(h=><span role="columnheader" key={h}>{h}</span>)}</div>{rows.length===0?<div className="table-empty">{ar?'لا توجد بيانات متاحة':'No data available'}</div>:rows.map((r,i)=><div className="tr" role="row" style={{gridTemplateColumns:`repeat(${headers.length}, minmax(125px, 1fr))`}} key={i}>{r.map((c,j)=><span role="cell" key={`${i}-${j}`}>{c}</span>)}</div>)}</div>; }
 
 export function fmt(n:number){return money.format(n);}
-

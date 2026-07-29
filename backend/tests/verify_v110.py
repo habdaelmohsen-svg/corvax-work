@@ -8,14 +8,14 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_v110.db"
+DB_PATH = Path("/tmp") / "verify_v110.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v110-advanced-manufacturing"
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.3"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4"
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
@@ -178,7 +178,8 @@ def main() -> None:
         assert dashboard_data["posted_cost_closes"] >= 1
 
         release = client.get("/api/v1/system/release").json()
-        assert release["database_schema_head"] == "e17300000001"
+        from app.core.migration_head import expected_migration_head
+        assert release["database_schema_head"] == expected_migration_head()
         health = client.get("/health").json()
         assert health.get("status") == "ok"
 

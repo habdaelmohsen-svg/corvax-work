@@ -735,7 +735,7 @@
   border-radius: var(--cv-h4-radius-lg);
 }
 
-.executive-status-strip > div {
+.executive-status-strip > .status-metric {
   min-height: 56px;
   grid-template-columns: 34px minmax(0, 1fr) auto;
   gap: 8px;
@@ -756,7 +756,7 @@
   font-size: 17px;
 }
 
-.executive-status-strip > button {
+.executive-status-strip > .governance-button {
   min-height: 48px;
   margin: 4px;
   border: 1px solid var(--cv-border);
@@ -1257,7 +1257,7 @@ textarea,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .executive-status-strip > button {
+  .executive-status-strip > .governance-button {
     grid-column: 1 / -1;
   }
 }
@@ -1358,7 +1358,7 @@ textarea,
     min-height: 88px;
   }
 
-  .executive-status-strip > div {
+  .executive-status-strip > .status-metric {
     border-inline-end: 0;
     border-bottom: 1px solid var(--cv-border);
   }

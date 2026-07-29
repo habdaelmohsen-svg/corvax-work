@@ -32,6 +32,110 @@ class WarehouseIn(BaseModel):
     warehouse_type: str = "GENERAL"
 
 
+
+
+# ------------------------------------------------- item and warehouse taxonomy
+# THREE PROBLEMS THIS CLOSES
+#   1. The seeder writes FINISHED_GOOD while a screen offered FINISHED, so two
+#      spellings of the same thing coexisted and any filter on type missed rows.
+#   2. Nothing validated these columns, so any free text was stored - "raw",
+#      "Raw Material" and RAW_MATERIAL would all be different types.
+#   3. The type carried no behaviour: a SERVICE line could take a stock movement
+#      and end up with a balance, which is meaningless.
+
+ITEM_TYPES = {
+    "RAW_MATERIAL",    # poultry, spices, oils
+    "FINISHED_GOOD",   # what you sell (the seeded spelling; FINISHED is aliased)
+    "PACKAGING",       # cartons, bags, labels
+    "INVENTORY",       # general stock: spare parts, supplies
+    "CONSUMABLE",      # used up, not counted
+    "SERVICE",         # no physical stock at all
+}
+
+# Historic or shorthand spellings mapped onto the canonical value.
+ITEM_TYPE_ALIASES = {
+    "FINISHED": "FINISHED_GOOD",
+    "FINISHED_GOODS": "FINISHED_GOOD",
+    "RAW": "RAW_MATERIAL",
+    "RAW_MATERIALS": "RAW_MATERIAL",
+    "PACK": "PACKAGING",
+    "STOCK": "INVENTORY",
+    "GENERAL": "INVENTORY",
+}
+
+# Types that hold a countable balance. SERVICE and CONSUMABLE do not, so they are
+# refused on stock movements instead of silently building a meaningless balance.
+STOCKED_ITEM_TYPES = {"RAW_MATERIAL", "FINISHED_GOOD", "PACKAGING", "INVENTORY"}
+
+WAREHOUSE_TYPES = {
+    "MAIN",             # general store
+    "RAW",              # raw materials only
+    "FINISHED",         # finished goods only
+    "RAW_AND_FINISHED", # both (the seeded manufacturing default)
+    "COLD",             # chilled, 0 to 4 C
+    "FROZEN",           # frozen, -18 C or below
+    "QUARANTINE",       # received, awaiting inspection - not available to sell
+    "TRANSIT",          # in transit between sites
+    "TAX_WAREHOUSE",    # licensed excise-tax suspension warehouse
+}
+
+WAREHOUSE_TYPE_ALIASES = {
+    "GENERAL": "MAIN",
+    "CHILLED": "COLD",
+    "FINISHED_GOODS": "FINISHED",
+}
+
+
+def normalise_item_type(value: str) -> str:
+    """Canonical item type, or a 422 naming the accepted values."""
+    raw = (value or "").strip().upper().replace(" ", "_").replace("-", "_")
+    raw = ITEM_TYPE_ALIASES.get(raw, raw)
+    if raw not in ITEM_TYPES:
+        raise HTTPException(
+            422,
+            {
+                "message_ar": f"نوع صنف غير معروف: {value}. المسموح: {sorted(ITEM_TYPES)}",
+                "message_en": f"Unknown item type: {value}. Allowed: {sorted(ITEM_TYPES)}",
+            },
+        )
+    return raw
+
+
+def normalise_warehouse_type(value: str) -> str:
+    """Canonical warehouse type, or a 422 naming the accepted values."""
+    raw = (value or "").strip().upper().replace(" ", "_").replace("-", "_")
+    raw = WAREHOUSE_TYPE_ALIASES.get(raw, raw)
+    if raw not in WAREHOUSE_TYPES:
+        raise HTTPException(
+            422,
+            {
+                "message_ar": f"نوع مستودع غير معروف: {value}. المسموح: {sorted(WAREHOUSE_TYPES)}",
+                "message_en": f"Unknown warehouse type: {value}. Allowed: {sorted(WAREHOUSE_TYPES)}",
+            },
+        )
+    return raw
+
+
+def guard_stocked_item(item) -> None:
+    """Refuse a stock movement on a type that has no physical balance."""
+    kind = (getattr(item, "item_type", "") or "").upper()
+    kind = ITEM_TYPE_ALIASES.get(kind, kind)
+    if kind not in STOCKED_ITEM_TYPES:
+        raise HTTPException(
+            422,
+            {
+                "message_ar": (
+                    f"الصنف {item.code} من نوع {kind} ولا يُتابع رصيده، فلا تُسجَّل عليه حركة مخزون. "
+                    "الخدمات والمستهلكات تُحمَّل على حساب مصروف مباشرة."
+                ),
+                "message_en": (
+                    f"{item.code} is a {kind} item with no tracked balance, so it cannot take a "
+                    "stock movement. Services and consumables post straight to an expense account."
+                ),
+            },
+        )
+
+
 class ItemIn(BaseModel):
     company_id: int
     code: str = Field(min_length=2, max_length=40)
@@ -117,11 +221,15 @@ def create_warehouse(data: WarehouseIn, user: User = Depends(get_current_user), 
     ensure_permission(db, user, data.company_id, "inventory.manage")
     if db.scalar(select(Warehouse).where(Warehouse.company_id == data.company_id, Warehouse.code == data.code)):
         raise HTTPException(409, "Warehouse code already exists")
-    row = Warehouse(**data.model_dump(), active=True)
+    payload = data.model_dump()
+    # Normalise before persisting: model_dump bypasses any per-field handling, so
+    # an unknown type would otherwise be stored verbatim.
+    payload["warehouse_type"] = normalise_warehouse_type(payload.get("warehouse_type", "MAIN"))
+    row = Warehouse(**payload, active=True)
     db.add(row); db.flush()
     write_audit(db, action="WAREHOUSE_CREATED", entity_type="WAREHOUSE", entity_id=row.id, user_id=user.id, company_id=data.company_id, after={"code": row.code})
     db.commit()
-    return {"id": row.id, "code": row.code, "name_ar": row.name_ar, "name_en": row.name_en}
+    return {"id": row.id, "code": row.code, "name_ar": row.name_ar, "name_en": row.name_en, "warehouse_type": row.warehouse_type}
 
 
 @router.get("/warehouses")
@@ -146,7 +254,7 @@ def create_item(data: ItemIn, user: User = Depends(get_current_user), db: Sessio
     revenue_account = get_account(db, data.company_id, data.revenue_account_code)
     row = Item(
         company_id=data.company_id, code=data.code, name_ar=data.name_ar, name_en=data.name_en,
-        item_type=data.item_type, uom=data.uom, valuation_method="WEIGHTED_AVERAGE",
+        item_type=normalise_item_type(data.item_type), uom=data.uom, valuation_method="WEIGHTED_AVERAGE",
         standard_cost=data.standard_cost, reorder_level=data.reorder_level,
         inventory_account_id=inventory_account.id, cogs_account_id=cogs_account.id, revenue_account_id=revenue_account.id,
         active=True,
@@ -179,6 +287,7 @@ def create_purchase_order(data: POIn, user: User = Depends(get_current_user), db
     subtotal=Decimal("0"); vat=Decimal("0")
     for source in data.lines:
         item=get_item(db,data.company_id,source.item_id)
+        guard_stocked_item(item)  # services and consumables hold no balance
         line_sub=money(source.quantity*source.unit_price); line_vat=money(line_sub*source.vat_rate/Decimal("100"))
         po.lines.append(PurchaseOrderLine(item_id=item.id,quantity=quantity(source.quantity),unit_price=source.unit_price,vat_rate=source.vat_rate,received_quantity=0,invoiced_quantity=0))
         subtotal+=line_sub;vat+=line_vat
@@ -218,6 +327,7 @@ def receive_purchase_order(po_id:int,data:ReceiptIn,user:User=Depends(get_curren
         po_line=source_by_id.get(source.purchase_order_line_id)
         if not po_line:raise HTTPException(422,"Purchase order line does not belong to this order")
         remaining=quantity(po_line.quantity-po_line.received_quantity);received=quantity(source.quantity)
+        guard_stocked_item(po_line.item)  # a service line must not raise stock
         if received>remaining:raise HTTPException(422,f"Receipt exceeds remaining quantity for item {po_line.item.code}")
         line_total=money(received*po_line.unit_price);total+=line_total
         receipt_lines.append((po_line,received,line_total,source))

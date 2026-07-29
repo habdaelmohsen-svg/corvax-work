@@ -7,7 +7,7 @@ from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
-DB_PATH = BACKEND_DIR / "data" / "verify_final_internal.db"
+DB_PATH = Path("/tmp") / "verify_final_internal.db"
 DB_PATH.unlink(missing_ok=True)
 os.environ.update({
     "DATABASE_URL": f"sqlite:///{DB_PATH}",
@@ -15,7 +15,7 @@ os.environ.update({
     "SEED_DEMO_DATA": "true",
     "AUTO_CREATE_SCHEMA": "true",
     "TRUSTED_HOSTS": "testserver,localhost,127.0.0.1",
-    "APP_VERSION": "1.0.0-agreement-completion-rc27.3",
+    "APP_VERSION": "1.0.0-agreement-completion-rc27.4",
     "ENABLE_RATE_LIMIT_TESTING": "true",
 })
 import subprocess
@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from app.db import SessionLocal
 from app.main import app
-from app.models import FiscalPeriod, FiscalYear, InternalCostRun, JournalEntry, PlanningScenario, ReadinessAssessment
+from app.models import FiscalPeriod, FiscalYear, InternalCostRun, JournalEntry, PlanningScenario, ReadinessAssessment, User
 
 
 def D(v): return Decimal(str(v)).quantize(Decimal("0.01"))
@@ -33,15 +33,24 @@ def ok(r, status=200): assert r.status_code == status, r.text; return r.json()
 
 def main():
     with TestClient(app) as c:
+        # The release test validates business workflows, not the interactive
+        # first-login screen. Mark only the seeded test administrator as having
+        # completed that mandatory step.
+        with SessionLocal() as db:
+            admin_user = db.scalar(select(User).where(User.email == "admin@corvaxplatform.com"))
+            assert admin_user
+            admin_user.require_password_change = False
+            db.commit()
         login = ok(c.post("/api/v1/auth/login", json={"email": "admin@corvaxplatform.com", "password": "Corvax@123"}))
         admin = {"Authorization": f"Bearer {login['access_token']}"}
-        assert ok(c.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.3"
+        assert ok(c.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4"
         # Compare against the live head so this test cannot rot (audit M-05).
         from app.core.migration_head import expected_migration_head
         assert ok(c.get("/health/ready"))["migration_head"] == expected_migration_head()
         for email, name in (("final.reviewer@corvaxplatform.com", "Final Reviewer"), ("final.approver@corvaxplatform.com", "Final Approver")):
             ok(c.post("/api/v1/admin/users", headers=admin, json={
                 "name_ar": name, "name_en": name, "email": email, "password": "FinalControl@123",
+                "require_password_change": False,
                 "memberships": [{"company_id": 1, "role_code": "SUPER_ADMIN"}],
             }), 201)
         reviewer_login = ok(c.post("/api/v1/auth/login", json={"email": "final.reviewer@corvaxplatform.com", "password": "FinalControl@123"}))
