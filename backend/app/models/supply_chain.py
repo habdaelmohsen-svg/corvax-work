@@ -42,12 +42,14 @@ class Item(Base):
     cogs_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     revenue_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     active = Column(Boolean, nullable=False, default=True)
+    category_id = Column(Integer, ForeignKey("item_categories.id"))
     item_subtype = Column(String(40))  # H9-item-columns
     nrv_per_unit = Column(Numeric(18, 4))  # H9-item-columns
     physical_issue_method = Column(String(10), nullable=False, default="FEFO")  # H9-item-columns
     inventory_account = relationship("Account", foreign_keys=[inventory_account_id], lazy="joined")
     cogs_account = relationship("Account", foreign_keys=[cogs_account_id], lazy="joined")
     revenue_account = relationship("Account", foreign_keys=[revenue_account_id], lazy="joined")
+    category = relationship("ItemCategory", foreign_keys=[category_id], lazy="joined")
 
 class StockMovement(Base):
     __tablename__ = "stock_movements"

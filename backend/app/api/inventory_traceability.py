@@ -319,7 +319,7 @@ def classify_item(data: ItemClassificationIn, user: User = Depends(get_current_u
         raise HTTPException(422, f"Invalid raw-material subtype. Allowed: {sorted(RAW_MATERIAL_SUBTYPES)}")
     if data.valuation_method is not None:
         if data.valuation_method not in VALUATION_METHODS:
-            raise HTTPException(422, f"Invalid valuation_method. IAS 2 allows only: {sorted(VALUATION_METHODS)} (LIFO is prohibited).")
+            raise HTTPException(422, "CORVAX accounting policy requires WEIGHTED_AVERAGE valuation")
         before = item.valuation_method
         item.valuation_method = data.valuation_method
         write_audit(db, action="ITEM_VALUATION_CHANGED", entity_type="ITEM", entity_id=item.id,

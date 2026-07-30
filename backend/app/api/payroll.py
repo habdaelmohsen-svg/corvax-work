@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
@@ -13,8 +13,8 @@ from app.core.time import utc_now
 from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user, branch_scope_condition
 from app.models import (
-    BankAccount, Employee, OvertimeRequest, PayrollAdjustment, PayrollLine, PayrollPolicy,
-    PayrollRun, User, WpsBatch,
+    BankAccount, Branch, CostCenter, Employee, EmployeeContract, EmployeeShiftAssignment,
+    OvertimeRequest, PayrollAdjustment, PayrollLine, PayrollPolicy, PayrollRun, Shift, User, WpsBatch,
 )
 from app.services.audit import write_audit
 from app.services.operations import get_account, money
@@ -65,6 +65,17 @@ class PayrollReviewIn(BaseModel):
     override_reason: str | None = Field(default=None, min_length=10, max_length=500)
 
 
+class EmployeePayrollLinkIn(BaseModel):
+    company_id: int
+    branch_id: int
+    cost_center_id: int
+    shift_id: int
+    effective_from: date
+    effective_to: date | None = None
+    iban: str | None = None
+    salary_bank_code: str | None = Field(default=None, min_length=2, max_length=20)
+
+
 @router.post("/employees", status_code=201)
 def create_employee(data: EmployeeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ensure_permission(db, user, data.company_id, "payroll.manage")
@@ -88,9 +99,142 @@ def list_employees(company_id: int, user: User = Depends(get_current_user), db: 
     rows = db.scalars(query.order_by(Employee.employee_number)).all()
     return [{"id": r.id, "employee_number": r.employee_number, "name_ar": r.name_ar, "name_en": r.name_en,
              "nationality_group": r.nationality_group, "hire_date": r.hire_date, "birth_date": r.birth_date,
-             "salary_bank_code": r.salary_bank_code, "has_iban": bool(r.iban), "basic_salary": r.basic_salary,
+             "salary_bank_code": r.salary_bank_code, "has_iban": bool(r.iban), "iban_masked": f"••••{str(r.iban)[-4:]}" if r.iban else None,
+             "branch_id": r.branch_id, "cost_center_id": r.cost_center_id,
+             "basic_salary": r.basic_salary,
              "housing_allowance": r.housing_allowance, "other_allowance": r.other_allowance,
              "employee_gosi_rate": r.employee_gosi_rate, "employer_gosi_rate": r.employer_gosi_rate} for r in rows]
+
+
+def _payroll_readiness(db: Session, company_id: int, year: int, month: int) -> dict:
+    from app.services.payroll import month_bounds
+
+    start, end = month_bounds(year, month)
+    policy = approved_policy(db, company_id)
+    employees = db.scalars(select(Employee).where(
+        Employee.company_id == company_id, Employee.active.is_(True),
+    ).order_by(Employee.employee_number)).all()
+    rows: list[dict] = []
+    blocker_count = 0
+    warning_count = 0
+    for employee in employees:
+        assignment = db.scalar(select(EmployeeShiftAssignment).where(
+            EmployeeShiftAssignment.company_id == company_id,
+            EmployeeShiftAssignment.employee_id == employee.id,
+            EmployeeShiftAssignment.active.is_(True),
+            EmployeeShiftAssignment.effective_from <= end,
+            or_(EmployeeShiftAssignment.effective_to.is_(None), EmployeeShiftAssignment.effective_to >= start),
+        ).order_by(EmployeeShiftAssignment.effective_from.desc()))
+        contract = db.scalar(select(EmployeeContract).where(
+            EmployeeContract.company_id == company_id,
+            EmployeeContract.employee_id == employee.id,
+            EmployeeContract.status == "ACTIVE",
+            EmployeeContract.start_date <= end,
+            or_(EmployeeContract.end_date.is_(None), EmployeeContract.end_date >= start),
+        ))
+        blockers: list[str] = []
+        warnings: list[str] = []
+        if not employee.iban: blockers.append("MISSING_IBAN")
+        if not employee.salary_bank_code: blockers.append("MISSING_SALARY_BANK_CODE")
+        if not employee.branch_id: blockers.append("MISSING_BRANCH")
+        if not employee.cost_center_id: blockers.append("MISSING_COST_CENTER")
+        if not assignment: blockers.append("MISSING_SHIFT_ASSIGNMENT")
+        if not contract: warnings.append("NO_APPROVED_ACTIVE_CONTRACT")
+        blocker_count += len(blockers)
+        warning_count += len(warnings)
+        rows.append({
+            "employee_id": employee.id, "employee_number": employee.employee_number,
+            "name_ar": employee.name_ar, "name_en": employee.name_en,
+            "ready": not blockers, "blockers": blockers, "warnings": warnings,
+            "branch_id": employee.branch_id, "cost_center_id": employee.cost_center_id,
+            "shift_id": assignment.shift_id if assignment else None,
+        })
+    global_blockers = []
+    if not policy:
+        global_blockers.append("APPROVED_PAYROLL_POLICY_REQUIRED")
+    if not employees:
+        global_blockers.append("NO_ACTIVE_EMPLOYEES")
+    return {
+        "company_id": company_id, "period_year": year, "period_month": month,
+        "ready": blocker_count == 0 and not global_blockers,
+        "global_blockers": global_blockers, "employee_blockers": blocker_count,
+        "warnings": warning_count, "employees": rows,
+        "ready_employees": sum(1 for row in rows if row["ready"]),
+        "total_employees": len(rows),
+    }
+
+
+@router.get("/readiness")
+def payroll_readiness(
+    company_id: int, period_year: int, period_month: int,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    ensure_permission(db, user, company_id, "payroll.read")
+    if not 1 <= period_month <= 12:
+        raise HTTPException(422, "period_month must be 1..12")
+    return _payroll_readiness(db, company_id, period_year, period_month)
+
+
+@router.post("/employees/{employee_id}/payroll-link")
+def link_employee_to_payroll(
+    employee_id: int, data: EmployeePayrollLinkIn,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    ensure_permission(db, user, data.company_id, "payroll.manage")
+    employee = db.scalar(select(Employee).where(
+        Employee.id == employee_id, Employee.company_id == data.company_id, Employee.active.is_(True),
+    ))
+    branch = db.scalar(select(Branch).where(
+        Branch.id == data.branch_id, Branch.company_id == data.company_id, Branch.active.is_(True),
+    ))
+    cost_center = db.scalar(select(CostCenter).where(
+        CostCenter.id == data.cost_center_id, CostCenter.company_id == data.company_id, CostCenter.active.is_(True),
+    ))
+    shift = db.scalar(select(Shift).where(
+        Shift.id == data.shift_id, Shift.company_id == data.company_id, Shift.active.is_(True),
+    ))
+    if not employee or not branch or not cost_center or not shift:
+        raise HTTPException(404, "Employee, branch, cost center, or shift not found")
+    overlap = db.scalar(select(EmployeeShiftAssignment).where(
+        EmployeeShiftAssignment.company_id == data.company_id,
+        EmployeeShiftAssignment.employee_id == employee.id,
+        EmployeeShiftAssignment.active.is_(True),
+        EmployeeShiftAssignment.effective_from <= (data.effective_to or date.max),
+        or_(EmployeeShiftAssignment.effective_to.is_(None), EmployeeShiftAssignment.effective_to >= data.effective_from),
+    ))
+    if overlap and (overlap.shift_id != shift.id or overlap.branch_id != branch.id):
+        raise HTTPException(409, "An overlapping shift assignment already exists")
+    before = {
+        "branch_id": employee.branch_id, "cost_center_id": employee.cost_center_id,
+        "has_iban": bool(employee.iban), "salary_bank_code": employee.salary_bank_code,
+    }
+    employee.branch_id = branch.id
+    employee.cost_center_id = cost_center.id
+    if data.iban is not None and data.iban.strip():
+        employee.iban = data.iban.strip().replace(" ", "").upper()
+    if data.salary_bank_code is not None:
+        employee.salary_bank_code = data.salary_bank_code.strip().upper()
+    if not overlap:
+        db.add(EmployeeShiftAssignment(
+            company_id=data.company_id, employee_id=employee.id, shift_id=shift.id,
+            branch_id=branch.id, effective_from=data.effective_from,
+            effective_to=data.effective_to, active=True, created_by=user.id,
+        ))
+    write_audit(
+        db, action="EMPLOYEE_PAYROLL_LINKED", entity_type="EMPLOYEE", entity_id=employee.id,
+        user_id=user.id, company_id=data.company_id, before=before,
+        after={
+            "branch_id": employee.branch_id, "cost_center_id": employee.cost_center_id,
+            "shift_id": shift.id, "has_iban": bool(employee.iban),
+            "salary_bank_code": employee.salary_bank_code,
+        },
+    )
+    db.commit()
+    return {
+        "employee_id": employee.id, "branch_id": employee.branch_id,
+        "cost_center_id": employee.cost_center_id, "shift_id": shift.id,
+        "has_iban": bool(employee.iban), "salary_bank_code": employee.salary_bank_code,
+    }
 
 
 def _legacy_policy(company_id: int, user_id: int) -> PayrollPolicy:
@@ -105,6 +249,13 @@ def create_payroll_run(data: PayrollCreateWithAdjustments, user: User = Depends(
     ensure_permission(db, user, data.company_id, "payroll.manage")
     if db.scalar(select(PayrollRun).where(PayrollRun.company_id == data.company_id, PayrollRun.period_year == data.period_year, PayrollRun.period_month == data.period_month)):
         raise HTTPException(409, "Payroll run already exists for this period")
+    readiness = _payroll_readiness(db, data.company_id, data.period_year, data.period_month)
+    if settings.payroll_strict_workflow and not readiness["ready"]:
+        raise HTTPException(422, {
+            "message_ar": "الموظفون أو سياسة الرواتب غير جاهزين للاحتساب",
+            "message_en": "Employees or payroll policy are not ready for calculation",
+            "readiness": readiness,
+        })
     bank = db.scalar(select(BankAccount).where(BankAccount.id == data.bank_account_id, BankAccount.company_id == data.company_id, BankAccount.active.is_(True)))
     if not bank: raise HTTPException(404, "Bank account not found")
     employees = db.scalars(select(Employee).where(Employee.company_id == data.company_id, Employee.active.is_(True))).all()
@@ -151,7 +302,7 @@ def create_payroll_run(data: PayrollCreateWithAdjustments, user: User = Depends(
 
 
 @router.post("/runs/{run_id}/review")
-def review_payroll_run(run_id: int, data: PayrollReviewIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def review_payroll_run(run_id: int, data: PayrollReviewIn | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     run = db.scalar(select(PayrollRun).where(PayrollRun.id == run_id).options(selectinload(PayrollRun.lines)))
     if not run: raise HTTPException(404, "Payroll run not found")
     ensure_permission(db, user, run.company_id, "payroll.review")
@@ -160,6 +311,7 @@ def review_payroll_run(run_id: int, data: PayrollReviewIn, user: User = Depends(
     if payroll_analysis_hash(run) != run.analysis_hash: raise HTTPException(409, "Payroll analysis integrity mismatch")
     policy = approved_policy(db, run.company_id)
     threshold = Decimal(policy.attendance_completeness_threshold) if policy else Decimal("0")
+    data = data or PayrollReviewIn()
     if Decimal(run.attendance_completeness_percent) < threshold and not data.override_reason:
         raise HTTPException(422, f"Attendance completeness {run.attendance_completeness_percent}% is below policy threshold {threshold}%")
     run.status = "REVIEWED"; run.reviewed_by = user.id; run.reviewed_at = utc_now(); run.review_override_reason = data.override_reason

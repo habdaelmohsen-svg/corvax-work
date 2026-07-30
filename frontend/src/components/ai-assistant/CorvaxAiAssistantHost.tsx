@@ -65,6 +65,11 @@ export function CorvaxAiAssistantHost({ lang }: { lang: Lang }) {
     });
   }, [lang]);
 
+  useEffect(() => {
+    document.documentElement.classList.toggle('corvax-ai-open', open);
+    return () => document.documentElement.classList.remove('corvax-ai-open');
+  }, [open]);
+
   if (!company) return null;
   const companyId = Number(company.apiId);
   if (!Number.isInteger(companyId) || companyId <= 0) return null;
@@ -107,7 +112,14 @@ export function CorvaxAiAssistantHost({ lang }: { lang: Lang }) {
       });
       const payload = (await response.json().catch(() => ({}))) as Partial<CorvaxAiApiResponse> & { detail?: unknown };
       if (!response.ok) {
-        const detail = typeof payload.detail === 'string' ? payload.detail : lang === 'ar' ? 'تعذر تنفيذ الاستعلام ضمن الصلاحيات الحالية.' : 'The query could not be completed within the current permissions.';
+        const rawDetail = payload.detail;
+        const detail = typeof rawDetail === 'string'
+          ? rawDetail
+          : rawDetail && typeof rawDetail === 'object' && 'message' in rawDetail
+            ? String((rawDetail as {message: unknown}).message)
+            : lang === 'ar'
+              ? 'تعذر تنفيذ الاستعلام ضمن الصلاحيات الحالية.'
+              : 'The query could not be completed within the current permissions.';
         throw new Error(detail);
       }
       const result = payload as CorvaxAiApiResponse;

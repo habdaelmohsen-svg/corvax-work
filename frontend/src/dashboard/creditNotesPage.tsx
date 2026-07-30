@@ -17,8 +17,8 @@ async function download(url:string,filename:string){
   const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href);
 }
 
-export function CreditNotesPage({ar,companyId}:{ar:boolean;companyId:number}){
-  const [type,setType]=useState<NoteType>('SALES');
+export function CreditNotesPage({ar,companyId,fixedType}:{ar:boolean;companyId:number;fixedType?:NoteType}){
+  const [type,setType]=useState<NoteType>(fixedType||'SALES');
   const [notes,setNotes]=useState<any[]>([]); const [invoices,setInvoices]=useState<EligibleInvoice[]>([]); const [credits,setCredits]=useState<any[]>([]);
   const [invoiceId,setInvoiceId]=useState(''); const [lineId,setLineId]=useState(''); const [qty,setQty]=useState('1');
   const [reasonCode,setReasonCode]=useState('RETURN'); const [reason,setReason]=useState(''); const [noteDate,setNoteDate]=useState(new Date().toISOString().slice(0,10));
@@ -36,6 +36,7 @@ export function CreditNotesPage({ar,companyId}:{ar:boolean;companyId:number}){
       if(!invoiceId&&b?.length){setInvoiceId(String(b[0].id));setLineId(String(b[0].lines?.[0]?.id||''));}
     }catch(e:any){setMessage(String(e.message||e));}
   };
+  useEffect(()=>{if(fixedType&&type!==fixedType)setType(fixedType)},[fixedType,type]);
   useEffect(()=>{setInvoiceId('');setLineId('');load()},[companyId,type]);
   useEffect(()=>{if(invoice?.lines?.length&&!invoice?.lines.some(x=>String(x.id)===lineId))setLineId(String(invoice.lines[0].id));},[invoice,lineId]);
 
@@ -60,7 +61,7 @@ export function CreditNotesPage({ar,companyId}:{ar:boolean;companyId:number}){
       <Kpi title={ar?'VAT المعكوسة':'Reversed VAT'} value={money.format(vat)} trend={ar?'في فترة الإشعار':'In credit-note period'} good/>
       <Kpi title={ar?'أرصدة دائنة مفتوحة':'Open party credits'} value={money.format(openCredit)} trend={ar?'قابلة للتطبيق أو الرد':'Apply or cash settle'} good={openCredit===0}/>
     </div>
-    <div className="segmented"><button className={type==='SALES'?'active':''} onClick={()=>setType('SALES')}>{ar?'مرتجع مبيعات':'Sales returns'}</button><button className={type==='PURCHASE'?'active':''} onClick={()=>setType('PURCHASE')}>{ar?'مرتجع مشتريات':'Purchase returns'}</button></div>
+    {!fixedType&&<div className="segmented"><button className={type==='SALES'?'active':''} onClick={()=>setType('SALES')}>{ar?'مرتجع مبيعات':'Sales returns'}</button><button className={type==='PURCHASE'?'active':''} onClick={()=>setType('PURCHASE')}>{ar?'مرتجع مشتريات':'Purchase returns'}</button></div>}
     <div className="two-columns wide-left">
       <Panel title={ar?'إنشاء إشعار دائن مرتبط بالفاتورة':'Create invoice-linked credit note'} icon={<RotateCcw size={18}/> }>
         <div className="journal-form" style={{gridTemplateColumns:'repeat(2,minmax(0,1fr))'}}>

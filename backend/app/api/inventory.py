@@ -12,7 +12,7 @@ from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user, branch_scope_condition
 from app.models import (
     Account, BankAccount, Budget, BudgetLine, FiscalPeriod, FiscalYear, GoodsReceipt, GoodsReceiptLine,
-    Item, JournalEntry, Party, PurchaseInvoice, PurchaseInvoiceLine, PurchaseOrder, PurchaseOrderLine,
+    Item, ItemCategory, JournalEntry, Party, PurchaseInvoice, PurchaseInvoiceLine, PurchaseOrder, PurchaseOrderLine,
     StockMovement, User, Warehouse,
 )
 from app.services.audit import write_audit
@@ -45,8 +45,12 @@ class WarehouseIn(BaseModel):
 
 ITEM_TYPES = {
     "RAW_MATERIAL",    # poultry, spices, oils
+    "WORK_IN_PROGRESS",
     "FINISHED_GOOD",   # what you sell (the seeded spelling; FINISHED is aliased)
     "PACKAGING",       # cartons, bags, labels
+    "CLEANING_MATERIAL",
+    "OPERATING_SUPPLY",
+    "SPARE_PART",
     "INVENTORY",       # general stock: spare parts, supplies
     "CONSUMABLE",      # used up, not counted
     "SERVICE",         # no physical stock at all
@@ -65,7 +69,10 @@ ITEM_TYPE_ALIASES = {
 
 # Types that hold a countable balance. SERVICE and CONSUMABLE do not, so they are
 # refused on stock movements instead of silently building a meaningless balance.
-STOCKED_ITEM_TYPES = {"RAW_MATERIAL", "FINISHED_GOOD", "PACKAGING", "INVENTORY"}
+STOCKED_ITEM_TYPES = {
+    "RAW_MATERIAL", "WORK_IN_PROGRESS", "FINISHED_GOOD", "PACKAGING",
+    "CLEANING_MATERIAL", "OPERATING_SUPPLY", "SPARE_PART", "INVENTORY",
+}
 
 WAREHOUSE_TYPES = {
     "MAIN",             # general store
@@ -148,6 +155,34 @@ class ItemIn(BaseModel):
     inventory_account_code: str = "113010"
     cogs_account_code: str = "511010"
     revenue_account_code: str = "411010"
+    category_code: str | None = None
+
+
+class ItemCategoryIn(BaseModel):
+    company_id: int
+    code: str = Field(min_length=2, max_length=40)
+    name_ar: str = Field(min_length=2, max_length=200)
+    name_en: str = Field(min_length=2, max_length=200)
+    parent_code: str | None = None
+    default_item_type: str = "INVENTORY"
+    inventory_account_code: str
+    cogs_account_code: str
+    revenue_account_code: str
+
+
+class ItemUpdate(BaseModel):
+    company_id: int
+    name_ar: str | None = Field(default=None, min_length=2, max_length=250)
+    name_en: str | None = Field(default=None, min_length=2, max_length=250)
+    item_type: str | None = None
+    uom: str | None = Field(default=None, min_length=1, max_length=20)
+    reorder_level: Decimal | None = Field(default=None, ge=0)
+    category_code: str | None = None
+    inventory_account_code: str | None = None
+    cogs_account_code: str | None = None
+    revenue_account_code: str | None = None
+    active: bool | None = None
+    apply_category_defaults: bool = True
 
 
 class POLineIn(BaseModel):
@@ -216,6 +251,75 @@ def _supplier(db: Session, company_id: int, supplier_id: int) -> Party:
     return row
 
 
+def _category(db: Session, company_id: int, code: str) -> ItemCategory:
+    row = db.scalar(select(ItemCategory).where(
+        ItemCategory.company_id == company_id,
+        ItemCategory.code == code,
+        ItemCategory.active.is_(True),
+    ))
+    if not row:
+        raise HTTPException(404, f"Item category not found: {code}")
+    return row
+
+
+def _validate_item_accounts(inventory_account: Account, cogs_account: Account, revenue_account: Account) -> None:
+    if not all(account.active and account.is_postable for account in (inventory_account, cogs_account, revenue_account)):
+        raise HTTPException(422, "All item accounts must be active and postable")
+    if inventory_account.account_type != "ASSET":
+        raise HTTPException(422, "Inventory account must be an ASSET")
+    if cogs_account.account_type != "EXPENSE":
+        raise HTTPException(422, "Cost account must be an EXPENSE")
+    if revenue_account.account_type != "REVENUE":
+        raise HTTPException(422, "Revenue account must be REVENUE")
+
+
+@router.post("/item-categories", status_code=201)
+def create_item_category(data: ItemCategoryIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, data.company_id, "inventory.manage")
+    if db.scalar(select(ItemCategory).where(ItemCategory.company_id == data.company_id, ItemCategory.code == data.code)):
+        raise HTTPException(409, "Item category code already exists")
+    parent = _category(db, data.company_id, data.parent_code) if data.parent_code else None
+    inventory_account = get_account(db, data.company_id, data.inventory_account_code)
+    cogs_account = get_account(db, data.company_id, data.cogs_account_code)
+    revenue_account = get_account(db, data.company_id, data.revenue_account_code)
+    _validate_item_accounts(inventory_account, cogs_account, revenue_account)
+    row = ItemCategory(
+        company_id=data.company_id, code=data.code.strip().upper(),
+        name_ar=data.name_ar.strip(), name_en=data.name_en.strip(),
+        parent_id=parent.id if parent else None,
+        default_item_type=normalise_item_type(data.default_item_type),
+        inventory_account_id=inventory_account.id, cogs_account_id=cogs_account.id,
+        revenue_account_id=revenue_account.id, valuation_method="WEIGHTED_AVERAGE",
+        active=True, created_by=user.id,
+    )
+    db.add(row); db.flush()
+    write_audit(
+        db, action="ITEM_CATEGORY_CREATED", entity_type="ITEM_CATEGORY", entity_id=row.id,
+        user_id=user.id, company_id=data.company_id,
+        after={"code": row.code, "type": row.default_item_type, "valuation": row.valuation_method},
+    )
+    db.commit()
+    return {"id": row.id, "code": row.code, "name_ar": row.name_ar, "name_en": row.name_en}
+
+
+@router.get("/item-categories")
+def list_item_categories(company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "inventory.read")
+    rows = db.scalars(select(ItemCategory).where(ItemCategory.company_id == company_id).order_by(ItemCategory.code)).all()
+    return [
+        {
+            "id": row.id, "code": row.code, "name_ar": row.name_ar, "name_en": row.name_en,
+            "parent_code": row.parent.code if row.parent else None,
+            "default_item_type": row.default_item_type, "valuation_method": row.valuation_method,
+            "inventory_account_code": row.inventory_account.code,
+            "cogs_account_code": row.cogs_account.code,
+            "revenue_account_code": row.revenue_account.code,
+            "active": row.active,
+        }
+        for row in rows
+    ]
+
+
 @router.post("/warehouses", status_code=201)
 def create_warehouse(data: WarehouseIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ensure_permission(db, user, data.company_id, "inventory.manage")
@@ -249,12 +353,16 @@ def create_item(data: ItemIn, user: User = Depends(get_current_user), db: Sessio
     ensure_permission(db, user, data.company_id, "inventory.manage")
     if db.scalar(select(Item).where(Item.company_id == data.company_id, Item.code == data.code)):
         raise HTTPException(409, "Item code already exists")
-    inventory_account = get_account(db, data.company_id, data.inventory_account_code)
-    cogs_account = get_account(db, data.company_id, data.cogs_account_code)
-    revenue_account = get_account(db, data.company_id, data.revenue_account_code)
+    category = _category(db, data.company_id, data.category_code) if data.category_code else None
+    inventory_account = category.inventory_account if category else get_account(db, data.company_id, data.inventory_account_code)
+    cogs_account = category.cogs_account if category else get_account(db, data.company_id, data.cogs_account_code)
+    revenue_account = category.revenue_account if category else get_account(db, data.company_id, data.revenue_account_code)
+    _validate_item_accounts(inventory_account, cogs_account, revenue_account)
     row = Item(
         company_id=data.company_id, code=data.code, name_ar=data.name_ar, name_en=data.name_en,
-        item_type=normalise_item_type(data.item_type), uom=data.uom, valuation_method="WEIGHTED_AVERAGE",
+        item_type=normalise_item_type(category.default_item_type if category else data.item_type),
+        category_id=category.id if category else None,
+        uom=data.uom, valuation_method="WEIGHTED_AVERAGE",
         standard_cost=data.standard_cost, reorder_level=data.reorder_level,
         inventory_account_id=inventory_account.id, cogs_account_id=cogs_account.id, revenue_account_id=revenue_account.id,
         active=True,
@@ -262,7 +370,7 @@ def create_item(data: ItemIn, user: User = Depends(get_current_user), db: Sessio
     db.add(row); db.flush()
     write_audit(db, action="ITEM_CREATED", entity_type="ITEM", entity_id=row.id, user_id=user.id, company_id=data.company_id, after={"code": row.code})
     db.commit()
-    return {"id": row.id, "code": row.code, "name_ar": row.name_ar, "name_en": row.name_en, "standard_cost": row.standard_cost}
+    return {"id": row.id, "code": row.code, "name_ar": row.name_ar, "name_en": row.name_en, "standard_cost": row.standard_cost, "category_code": category.code if category else None}
 
 
 @router.get("/items")
@@ -273,8 +381,86 @@ def list_items(company_id: int, warehouse_id: int | None = None, user: User = De
     for r in rows:
         balance = stock_balance(db, company_id, warehouse_id, r.id) if warehouse_id else quantity(db.scalar(select(func.coalesce(func.sum(StockMovement.quantity), 0)).where(StockMovement.company_id==company_id, StockMovement.item_id==r.id)) or 0)
         value = stock_value(db, company_id, warehouse_id, r.id)
-        result.append({"id":r.id,"code":r.code,"name_ar":r.name_ar,"name_en":r.name_en,"item_type":r.item_type,"uom":r.uom,"balance":balance,"value":value,"reorder_level":r.reorder_level,"low_stock":balance<=r.reorder_level})
+        result.append({
+            "id": r.id, "code": r.code, "name_ar": r.name_ar, "name_en": r.name_en,
+            "item_type": r.item_type, "category_code": r.category.code if r.category else None,
+            "category_name_ar": r.category.name_ar if r.category else None,
+            "uom": r.uom, "valuation_method": r.valuation_method,
+            "standard_cost": r.standard_cost, "balance": balance, "value": value,
+            "reorder_level": r.reorder_level, "low_stock": balance <= r.reorder_level,
+            "inventory_account_code": r.inventory_account.code,
+            "cogs_account_code": r.cogs_account.code,
+            "revenue_account_code": r.revenue_account.code,
+            "active": r.active,
+        })
     return result
+
+
+@router.patch("/items/{item_id}")
+def update_item(item_id: int, data: ItemUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, data.company_id, "inventory.manage")
+    item = db.scalar(select(Item).where(Item.id == item_id, Item.company_id == data.company_id))
+    if not item:
+        raise HTTPException(404, "Item not found")
+    before = {
+        "name_ar": item.name_ar, "name_en": item.name_en, "item_type": item.item_type,
+        "category_id": item.category_id, "uom": item.uom, "reorder_level": str(item.reorder_level),
+        "inventory_account_id": item.inventory_account_id, "cogs_account_id": item.cogs_account_id,
+        "revenue_account_id": item.revenue_account_id, "active": item.active,
+    }
+    category = _category(db, data.company_id, data.category_code) if data.category_code else None
+    next_type = normalise_item_type(data.item_type) if data.item_type else item.item_type
+    if category and data.apply_category_defaults:
+        next_type = category.default_item_type
+    current_quantity = quantity(db.scalar(select(func.coalesce(func.sum(StockMovement.quantity), 0)).where(
+        StockMovement.company_id == data.company_id, StockMovement.item_id == item.id,
+    )) or 0)
+    if item.item_type in STOCKED_ITEM_TYPES and next_type not in STOCKED_ITEM_TYPES and current_quantity != 0:
+        raise HTTPException(422, "A stocked item cannot become non-stocked while quantity remains")
+    inventory_account = category.inventory_account if category and data.apply_category_defaults else (
+        get_account(db, data.company_id, data.inventory_account_code) if data.inventory_account_code else item.inventory_account
+    )
+    cogs_account = category.cogs_account if category and data.apply_category_defaults else (
+        get_account(db, data.company_id, data.cogs_account_code) if data.cogs_account_code else item.cogs_account
+    )
+    revenue_account = category.revenue_account if category and data.apply_category_defaults else (
+        get_account(db, data.company_id, data.revenue_account_code) if data.revenue_account_code else item.revenue_account
+    )
+    _validate_item_accounts(inventory_account, cogs_account, revenue_account)
+    if data.name_ar is not None: item.name_ar = data.name_ar.strip()
+    if data.name_en is not None: item.name_en = data.name_en.strip()
+    if data.uom is not None: item.uom = data.uom.strip().upper()
+    if data.reorder_level is not None: item.reorder_level = data.reorder_level
+    if data.active is not None:
+        if not data.active and current_quantity != 0:
+            raise HTTPException(422, "An item with remaining stock cannot be deactivated")
+        item.active = data.active
+    item.item_type = next_type
+    if "category_code" in data.model_fields_set:
+        item.category_id = category.id if category else None
+    item.inventory_account_id = inventory_account.id
+    item.cogs_account_id = cogs_account.id
+    item.revenue_account_id = revenue_account.id
+    item.valuation_method = "WEIGHTED_AVERAGE"
+    write_audit(
+        db, action="ITEM_MASTER_UPDATED", entity_type="ITEM", entity_id=item.id,
+        user_id=user.id, company_id=data.company_id, before=before,
+        after={
+            "item_type": item.item_type, "category_id": item.category_id, "uom": item.uom,
+            "reorder_level": str(item.reorder_level), "inventory_account_id": item.inventory_account_id,
+            "cogs_account_id": item.cogs_account_id, "revenue_account_id": item.revenue_account_id,
+            "valuation_method": item.valuation_method, "active": item.active,
+        },
+    )
+    db.commit()
+    return {
+        "id": item.id, "code": item.code, "item_type": item.item_type,
+        "category_code": category.code if category else None,
+        "valuation_method": item.valuation_method,
+        "inventory_account_code": inventory_account.code,
+        "cogs_account_code": cogs_account.code,
+        "revenue_account_code": revenue_account.code,
+    }
 
 
 @router.post("/purchase-orders", status_code=201)

@@ -39,6 +39,7 @@ const DataResetPage = lazy(() => import('./dataResetPage').then((module) => ({de
 const ItemsPage = lazy(() => import('./itemsPage').then((module) => ({default: module.ItemsPage})));
 const UsersPage = lazy(() => import('./usersPage').then((module) => ({default: module.UsersPage})));
 const ReportsCenterPage = lazy(() => import('./reportsCenterPage').then((module) => ({default: module.ReportsCenterPage})));
+const OpeningBalancesPage = lazy(() => import('./openingBalancesPage').then((module) => ({default: module.OpeningBalancesPage})));
 const GymPage = lazy(() => import('./gymRealPage').then((module) => ({default: module.GymPage})));
 const RestaurantPage = lazy(() => import('./restaurantRealPage').then((module) => ({default: module.RestaurantPage})));
 const ManufacturingPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.ManufacturingPage})));
@@ -55,7 +56,11 @@ export function DashboardRoutes({ar, companyId, scope, view, onNavigate}: {ar: b
     workbench:<WorkspacePage ar={ar} companyId={companyId}/>, finalCompletion:<FinalCompletionPage ar={ar} companyId={companyId}/>,
     executive:<ExecutivePage ar={ar} companyId={scope} apiCompanyId={companyId} onNavigate={onNavigate}/>, core:<CorePage ar={ar} companyId={companyId}/>,
     finance:<FinancePage ar={ar} companyId={companyId}/>, aging:<AgingPage ar={ar} companyId={companyId}/>,
-    returns:<CreditNotesPage ar={ar} companyId={companyId}/>, withholdingTax:<WithholdingTaxPage ar={ar} companyId={companyId}/>,
+    returns:<CreditNotesPage ar={ar} companyId={companyId}/>,
+    salesReturns:<CreditNotesPage ar={ar} companyId={companyId} fixedType="SALES"/>,
+    purchaseReturns:<CreditNotesPage ar={ar} companyId={companyId} fixedType="PURCHASE"/>,
+    openingBalances:<OpeningBalancesPage ar={ar} companyId={companyId}/>,
+    withholdingTax:<WithholdingTaxPage ar={ar} companyId={companyId}/>,
     exciseTax:<ExciseTaxPage ar={ar} companyId={companyId}/>, zakatIncomeTax:<ZakatIncomeTaxPage ar={ar} companyId={companyId}/>,
     budget:<BudgetPage ar={ar} companyId={companyId}/>, transactions:<TransactionsPage ar={ar} companyId={companyId}/>,
     inventory:<InventoryPage ar={ar} companyId={companyId}/>, inventoryTraceability:<InventoryTraceabilityPage ar={ar} companyId={companyId}/>,

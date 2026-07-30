@@ -33,22 +33,25 @@ assert "company_id: companyId" in HOST
 assert "branch_id: context.branchId ?? null" in HOST
 
 # Keyboard/dialog accessibility and focus restoration are release invariants.
+# The assistant is a non-modal drawer so it must not dim or cover the page.
 assert 'aria-haspopup="dialog"' in ASSISTANT
 assert 'aria-controls="corvax-ai-panel"' in ASSISTANT
 assert 'role="dialog"' in ASSISTANT
-assert 'aria-modal="true"' in ASSISTANT
+assert 'aria-modal="false"' in ASSISTANT
 assert "event.key === 'Escape'" in ASSISTANT
 assert "launcherRef.current?.focus()" in ASSISTANT
 
-# The launcher participates in header layout; only the panel/backdrop may be
-# viewport-fixed. Mobile keeps one compact launcher and no floating duplicate.
+# The launcher participates in header layout and the desktop drawer reserves
+# workspace width. Mobile keeps one compact launcher and no floating duplicate.
 launcher_css = CSS.split(".corvax-ai-launcher {", 1)[1].split("}", 1)[0]
 assert "position: fixed" not in launcher_css
 assert "position: absolute" not in launcher_css
 assert "position: relative" in launcher_css
 assert ".corvax-ai {\n  display: contents;" in CSS
-assert ".corvax-ai-backdrop {" in CSS and "position: fixed;" in CSS
+assert ".corvax-ai-backdrop {" not in CSS
 assert ".corvax-ai-panel {" in CSS
+assert ".corvax-ai-open .dash .workspace" in CSS
+assert "classList.toggle('corvax-ai-open', open)" in HOST
 assert "@media (max-width: 820px)" in CSS
 assert ".corvax-ai-launcher__copy { display: none; }" in CSS
 assert len(re.findall(r"(?m)^\s*\.corvax-ai-launcher \{", CSS)) == 2

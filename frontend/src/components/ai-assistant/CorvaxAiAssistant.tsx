@@ -222,16 +222,12 @@ export function CorvaxAiAssistant({
         </span>
       </button>
 
-      {open && (
-        <button className="corvax-ai-backdrop" type="button" aria-label={copy.close} onClick={closePanel} />
-      )}
-
       <aside
         ref={panelRef}
         id="corvax-ai-panel"
         className="corvax-ai-panel"
         role="dialog"
-        aria-modal="true"
+        aria-modal="false"
         aria-labelledby={titleId}
         aria-hidden={!open}
       >

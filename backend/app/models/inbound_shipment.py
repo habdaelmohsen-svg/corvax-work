@@ -19,6 +19,8 @@ ITEM_TYPES = {
     "CLEANING_MATERIAL",  # مواد نظافة
     "OPERATING_SUPPLY",   # مواد تشغيلية
     "SPARE_PART",         # قطع غيار
+    "INVENTORY",          # مخزون عام
+    "CONSUMABLE",         # مستهلك غير مخزني
     "SERVICE",            # خدمة (غير مخزنية)
 }
 
@@ -30,7 +32,9 @@ RAW_MATERIAL_SUBTYPES = {
     "AUXILIARY_MATERIAL", # مواد مساعدة (زيوت/شحوم)
 }
 
-VALUATION_METHODS = {"WEIGHTED_AVERAGE", "FIFO"}   # IAS 2 - LIFO is intentionally excluded
+# CORVAX accounting policy: perpetual weighted average. FIFO remains available
+# only as a physical issue sequence; it is not an allowed financial valuation.
+VALUATION_METHODS = {"WEIGHTED_AVERAGE"}
 PHYSICAL_ISSUE_METHODS = {"FEFO", "FIFO"}
 ALLOCATION_METHODS = {"VALUE", "WEIGHT", "QUANTITY"}
 
