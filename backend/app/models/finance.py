@@ -41,6 +41,7 @@ class JournalEntry(Base):
     status = Column(String(30), nullable=False, default="DRAFT", index=True)
     cash_flow_activity = Column(String(20))
     cash_flow_kind = Column(String(60))
+    entry_origin = Column(String(20), nullable=False, default="SYSTEM", index=True)
     total_debit = Column(Numeric(18, 2), nullable=False, default=0)
     total_credit = Column(Numeric(18, 2), nullable=False, default=0)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)

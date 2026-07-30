@@ -16,6 +16,9 @@ from app.models import (
 )
 
 PERMISSIONS = {
+    "reports.read": ("عرض مركز التقارير الشامل", "View comprehensive reporting center"),
+    "reports.export": ("تصدير تقارير النظام", "Export system reports"),
+    "reports.tax.configure": ("إدارة إعدادات تقارير الضريبة", "Manage tax reporting settings"),
     "company.read": ("عرض الشركات", "View companies"),
     "masterdata.read": ("عرض البيانات الأساسية", "View master data"),
     "masterdata.manage": ("إدارة البيانات الأساسية", "Manage master data"),
@@ -191,6 +194,22 @@ ROLE_PERMISSION_MAP = {
     "GYM_FACILITY_SUPERVISOR": ["company.read", "gym.read", "gym.facilities.manage", "gym.bookings.manage", "gym.access.capture"],
     "PRODUCTION_MANAGER": ["company.read", "masterdata.read", "inventory.read", "inventory.issue", "manufacturing.read", "manufacturing.manage", "manufacturing.issue", "manufacturing.complete", "manufacturing.routing", "manufacturing.plan", "manufacturing.scrap", "manufacturing.cost.prepare", "quality.read", "quality.manage", "food_safety.read"],
 }
+
+# Unified reporting permissions are explicit and remain separate from the
+# underlying finance/inventory permissions used by the source engines.
+for _report_role in ("FINANCIAL_CONTROLLER", "CFO"):
+    ROLE_PERMISSION_MAP[_report_role] = [
+        "reports.read",
+        "reports.export",
+        "reports.tax.configure",
+        *ROLE_PERMISSION_MAP[_report_role],
+    ]
+for _report_role in ("ACCOUNTANT", "AUDITOR"):
+    ROLE_PERMISSION_MAP[_report_role] = [
+        "reports.read",
+        "reports.export",
+        *ROLE_PERMISSION_MAP[_report_role],
+    ]
 
 COMPANIES = [
     (1, "HOLD", "المجموعة القابضة", "Holding Group", "HOLDING", "#3157D5"),

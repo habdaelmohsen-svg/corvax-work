@@ -181,6 +181,7 @@ def revalue(data: RevaluationIn, user: User = Depends(get_current_user), db: Ses
     journal = JournalEntry(company_id=data.company_id, number=f"FX-{data.company_id}-{data.revaluation_date.year}-{count+1:06d}",
                            entry_date=data.revaluation_date, reference="FX-REVALUATION",
                            description=f"Foreign currency revaluation {data.revaluation_date}", status="POSTED",
+                           entry_origin="FX",
                            total_debit=total, total_credit=total, created_by=user.id, approved_by=user.id,
                            posted_by=user.id, approved_at=utc_now(), posted_at=utc_now(), lines=lines)
     db.add(journal); db.flush()

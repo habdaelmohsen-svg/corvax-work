@@ -69,6 +69,7 @@ from app.api.excise_tax import router as excise_tax_router
 from app.api.zakat_income_tax import router as zakat_income_tax_router
 from app.api.internal_completion import router as internal_completion_router
 from app.api.ai_assistant import router as ai_assistant_router
+from app.api.system_reports import router as system_reports_router
 from app.core.config import settings
 from app.core.migration_head import expected_migration_head
 from app.core.middleware import RateLimitMiddleware, RequestContextMiddleware
@@ -181,6 +182,7 @@ app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(operational_controls_router, prefix="/api/v1")
 app.include_router(internal_completion_router, prefix="/api/v1")
 app.include_router(ai_assistant_router, prefix="/api/v1")
+app.include_router(system_reports_router, prefix="/api/v1")
 
 
 @app.get("/health")

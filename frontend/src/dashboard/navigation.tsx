@@ -29,7 +29,7 @@ export const navItems: NavItem[] = [
   { key: 'chartOfAccounts', ar: 'شجرة الحسابات', en: 'Chart of Accounts', icon: Network, scope: allScopes, requires: ['finance'], group: 'finance' },
   { key: 'finance', ar: 'القوائم المالية', en: 'Financial Statements', icon: Landmark, scope: allScopes, group: 'finance', requires: ['finance'] },
   { key: 'cipProjects', ar: 'مشروعات تحت التنفيذ', en: 'Projects Under Construction', icon: HardHat, scope: allScopes, group: 'assets', requires: ['cip'] },
-  { key: 'reports', ar: 'مركز التقارير', en: 'Reports Center', icon: FileBarChart, scope: allScopes, group: 'finance', requires: ['finance'] },
+  { key: 'reports', ar: 'مركز التقارير الشامل', en: 'Comprehensive Reporting Center', icon: FileBarChart, scope: allScopes, group: 'finance', requires: ['reports'] },
   { key: 'aging', ar: 'أعمار العملاء والموردين', en: 'AR/AP Aging & Allocation', icon: WalletCards, scope: allScopes, group: 'finance' },
   { key: 'returns', ar: 'المرتجعات والإشعارات الدائنة', en: 'Returns & Credit Notes', icon: RotateCcw, scope: allScopes , group: 'tax' },
   { key: 'withholdingTax', ar: 'ضريبة الاستقطاع', en: 'Withholding Tax', icon: Percent, scope: allScopes, group: 'tax' },
