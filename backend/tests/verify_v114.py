@@ -65,6 +65,8 @@ def main():
 
     freeze=ok(c.post('/api/v1/gym/membership-modifications',headers=aj,json={'company_id':COMPANY_ID,'contract_id':contracts[0]['id'],'modification_type':'FREEZE','effective_date':'2026-07-09','freeze_start':'2026-07-10','freeze_end':'2026-07-12','reason':'Travel freeze verification'}))
     ok(c.post(f"/api/v1/gym/membership-modifications/{freeze['id']}/approve",headers=reviewer))
+    rejected=ok(c.post('/api/v1/gym/membership-modifications',headers=aj,json={'company_id':COMPANY_ID,'contract_id':contracts[2]['id'],'modification_type':'FREEZE','effective_date':'2026-07-09','freeze_start':'2026-07-10','freeze_end':'2026-07-12','reason':'Rejection lifecycle verification'}))
+    rejected=ok(c.post(f"/api/v1/gym/membership-modifications/{rejected['id']}/reject",headers=rj,json={'reason':'Missing supporting evidence'})); assert rejected['status']=='REJECTED'
     denied=ok(c.post('/api/v1/gym/access-records',headers=aj,json={'company_id':COMPANY_ID,'branch_id':b1,'member_id':members[0]['id'],'occurred_at':'2026-07-11T10:00:00','direction':'IN','method':'QR'})); assert denied['status']=='DENIED' and denied['reason']=='MEMBERSHIP_FROZEN'
     granted=ok(c.post('/api/v1/gym/access-records',headers=aj,json={'company_id':COMPANY_ID,'branch_id':b1,'member_id':members[0]['id'],'occurred_at':'2026-07-13T10:00:00','direction':'IN','method':'QR'})); assert granted['status']=='GRANTED'
 
@@ -88,9 +90,10 @@ def main():
 
     locker=ok(c.post('/api/v1/gym/lockers',headers=aj,json={'company_id':COMPANY_ID,'branch_id':b1,'code':'L-RC14-01'}))
     assignment=ok(c.post('/api/v1/gym/locker-assignments',headers=aj,json={'locker_id':locker['id'],'member_id':members[0]['id'],'contract_id':contracts[0]['id'],'start_date':'2026-07-13','deposit_amount':'50'})); assert assignment['status']=='ACTIVE'
+    released=ok(c.post(f"/api/v1/gym/locker-assignments/{assignment['id']}/release",headers=aj)); assert released['status']=='ENDED' and released['locker_status']=='AVAILABLE'
     transfer=ok(c.post('/api/v1/gym/branch-transfers',headers=aj,json={'company_id':COMPANY_ID,'member_id':members[0]['id'],'contract_id':contracts[0]['id'],'to_branch_id':b2,'transfer_date':'2026-07-15','reason':'RC14 branch transfer'}))
     assert c.post(f"/api/v1/gym/branch-transfers/{transfer['id']}/approve",headers=admin).status_code==409
-    moved=ok(c.post(f"/api/v1/gym/branch-transfers/{transfer['id']}/approve",headers=reviewer)); assert moved['released_lockers']==1
+    moved=ok(c.post(f"/api/v1/gym/branch-transfers/{transfer['id']}/approve",headers=reviewer)); assert moved['released_lockers']==0
     new_access=ok(c.post('/api/v1/gym/access-records',headers=aj,json={'company_id':COMPANY_ID,'branch_id':b2,'member_id':members[0]['id'],'occurred_at':'2026-07-16T10:00:00'})); assert new_access['status']=='GRANTED'
 
     cancel=ok(c.post('/api/v1/gym/membership-modifications',headers=aj,json={'company_id':COMPANY_ID,'contract_id':contracts[1]['id'],'modification_type':'CANCEL','effective_date':'2026-07-16','refund_method':'CREDIT','reason':'RC14 cancellation credit'}))

@@ -83,7 +83,6 @@ def _account_balances(db: Session, company_id: int, year: FiscalYear) -> list[di
             JournalEntry.company_id == company_id,
             JournalEntry.entry_date.between(year.start_date, year.end_date),
             JournalEntry.status.in_(["POSTED", "REVERSED"]),
-            ~JournalEntry.reference.like("YEC-%"),
         )
         .group_by(Account.id, Account.code, Account.name_ar, Account.name_en, Account.account_type)
         .order_by(Account.code)
@@ -133,7 +132,7 @@ def _checks(db: Session, company_id: int, year: FiscalYear, retained: Account) -
     duplicate = db.scalar(select(func.count(JournalEntry.id)).where(
         JournalEntry.company_id == company_id,
         JournalEntry.reference == f"YEC-{year.id}",
-        JournalEntry.status.in_(["POSTED", "REVERSED"]),
+        JournalEntry.status == "POSTED",
     )) or 0
     balances = _account_balances(db, company_id, year)
     result = _current_result(balances)
@@ -353,6 +352,8 @@ def reopen_year(run_id: int, data: YearEndReopenIn, user: User = Depends(get_cur
         description=f"Reopen fiscal year {year.name}: {data.reason}",
         lines=reversal_lines,
     )
+    closing.status = "REVERSED"
+    closing.reversed_entry_id = reversal.id
     run.status = "REOPENED"
     run.approved_by = user.id
     write_audit(db, action="FISCAL_YEAR_REOPENED", entity_type="FISCAL_YEAR", entity_id=year.id, user_id=user.id, company_id=run.company_id, after={"reason": data.reason, "reversal_journal_id": reversal.id})

@@ -165,6 +165,10 @@ with TestClient(app) as client:
     detail = client.get(f"/api/v1/finance-completion/consolidated-trial-balances/{consolidated_id}", headers=reviewer)
     assert detail.status_code == 200 and detail.json()["integrity_valid"] is True, detail.text
     assert any(line["account_code"] == "313010" for line in detail.json()["lines"])
+    tb_list = client.get(f"/api/v1/finance-completion/consolidated-trial-balances?group_id={group_id}", headers=reviewer)
+    disposal_list = client.get(f"/api/v1/finance-completion/foreign-operation-disposals?group_id={group_id}", headers=reviewer)
+    assert tb_list.status_code == 200 and any(x["id"] == consolidated_id for x in tb_list.json())
+    assert disposal_list.status_code == 200 and any(x["id"] == disposal_id for x in disposal_list.json())
 
     dashboard = client.get("/api/v1/finance-completion/dashboard?company_id=1", headers=reviewer)
     assert dashboard.status_code == 200, dashboard.text

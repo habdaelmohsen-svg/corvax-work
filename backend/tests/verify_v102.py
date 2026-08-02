@@ -85,6 +85,12 @@ with TestClient(app) as client:
     assert payload["conclusion"] in {"READY", "CONDITIONAL"}, payload
     assert not [c for c in payload["checks"] if c["blocking"] and c["status"] == "FAIL"]
     run_id = payload["id"]
+    detail = client.get(f"/api/v1/assurance/{run_id}", headers=accountant)
+    assert detail.status_code == 200 and detail.json()["id"] == run_id
+    check_id = payload["checks"][0]["id"]
+    remediation = client.patch(f"/api/v1/assurance/checks/{check_id}/remediation", headers=accountant,
+                               json={"owner_user_id": 1, "due_date": "2026-12-31"})
+    assert remediation.status_code == 200 and remediation.json()["owner_user_id"] == 1
 
     submitted = client.post(f"/api/v1/assurance/{run_id}/submit", headers=accountant)
     assert submitted.status_code == 200, submitted.text

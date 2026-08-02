@@ -42,7 +42,7 @@ const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(185px,1fr
 const MONTHS=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
 
 export function HrPage({ar,companyId}:{ar:boolean;companyId:number}){
-  const [tab,setTab]=useState<'employees'|'linking'|'payroll'|'policy'>('employees');
+  const [tab,setTab]=useState<'employees'|'setup'|'linking'|'payroll'|'policy'>('employees');
   const [emps,setEmps]=useState<Emp[]>([]);
   const [runs,setRuns]=useState<Run[]>([]);
   const [banks,setBanks]=useState<Bank[]>([]);
@@ -61,6 +61,12 @@ export function HrPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [eBranch,setEBranch]=useState(''); const [eCenter,setECenter]=useState(''); const [eShift,setEShift]=useState('');
   const [eEmployeeGosi,setEEmployeeGosi]=useState('9.75');
   const [eEmployerGosi,setEEmployerGosi]=useState('11.75');
+  // organizational setup
+  const [bCode,setBCode]=useState(''); const [bName,setBName]=useState(''); const [bCity,setBCity]=useState('');
+  const [ccCode,setCcCode]=useState(''); const [ccName,setCcName]=useState(''); const [ccParent,setCcParent]=useState('');
+  const [sCode,setSCode]=useState(''); const [sName,setSName]=useState('');
+  const [sStart,setSStart]=useState('08:00'); const [sEnd,setSEnd]=useState('17:00');
+  const [sGrace,setSGrace]=useState('10'); const [sDays,setSDays]=useState('0,1,2,3,4');
   // payroll linkage for existing employees
   const [lEmp,setLEmp]=useState(''); const [lBranch,setLBranch]=useState('');
   const [lCenter,setLCenter]=useState(''); const [lShift,setLShift]=useState('');
@@ -150,6 +156,40 @@ export function HrPage({ar,companyId}:{ar:boolean;companyId:number}){
     if(employee?.cost_center_id)setLCenter(String(employee.cost_center_id));
     setLBankCode(employee?.salary_bank_code||'');
     setLIban('');
+  };
+
+  const createBranch=async()=>{
+    if(!bCode.trim()||!bName.trim()){bad({message:ar?'كود الفرع واسمه إلزاميان':'Branch code and name are required'});return;}
+    setBusy(true);setMsg('');
+    try{
+      await json('/api/v1/enterprise/branches',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({company_id:companyId,code:bCode,name_ar:bName,name_en:bName,city_ar:bCity||null,city_en:bCity||null})});
+      ok(ar?'تم تكويد الفرع وأصبح متاحًا في ملف الموظف':'Branch created and available in employee setup');
+      setBCode('');setBName('');setBCity('');await load();
+    }catch(e){bad(e);}finally{setBusy(false);}
+  };
+
+  const createCenter=async()=>{
+    if(!ccCode.trim()||!ccName.trim()){bad({message:ar?'كود مركز التكلفة واسمه إلزاميان':'Cost-center code and name are required'});return;}
+    setBusy(true);setMsg('');
+    try{
+      await json('/api/v1/enterprise/cost-centers',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({company_id:companyId,code:ccCode,name_ar:ccName,name_en:ccName,parent_id:ccParent?Number(ccParent):null})});
+      ok(ar?'تم تكويد مركز التكلفة وأصبح متاحًا للموظفين والرواتب':'Cost center created and available for employees and payroll');
+      setCcCode('');setCcName('');setCcParent('');await load();
+    }catch(e){bad(e);}finally{setBusy(false);}
+  };
+
+  const createShift=async()=>{
+    if(!sCode.trim()||!sName.trim()){bad({message:ar?'كود الوردية واسمها إلزاميان':'Shift code and name are required'});return;}
+    setBusy(true);setMsg('');
+    try{
+      await json('/api/v1/hr/shifts',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({company_id:companyId,code:sCode,name_ar:sName,name_en:sName,start_time:sStart,end_time:sEnd,
+          grace_minutes:Number(sGrace),working_days:sDays})});
+      ok(ar?'تم تكويد الوردية وأصبحت متاحة لربط الموظفين':'Shift created and available for employee linking');
+      setSCode('');setSName('');await load();
+    }catch(e){bad(e);}finally{setBusy(false);}
   };
 
   const linkEmployee=async()=>{
@@ -274,6 +314,7 @@ export function HrPage({ar,companyId}:{ar:boolean;companyId:number}){
 
     <div style={{display:'flex',gap:8,margin:'14px 0',flexWrap:'wrap'}}>
       {([['employees',ar?'الموظفون':'Employees'],['payroll',ar?'مسيّر الرواتب':'Payroll runs'],
+         ['setup',ar?'الفروع ومراكز التكلفة والورديات':'Branches, Centers & Shifts'],
          ['linking',ar?'ربط الموظفين':'Employee linking'],
          ['policy',ar?'سياسة الرواتب':'Policy']] as [typeof tab,string][])
         .map(([k,l])=><button key={k} onClick={()=>setTab(k)}
@@ -338,6 +379,44 @@ export function HrPage({ar,companyId}:{ar:boolean;companyId:number}){
             <button key={e.id} style={smallBtn} onClick={()=>{selectLinkEmployee(String(e.id));setTab('linking')}}>
               {ar?'إعداد':'Configure'}
             </button>])}/>
+      </Panel>
+    </>}
+
+    {tab==='setup'&&<>
+      <Panel title={ar?'تكويد الفروع':'Branch coding'} icon={<Plus size={18}/>}>
+        <div style={grid}>
+          <label>{ar?'كود الفرع':'Branch code'}<input style={field} value={bCode} onChange={e=>setBCode(e.target.value)} placeholder="BR-01"/></label>
+          <label>{ar?'اسم الفرع':'Branch name'}<input style={field} value={bName} onChange={e=>setBName(e.target.value)}/></label>
+          <label>{ar?'المدينة (اختياري)':'City (optional)'}<input style={field} value={bCity} onChange={e=>setBCity(e.target.value)}/></label>
+        </div>
+        <div style={{padding:'0 12px 14px'}}><button style={btn} disabled={busy} onClick={createBranch}>{ar?'إضافة الفرع':'Add branch'}</button></div>
+        <DataTable headers={[ar?'الكود':'Code',ar?'الاسم':'Name',ar?'الحالة':'Status']}
+          rows={branches.map(x=>[x.code,ar?x.name_ar:x.name_en,x.active===false?(ar?'موقوف':'Inactive'):(ar?'نشط':'Active')])}/>
+      </Panel>
+      <Panel title={ar?'تكويد مراكز التكلفة':'Cost-center coding'} icon={<Plus size={18}/>}>
+        <div style={grid}>
+          <label>{ar?'الكود':'Code'}<input style={field} value={ccCode} onChange={e=>setCcCode(e.target.value)} placeholder="CC-01"/></label>
+          <label>{ar?'الاسم':'Name'}<input style={field} value={ccName} onChange={e=>setCcName(e.target.value)}/></label>
+          <label>{ar?'المركز الأب (اختياري)':'Parent center (optional)'}<select style={field} value={ccParent} onChange={e=>setCcParent(e.target.value)}>
+            <option value="">{ar?'بدون':'None'}</option>{centers.map(x=><option key={x.id} value={x.id}>{x.code} — {ar?x.name_ar:x.name_en}</option>)}
+          </select></label>
+        </div>
+        <div style={{padding:'0 12px 14px'}}><button style={btn} disabled={busy} onClick={createCenter}>{ar?'إضافة مركز التكلفة':'Add cost center'}</button></div>
+        <DataTable headers={[ar?'الكود':'Code',ar?'الاسم':'Name',ar?'الحالة':'Status']}
+          rows={centers.map(x=>[x.code,ar?x.name_ar:x.name_en,x.active===false?(ar?'موقوف':'Inactive'):(ar?'نشط':'Active')])}/>
+      </Panel>
+      <Panel title={ar?'تكويد الورديات':'Shift coding'} icon={<Plus size={18}/>}>
+        <div style={grid}>
+          <label>{ar?'كود الوردية':'Shift code'}<input style={field} value={sCode} onChange={e=>setSCode(e.target.value)} placeholder="DAY-01"/></label>
+          <label>{ar?'اسم الوردية':'Shift name'}<input style={field} value={sName} onChange={e=>setSName(e.target.value)}/></label>
+          <label>{ar?'بداية الوردية':'Start'}<input type="time" style={field} value={sStart} onChange={e=>setSStart(e.target.value)}/></label>
+          <label>{ar?'نهاية الوردية':'End'}<input type="time" style={field} value={sEnd} onChange={e=>setSEnd(e.target.value)}/></label>
+          <label>{ar?'دقائق السماح':'Grace minutes'}<input type="number" min="0" max="180" style={field} value={sGrace} onChange={e=>setSGrace(e.target.value)}/></label>
+          <label>{ar?'أيام العمل (0=الأحد … 6=السبت)':'Working days (0=Sun … 6=Sat)'}<input style={field} value={sDays} onChange={e=>setSDays(e.target.value)}/></label>
+        </div>
+        <div style={{padding:'0 12px 14px'}}><button style={btn} disabled={busy} onClick={createShift}>{ar?'إضافة الوردية':'Add shift'}</button></div>
+        <DataTable headers={[ar?'الكود':'Code',ar?'الاسم':'Name',ar?'من':'From',ar?'إلى':'To']}
+          rows={shifts.map(x=>[x.code,ar?x.name_ar:x.name_en,x.start_time,x.end_time])}/>
       </Panel>
     </>}
 

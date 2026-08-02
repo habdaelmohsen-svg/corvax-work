@@ -1,0 +1,113 @@
+{
+  "evidence_version": "R7-final-2026-08-02",
+  "release": {
+    "version": "1.0.0-agreement-completion-rc27.4",
+    "migration_head": "e20300000001"
+  },
+  "environment": {
+    "frontend": "React components driven by happy-dom and vite-node",
+    "backend": "live FastAPI server",
+    "database": "fresh isolated SQLite database per specialized scenario",
+    "mocked_backend": false,
+    "production_certification": false
+  },
+  "ui_surface": {
+    "sections_declared": 48,
+    "sections_rendered": 48,
+    "fields_discovered": 433,
+    "fields_filled": 429,
+    "buttons_discovered": 406,
+    "buttons_clicked": 178,
+    "http_requests": 368,
+    "http_methods": {
+      "GET": 324,
+      "POST": 34,
+      "PATCH": 9,
+      "PUT": 1
+    },
+    "http_2xx": 344,
+    "http_4xx_validation_or_control": 24,
+    "http_5xx": 0,
+    "screen_failures": 0
+  },
+  "specialized_ui_cycles": {
+    "accounts_payable": {
+      "invoice_total": 1150,
+      "states": ["DRAFT", "403 maker rejection", "POSTED", "CLOSED"],
+      "payment_amount": 1150,
+      "allocated_amount": 1150,
+      "unapplied_amount": 0,
+      "requests": 53,
+      "writes": 10,
+      "server_errors": 0
+    },
+    "competitive_procurement": {
+      "requisition_estimate": 2400,
+      "self_approval_status": 409,
+      "suppliers": 2,
+      "quotation_totals": [2300, 2530],
+      "maker_award_status": 409,
+      "source_traceable_purchase_order": true,
+      "requests": 86,
+      "writes": 20,
+      "server_errors": 0
+    },
+    "treasury": {
+      "states": ["DRAFT", "MATCHED", "RECONCILED"],
+      "separate_roles": 3,
+      "maker_self_match_status": 409,
+      "local_search_server_requests": 0,
+      "real_csv_export": true,
+      "csv_bytes": 827,
+      "post_fix_stability_runs": "3/3",
+      "requests": 31,
+      "writes": 11,
+      "server_errors": 0
+    },
+    "manufacturing_mrp": {
+      "bom_version": 2,
+      "component_quantity": 2,
+      "gross_demand": 21000,
+      "planned_supply": 15000,
+      "production_manager_approval_status": 403,
+      "cfo_approval_status": 200,
+      "requests": 47,
+      "writes": 9,
+      "server_errors": 0
+    },
+    "quality_crm_itsm": {
+      "quality_states": ["OPEN", "IN_PROGRESS", "VERIFIED", "CLOSED"],
+      "invalid_quality_quantity_status": 422,
+      "crm_states": ["QUALIFICATION", "422 LOST without reason", "NEGOTIATION", "WON"],
+      "crm_won_amount": 180000,
+      "itsm_states": ["OPEN", "403 requester resolution", "ASSIGNED", "IN_PROGRESS", "RESOLVED"],
+      "requests": 114,
+      "writes": 30,
+      "expected_errors": 3,
+      "unexpected_errors": 0,
+      "server_errors": 0
+    },
+    "gym": {
+      "steps_passed": 11,
+      "steps_failed": 0,
+      "requests": 166,
+      "writes": 14,
+      "expected_409": 2,
+      "unexpected_errors": 0
+    }
+  },
+  "release_checks": {
+    "registered_api_operations": "702/702",
+    "full_verification_gate": "62/62",
+    "full_verification_seconds": 632.4,
+    "release_gate": "5/5",
+    "frontend_modules_built": 2040,
+    "frontend_build_errors": 0
+  },
+  "limitations": [
+    "SQLite is not the production PostgreSQL target",
+    "UI was driven through a local DOM engine because the cloud browser cannot reach the local server",
+    "No live ZATCA, bank, WPS or email integration was invoked",
+    "Independent human UAT, load, restore and penetration tests remain required"
+  ]
+}

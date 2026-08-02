@@ -69,12 +69,20 @@ def main() -> None:
         assert profile["filing_frequency"] == "MONTHLY"
 
         for code in sorted(EXPECTED_CODES):
+            # VAT return and reconciliation must respect the configured filing
+            # frequency; other reports deliberately exercise a full-year custom
+            # range.  Keeping one range for all 57 reports masked this contract.
+            # Every VAT report is backed by the same period-bound VAT snapshot,
+            # so the whole VAT family must use a complete filing period.
+            vat_return_report = code.startswith("VAT-")
+            start_date = "2026-01-01"
+            end_date = "2026-01-31" if vat_return_report else "2026-12-31"
             result = ok(client.post("/api/v1/system-reports/run", headers=headers, json={
                 "company_id": 1,
                 "report_code": code,
                 "period_type": "CUSTOM",
-                "start_date": "2026-01-01",
-                "end_date": "2026-12-31",
+                "start_date": start_date,
+                "end_date": end_date,
                 "method": "indirect",
                 "slow_days": 90,
                 "obsolete_days": 180,
@@ -83,8 +91,8 @@ def main() -> None:
             assert result["report"]["code"] == code
             assert result["report"]["status"] == "IMPLEMENTED"
             assert result["metadata"]["company_id"] == 1
-            assert result["metadata"]["period_start"] == "2026-01-01"
-            assert result["metadata"]["period_end"] == "2026-12-31"
+            assert result["metadata"]["period_start"] == start_date
+            assert result["metadata"]["period_end"] == end_date
             assert len(result["metadata"]["result_sha256"]) == 64
             assert result["row_count"] == len(result["rows"])
             assert isinstance(result["columns"], list) and result["columns"], code

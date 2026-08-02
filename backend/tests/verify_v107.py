@@ -104,6 +104,11 @@ with TestClient(app) as client:
     approved_tax = client.post(f"/api/v1/corporate-reporting/deferred-tax-runs/{tax_id}/approve-post", headers=cfo)
     assert approved_tax.status_code == 200 and approved_tax.json()["status"] == "APPROVED_POSTED", approved_tax.text
     assert approved_tax.json()["journal_id"] is not None
+    tax_detail = client.get(f"/api/v1/corporate-reporting/deferred-tax-runs/{tax_id}", headers=accountant)
+    assert tax_detail.status_code == 200, tax_detail.text
+    assert tax_detail.json()["id"] == tax_id and tax_detail.json()["status"] == "APPROVED_POSTED"
+    assert Decimal(str(tax_detail.json()["totals"]["recognized_dta"])) == Decimal("40000.00")
+    assert len(tax_detail.json()["items"]) == 3
 
     # IAS 36 impairment test and irreversible goodwill allocation control.
     goodwill = client.post("/api/v1/corporate-reporting/goodwill-impairment-tests", headers=accountant, json={

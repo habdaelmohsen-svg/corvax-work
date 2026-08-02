@@ -20,7 +20,7 @@ const btn={padding:'9px 16px',borderRadius:9,border:'none',background:'var(--acc
 const smallBtn={padding:'4px 10px',borderRadius:7,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:600,fontSize:12} as const;
 const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,padding:12} as const;
 
-type Row={id:number;name_ar:string;name_en:string;email:string;username?:string;active:boolean;require_password_change?:boolean;locked_until?:string|null;roles?:string[]};
+type Row={id:number;name_ar:string;name_en:string;email:string;username?:string;active:boolean;require_password_change?:boolean;locked_until?:string|null;memberships?:{company_id:number;role:string}[]};
 
 const ROLES:[string,string,string][]=[
   ['SUPER_ADMIN','مدير النظام','System administrator'],
@@ -34,6 +34,10 @@ const ROLES:[string,string,string][]=[
   ['QUALITY_MANAGER','مدير جودة','Quality manager'],
   ['IT_MANAGER','مدير تقنية','IT manager'],
   ['RESTAURANT_MANAGER','مدير مطعم','Restaurant manager'],
+  ['GYM_MANAGER','مدير النادي','Gym manager'],
+  ['GYM_TRAINER','مدرب النادي','Gym trainer'],
+  ['GYM_CAFE_CASHIER','كاشير كافيه النادي','Gym cafe cashier'],
+  ['GYM_FACILITY_SUPERVISOR','مشرف مرافق النادي','Gym facility supervisor'],
 ];
 
 export function UsersPage({ar,companyId}:{ar:boolean;companyId:number}){
@@ -134,7 +138,7 @@ export function UsersPage({ar,companyId}:{ar:boolean;companyId:number}){
           u.username||'—',
           ar?u.name_ar:u.name_en,
           u.email,
-          (u.roles||[]).map(label).join(', ')||'—',
+          (u.memberships||[]).filter(m=>m.company_id===companyId).map(m=>label(m.role)).join(', ')||'—',
           <span key={`s${u.id}`}>
             {!u.active?(ar?'معطّل':'Disabled'):u.require_password_change?(ar?'يجب تغيير كلمة المرور':'Must change password'):(ar?'نشط':'Active')}
           </span>,

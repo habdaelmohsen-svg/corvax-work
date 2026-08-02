@@ -324,17 +324,17 @@ def post_journal(journal_id: int, user: User = Depends(get_current_user), db: Se
 
 
 @router.post("/journals/{journal_id}/reverse", response_model=JournalOut, status_code=201)
-def reverse_journal(journal_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def reverse_journal(journal_id: int, reversal_date: date | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     original = get_entry(db, journal_id)
     ensure_permission(db, user, original.company_id, "journals.reverse")
     if original.status != "POSTED":
         raise HTTPException(409, "Only posted journals can be reversed")
-    today = date.today()
-    validate_open_period(db, original.company_id, today)
+    posting_date = reversal_date or date.today()
+    validate_open_period(db, original.company_id, posting_date)
     reversal = JournalEntry(
         company_id=original.company_id,
-        number=next_number(db, original.company_id, today),
-        entry_date=today,
+        number=next_number(db, original.company_id, posting_date),
+        entry_date=posting_date,
         reference=f"REV-{original.number}",
         description=f"Reversal of {original.number}: {original.description}",
         status="POSTED",

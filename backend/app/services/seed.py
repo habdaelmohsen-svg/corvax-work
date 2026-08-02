@@ -40,7 +40,8 @@ PERMISSIONS = {
     "finance.corporate.review": ("مراجعة التقارير المؤسسية والضريبة المؤجلة", "Review corporate reporting and deferred tax"),
     "finance.corporate.approve": ("اعتماد وترحيل التقارير المؤسسية والضريبة المؤجلة", "Approve and post corporate reporting and deferred tax"),
     "audit.read": ("عرض سجل المراجعة", "View audit log"),
-    "bank.reconcile": ("التسويات البنكية", "Reconcile banks"),
+    "bank.statement.prepare": ("إعداد ومطابقة كشوف البنك", "Prepare and match bank statements"),
+    "bank.reconcile": ("اعتماد التسويات البنكية", "Approve bank reconciliations"),
     "budget.read": ("عرض الموازنة", "View budgets"),
     "budget.manage": ("إدارة الموازنة", "Manage budgets"),
     "budget.approve": ("اعتماد الموازنة", "Approve budgets"),
@@ -194,6 +195,25 @@ ROLE_PERMISSION_MAP = {
     "GYM_FACILITY_SUPERVISOR": ["company.read", "gym.read", "gym.facilities.manage", "gym.bookings.manage", "gym.access.capture"],
     "PRODUCTION_MANAGER": ["company.read", "masterdata.read", "inventory.read", "inventory.issue", "manufacturing.read", "manufacturing.manage", "manufacturing.issue", "manufacturing.complete", "manufacturing.routing", "manufacturing.plan", "manufacturing.scrap", "manufacturing.cost.prepare", "quality.read", "quality.manage", "food_safety.read"],
 }
+
+ROLE_PERMISSION_MAP["ACCOUNTANT"] = [
+    "bank.statement.prepare",
+    *ROLE_PERMISSION_MAP["ACCOUNTANT"],
+]
+
+# R7 employee simulation: people who maintain customers/suppliers need a
+# narrowly scoped master-data write permission, while quality staff must be
+# able to select inventory items in inspections and NCRs.  Previously both
+# screens were present but unusable for the intended roles.
+for _masterdata_role in ("ACCOUNTANT", "SALES_MANAGER", "CFO"):
+    ROLE_PERMISSION_MAP[_masterdata_role] = [
+        "masterdata.manage",
+        *ROLE_PERMISSION_MAP[_masterdata_role],
+    ]
+ROLE_PERMISSION_MAP["QUALITY_MANAGER"] = [
+    "inventory.read",
+    *ROLE_PERMISSION_MAP["QUALITY_MANAGER"],
+]
 
 # Unified reporting permissions are explicit and remain separate from the
 # underlying finance/inventory permissions used by the source engines.

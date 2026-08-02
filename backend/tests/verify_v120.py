@@ -198,6 +198,9 @@ def main():
                 {"supplier_id":supplier_id,"supplier_invoice_number":"CLR-RC20","invoice_date":"2026-11-16","due_date":"2026-12-16","charge_type":"CLEARANCE","description":"Local clearance","amount":500,"capitalizable":True,"tax_code":"P15"},
             ],
         }), 201)
+        landed_register = ok(client.get("/api/v1/operational-controls/landed-costs?company_id=1", headers=admin))
+        assert landed_register[0]["goods_receipt_number"] == grn["number"]
+        assert D(landed_register[0]["total_amount"]) == Decimal("1500.00")
         ok(client.post(f"/api/v1/operational-controls/landed-costs/{lc['id']}/submit", headers=admin))
         ok(client.post(f"/api/v1/operational-controls/landed-costs/{lc['id']}/approve", headers=approver))
         lc_posted = ok(client.post(f"/api/v1/operational-controls/landed-costs/{lc['id']}/post", headers=approver))
@@ -216,12 +219,17 @@ def main():
         ok(client.post(f"/api/v1/operational-controls/cost-rollups/{roll['id']}/review", headers=controller_h))
         approved_roll = ok(client.post(f"/api/v1/operational-controls/cost-rollups/{roll['id']}/approve", headers=approver))
         assert approved_roll["status"] == "APPROVED"
+        rollup_csv = client.get(f"/api/v1/operational-controls/cost-rollups/{roll['id']}/export.csv", headers=admin)
+        assert rollup_csv.status_code == 200 and rollup_csv.content.startswith(b'\xef\xbb\xbf')
         rollups = ok(client.get("/api/v1/operational-controls/cost-rollups?company_id=1&limit=10", headers=admin))
         assert rollups and rollups[0]["id"] == roll["id"] and rollups[0]["item_code"] == "RC20-FG"
         assert D(rollups[0]["unit_cost"]) == D(approved_roll["unit_cost"])
 
         # Physical count, perpetual posting, aging and NRV write-down.
         cnt = ok(client.post("/api/v1/operational-controls/inventory-counts", headers=admin, json={"company_id":1,"warehouse_id":warehouse_id,"count_date":"2026-11-30","count_type":"CYCLE"}), 201)
+        count_register = ok(client.get("/api/v1/operational-controls/inventory-counts?company_id=1", headers=admin))
+        assert count_register[0]["count_type"] == "CYCLE" and count_register[0]["warehouse_code"]
+        assert all(line["item_code"] for line in count_register[0]["lines"])
         for line in cnt["lines"]:
             counted = D(line["book_quantity"])-Decimal("1") if line["item_id"]==raw_id else D(line["book_quantity"])
             ok(client.patch(f"/api/v1/operational-controls/inventory-counts/{cnt['id']}/lines/{line['id']}", headers=admin, json={"counted_quantity":str(counted),"reason":"Test count"}))

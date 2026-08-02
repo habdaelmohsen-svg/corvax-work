@@ -79,12 +79,12 @@ function renderValue(value: unknown, column: ReportColumn, ar: boolean) {
   return String(value);
 }
 
-export function ReportsCenterPage({ar, companyId}: {ar: boolean; companyId: number}) {
+export function ReportsCenterPage({ar, companyId, initialCategory = 'VAT'}: {ar: boolean; companyId: number; initialCategory?: string}) {
   const today = new Date();
   const [topTab, setTopTab] = useState<'system' | 'builder'>('system');
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [active, setActive] = useState<CatalogReport | null>(null);
-  const [category, setCategory] = useState('VAT');
+  const [category, setCategory] = useState(initialCategory);
   const [search, setSearch] = useState('');
   const [periodType, setPeriodType] = useState<PeriodType>('MONTH');
   const [anchorDate, setAnchorDate] = useState(iso(today));
@@ -109,14 +109,14 @@ export function ReportsCenterPage({ar, companyId}: {ar: boolean; companyId: numb
       .then((payload: Catalog) => {
         if (!current) return;
         setCatalog(payload);
-        const first = payload.reports[0] || null;
+        const first = payload.reports.find(report => report.category === initialCategory) || payload.reports[0] || null;
         setActive(first);
         setCategory(first?.category || 'VAT');
         setPeriodType(recommendedPeriod(first));
       })
       .catch(error => current && setMessage(String(error.message || error)));
     return () => { current = false; };
-  }, [companyId]);
+  }, [companyId, initialCategory]);
 
   const categories = useMemo(() => {
     const values: string[] = [];

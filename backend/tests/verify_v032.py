@@ -128,5 +128,27 @@ with TestClient(app) as client:
         next_periods = db.scalars(select(FiscalPeriod).where(FiscalPeriod.fiscal_year_id == next_year.id).order_by(FiscalPeriod.number)).all()
         assert len(next_periods) == 12 and next_periods[0].status == "OPEN"
 
+    reopened = ok(client.post(f"/api/v1/year-end-close/{review['id']}/reopen", headers=cfo_headers,
+                              json={"reason": "Controlled R6 year-end reopening verification"}))
+    assert reopened["status"] == "REOPENED" and reopened["reversal_journal_id"]
+    with SessionLocal() as db:
+        assert db.get(FiscalYear, year_id).status == "OPEN"
+        original_close = db.get(JournalEntry, closed["closing_journal_id"])
+        assert original_close.status == "REVERSED"
+        assert original_close.reversed_entry_id == reopened["reversal_journal_id"]
+
+    reviewed_again = ok(client.post("/api/v1/year-end-close/review", headers=admin_headers, json={
+        "company_id": 1,
+        "fiscal_year_id": year_id,
+        "retained_earnings_account_id": retained_id,
+    }), 201)
+    assert Decimal(reviewed_again["current_year_result"]) == Decimal("40000")
+    assert not [c for c in reviewed_again["checks"] if c["blocking"] and c["status"] == "FAIL"]
+    reclosed = ok(client.post(f"/api/v1/year-end-close/{reviewed_again['id']}/close", headers=cfo_headers, json={
+        "create_next_year": False,
+    }))
+    assert Decimal(reclosed["current_year_result"]) == Decimal("40000")
+    assert reclosed["closing_journal_id"] != closed["closing_journal_id"]
+
 print("CORVAX v0.32 year-end close and retained earnings: ALL VERIFICATIONS PASSED")
 DB.unlink(missing_ok=True)

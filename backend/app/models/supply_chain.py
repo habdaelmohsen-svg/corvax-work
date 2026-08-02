@@ -90,6 +90,8 @@ class PurchaseOrder(Base):
     total = Column(Numeric(18, 2), nullable=False, default=0)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     approved_by = Column(Integer, ForeignKey("users.id"))
+    source_requisition_id = Column(Integer, ForeignKey("purchase_requisitions.id"), index=True)
+    source_quotation_id = Column(Integer, ForeignKey("supplier_quotations.id"), index=True)
     created_at = Column(DateTime, nullable=False, default=utc_now)
     supplier = relationship("Party", lazy="joined")
     warehouse = relationship("Warehouse", lazy="joined")
@@ -110,7 +112,10 @@ class PurchaseOrderLine(Base):
 
 class GoodsReceipt(Base):
     __tablename__ = "goods_receipts"
-    __table_args__ = (UniqueConstraint("company_id", "number", name="uq_grn_company_number"),)
+    __table_args__ = (
+        UniqueConstraint("company_id", "number", name="uq_grn_company_number"),
+        UniqueConstraint("purchase_invoice_id", name="uq_grn_purchase_invoice"),
+    )
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
     number = Column(String(40), nullable=False, index=True)
@@ -120,11 +125,13 @@ class GoodsReceipt(Base):
     status = Column(String(20), nullable=False, default="POSTED")
     total_cost = Column(Numeric(18, 2), nullable=False, default=0)
     journal_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=False)
+    purchase_invoice_id = Column(Integer, ForeignKey("purchase_invoices.id"), index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=utc_now)
     purchase_order = relationship("PurchaseOrder", lazy="joined")
     warehouse = relationship("Warehouse", lazy="joined")
     journal = relationship("JournalEntry")
+    purchase_invoice = relationship("PurchaseInvoice", foreign_keys=[purchase_invoice_id])
     lines = relationship("GoodsReceiptLine", back_populates="goods_receipt", cascade="all, delete-orphan", lazy="selectin")
 
 class GoodsReceiptLine(Base):
@@ -141,6 +148,138 @@ class GoodsReceiptLine(Base):
     item = relationship("Item", lazy="joined")
 
 
+# -------------------- Controlled procurement: PR -> RFQ -> quotations -> PO
+
+class PurchaseRequisition(Base):
+    __tablename__ = "purchase_requisitions"
+    __table_args__ = (UniqueConstraint("company_id", "number", name="uq_pr_company_number"),)
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    number = Column(String(40), nullable=False, index=True)
+    request_date = Column(Date, nullable=False, index=True)
+    needed_by = Column(Date, nullable=False)
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
+    department = Column(String(120), nullable=False)
+    justification = Column(String(500), nullable=False)
+    status = Column(String(25), nullable=False, default="DRAFT", index=True)
+    estimated_total = Column(Numeric(18, 2), nullable=False, default=0)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    submitted_at = Column(DateTime)
+    approved_by = Column(Integer, ForeignKey("users.id"))
+    approved_at = Column(DateTime)
+    rejected_by = Column(Integer, ForeignKey("users.id"))
+    rejected_at = Column(DateTime)
+    rejection_reason = Column(String(500))
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    warehouse = relationship("Warehouse", lazy="joined")
+    lines = relationship("PurchaseRequisitionLine", back_populates="requisition", cascade="all, delete-orphan", lazy="selectin")
+
+
+class PurchaseRequisitionLine(Base):
+    __tablename__ = "purchase_requisition_lines"
+    id = Column(Integer, primary_key=True)
+    requisition_id = Column(Integer, ForeignKey("purchase_requisitions.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    estimated_unit_price = Column(Numeric(18, 4), nullable=False, default=0)
+    specifications = Column(String(500))
+    requisition = relationship("PurchaseRequisition", back_populates="lines")
+    item = relationship("Item", lazy="joined")
+
+
+class RequestForQuotation(Base):
+    __tablename__ = "requests_for_quotation"
+    __table_args__ = (
+        UniqueConstraint("company_id", "number", name="uq_rfq_company_number"),
+        UniqueConstraint("requisition_id", name="uq_rfq_requisition"),
+    )
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    number = Column(String(40), nullable=False, index=True)
+    requisition_id = Column(Integer, ForeignKey("purchase_requisitions.id"), nullable=False, index=True)
+    issue_date = Column(Date, nullable=False)
+    closing_date = Column(Date, nullable=False)
+    status = Column(String(25), nullable=False, default="DRAFT", index=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    issued_at = Column(DateTime)
+    awarded_quotation_id = Column(Integer, ForeignKey("supplier_quotations.id"))
+    award_reason = Column(String(500))
+    awarded_by = Column(Integer, ForeignKey("users.id"))
+    awarded_at = Column(DateTime)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    requisition = relationship("PurchaseRequisition", lazy="joined")
+    suppliers = relationship("RFQSupplier", back_populates="rfq", cascade="all, delete-orphan", lazy="selectin")
+    lines = relationship("RFQLine", back_populates="rfq", cascade="all, delete-orphan", lazy="selectin")
+    quotations = relationship("SupplierQuotation", back_populates="rfq", foreign_keys="SupplierQuotation.rfq_id", lazy="selectin")
+
+
+class RFQSupplier(Base):
+    __tablename__ = "rfq_suppliers"
+    __table_args__ = (UniqueConstraint("rfq_id", "supplier_id", name="uq_rfq_supplier"),)
+    id = Column(Integer, primary_key=True)
+    rfq_id = Column(Integer, ForeignKey("requests_for_quotation.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_id = Column(Integer, ForeignKey("parties.id"), nullable=False)
+    rfq = relationship("RequestForQuotation", back_populates="suppliers")
+    supplier = relationship("Party", lazy="joined")
+
+
+class RFQLine(Base):
+    __tablename__ = "rfq_lines"
+    __table_args__ = (UniqueConstraint("rfq_id", "requisition_line_id", name="uq_rfq_requisition_line"),)
+    id = Column(Integer, primary_key=True)
+    rfq_id = Column(Integer, ForeignKey("requests_for_quotation.id", ondelete="CASCADE"), nullable=False, index=True)
+    requisition_line_id = Column(Integer, ForeignKey("purchase_requisition_lines.id"), nullable=False)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False)
+    quantity = Column(Numeric(18, 4), nullable=False)
+    specifications = Column(String(500))
+    rfq = relationship("RequestForQuotation", back_populates="lines")
+    item = relationship("Item", lazy="joined")
+
+
+class SupplierQuotation(Base):
+    __tablename__ = "supplier_quotations"
+    __table_args__ = (
+        UniqueConstraint("company_id", "number", name="uq_supplier_quote_company_number"),
+        UniqueConstraint("rfq_id", "supplier_id", name="uq_supplier_quote_rfq_supplier"),
+    )
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    number = Column(String(40), nullable=False, index=True)
+    rfq_id = Column(Integer, ForeignKey("requests_for_quotation.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_id = Column(Integer, ForeignKey("parties.id"), nullable=False)
+    supplier_reference = Column(String(100), nullable=False)
+    quote_date = Column(Date, nullable=False)
+    valid_until = Column(Date, nullable=False)
+    lead_time_days = Column(Integer, nullable=False, default=0)
+    payment_terms = Column(String(250))
+    status = Column(String(25), nullable=False, default="SUBMITTED", index=True)
+    subtotal = Column(Numeric(18, 2), nullable=False, default=0)
+    vat_amount = Column(Numeric(18, 2), nullable=False, default=0)
+    total = Column(Numeric(18, 2), nullable=False, default=0)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    rfq = relationship("RequestForQuotation", back_populates="quotations", foreign_keys=[rfq_id])
+    supplier = relationship("Party", lazy="joined")
+    lines = relationship("SupplierQuotationLine", back_populates="quotation", cascade="all, delete-orphan", lazy="selectin")
+
+
+class SupplierQuotationLine(Base):
+    __tablename__ = "supplier_quotation_lines"
+    __table_args__ = (UniqueConstraint("quotation_id", "rfq_line_id", name="uq_supplier_quote_rfq_line"),)
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey("supplier_quotations.id", ondelete="CASCADE"), nullable=False, index=True)
+    rfq_line_id = Column(Integer, ForeignKey("rfq_lines.id"), nullable=False)
+    unit_price = Column(Numeric(18, 4), nullable=False)
+    vat_rate = Column(Numeric(8, 4), nullable=False, default=15)
+    line_subtotal = Column(Numeric(18, 2), nullable=False)
+    vat_amount = Column(Numeric(18, 2), nullable=False)
+    line_total = Column(Numeric(18, 2), nullable=False)
+    quotation = relationship("SupplierQuotation", back_populates="lines")
+    rfq_line = relationship("RFQLine", lazy="joined")
+
+
 # -------------------- IFRS 15 / gym contracts --------------------
 
-__all__ = ['Warehouse', 'Item', 'StockMovement', 'PurchaseOrder', 'PurchaseOrderLine', 'GoodsReceipt', 'GoodsReceiptLine']
+__all__ = ['Warehouse', 'Item', 'StockMovement', 'PurchaseOrder', 'PurchaseOrderLine', 'GoodsReceipt', 'GoodsReceiptLine',
+           'PurchaseRequisition', 'PurchaseRequisitionLine', 'RequestForQuotation', 'RFQSupplier', 'RFQLine',
+           'SupplierQuotation', 'SupplierQuotationLine']

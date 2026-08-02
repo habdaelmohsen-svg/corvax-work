@@ -7,7 +7,7 @@ import type { ComponentType } from 'react';
 export type Lang = 'ar' | 'en';
 export type CompanyScope = 'holding' | 'gym' | 'restaurant' | 'manufacturing';
 export type View =
-  | 'executive' | 'core' | 'finance' | 'aging' | 'returns' | 'salesReturns' | 'purchaseReturns' | 'openingBalances' | 'withholdingTax' | 'exciseTax' | 'zakatIncomeTax' | 'budget' | 'transactions' | 'inventory' | 'inventoryTraceability' | 'operationalControls'
+  | 'executive' | 'core' | 'finance' | 'aging' | 'returns' | 'salesReturns' | 'purchaseReturns' | 'openingBalances' | 'vatReturn' | 'withholdingTax' | 'exciseTax' | 'zakatIncomeTax' | 'budget' | 'transactions' | 'inventory' | 'inventoryTraceability' | 'operationalControls'
   | 'sales' | 'purchases' | 'maintenance' | 'fleet' | 'legal' | 'users' | 'items' | 'dataReset' | 'chartOfAccounts' | 'manualJournals' | 'cipProjects' | 'reports' | 'crm' | 'treasury' | 'leases' | 'assets' | 'prepaids' | 'accruals'
   | 'gym' | 'restaurant' | 'manufacturing' | 'quality' | 'foodSafety' | 'hr'
   | 'workbench' | 'finalCompletion' | 'close' | 'assurance' | 'compliance' | 'security' | 'accessGovernance' | 'fx' | 'audit' | 'it';

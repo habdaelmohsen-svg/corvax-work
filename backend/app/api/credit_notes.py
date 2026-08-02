@@ -282,6 +282,8 @@ def eligible_invoices(company_id: int, note_type: str = Query(pattern="^(SALES|P
                 "remaining_quantity": remaining, "unit_price": line.unit_price,
                 "vat_rate": line.vat_rate, "tax_code": line.tax_code.code if line.tax_code else None,
                 "subtotal": line.subtotal, "vat_amount": line.vat_amount, "total": line.total,
+                "item_id": line.item_id, "warehouse_id": line.warehouse_id,
+                "inventory_capable": bool(line.item_id and line.warehouse_id),
             })
         if lines:
             rows.append({

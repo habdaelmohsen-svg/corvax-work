@@ -17,7 +17,7 @@ from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user
 from app.models import (
     Company, EInvoice, LegalRuleVersion, PosOrder, PosOrderLine, PurchaseInvoice, SalesInvoice,
-    SalesInvoiceLine, TaxCode, User, VatReturnSnapshot,
+    SalesInvoiceLine, TaxCode, User, VatReturnLine, VatReturnSnapshot,
 )
 from app.services.audit import write_audit
 from app.services.operations import money
@@ -39,6 +39,29 @@ class VatReturnIn(BaseModel):
     period_end: date
 
 
+class VatTaxpayerProfileIn(BaseModel):
+    legal_name_ar: str | None = Field(default=None, max_length=250)
+    legal_name_en: str | None = Field(default=None, max_length=250)
+    vat_number: str | None = Field(default=None, max_length=30)
+    commercial_registration: str | None = Field(default=None, max_length=30)
+    zatca_distinguished_number: str | None = Field(default=None, max_length=50)
+    tax_account_number: str | None = Field(default=None, max_length=50)
+    taxpayer_identity_number: str | None = Field(default=None, max_length=50)
+    registered_address: str | None = Field(default=None, max_length=1000)
+
+
+class VatLineAdjustmentIn(BaseModel):
+    box_code: str = Field(min_length=1, max_length=50)
+    adjustment_base: Decimal
+
+
+class VatAdjustmentsIn(BaseModel):
+    lines: list[VatLineAdjustmentIn] = Field(default_factory=list)
+    prior_period_correction: Decimal = Decimal("0")
+    carried_forward_vat: Decimal = Field(default=Decimal("0"), ge=0)
+    adjustment_reason: str | None = Field(default=None, max_length=1000)
+
+
 class TaxCodeIn(BaseModel):
     company_id: int
     code: str = Field(min_length=1, max_length=30)
@@ -58,6 +81,65 @@ class TaxCodeIn(BaseModel):
 
 class TaxCodeStatusIn(BaseModel):
     active: bool
+
+
+def _taxpayer_profile(company: Company) -> dict:
+    return {
+        "company_id": company.id,
+        "legal_name_ar": company.legal_name_ar or company.name_ar,
+        "legal_name_en": company.legal_name_en or company.name_en,
+        "vat_number": company.vat_number,
+        "commercial_registration": company.commercial_registration,
+        "zatca_distinguished_number": company.zatca_distinguished_number,
+        "tax_account_number": company.tax_account_number,
+        "taxpayer_identity_number": company.taxpayer_identity_number,
+        "registered_address": company.registered_address,
+    }
+
+
+def _recalculate_adjusted_vat(row: VatReturnSnapshot) -> None:
+    output_boxes = {"SALES_STANDARD", "PURCHASE_REVERSE_CHARGE", "PURCHASE_IMPORTS_THROUGH_RETURN"}
+    input_boxes = {"PURCHASE_STANDARD", "PURCHASE_IMPORTS_CUSTOMS", "PURCHASE_REVERSE_CHARGE", "PURCHASE_IMPORTS_THROUGH_RETURN"}
+    reported = {
+        line.box_code: money(Decimal(line.tax_amount) - Decimal(line.adjustment_tax))
+        for line in row.lines
+    }
+    row.output_vat = money(sum((reported.get(code, Decimal("0")) for code in output_boxes), Decimal("0")))
+    row.input_vat = money(sum((reported.get(code, Decimal("0")) for code in input_boxes), Decimal("0")))
+    row.net_vat_payable = money(
+        Decimal(row.output_vat) - Decimal(row.input_vat)
+        + Decimal(row.prior_period_correction or 0)
+        - Decimal(row.carried_forward_vat or 0)
+    )
+
+
+@router.get("/vat-taxpayer-profile")
+def read_vat_taxpayer_profile(company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "compliance.read")
+    company = db.get(Company, company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    return _taxpayer_profile(company)
+
+
+@router.put("/vat-taxpayer-profile")
+def update_vat_taxpayer_profile(company_id: int, data: VatTaxpayerProfileIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "compliance.manage")
+    company = db.get(Company, company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    before = _taxpayer_profile(company)
+    for field_name, value in data.model_dump().items():
+        setattr(company, field_name, value.strip() if isinstance(value, str) and value.strip() else None)
+    after = _taxpayer_profile(company)
+    write_audit(
+        db, action="VAT_TAXPAYER_PROFILE_UPDATED", entity_type="COMPANY",
+        entity_id=company.id, user_id=user.id, company_id=company_id,
+        before={key: bool(value) for key, value in before.items() if key != "company_id"},
+        after={key: bool(value) for key, value in after.items() if key != "company_id"},
+    )
+    db.commit()
+    return after
 
 
 
@@ -252,6 +334,65 @@ def read_vat_return(vat_return_id: int, user: User = Depends(get_current_user), 
     if not row:
         raise HTTPException(404, "VAT return not found")
     ensure_permission(db, user, row.company_id, "compliance.read")
+    return serialize_vat_return(row)
+
+
+@router.put("/vat-returns/{vat_return_id}/adjustments")
+def update_vat_adjustments(vat_return_id: int, data: VatAdjustmentsIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = db.scalar(
+        select(VatReturnSnapshot)
+        .where(VatReturnSnapshot.id == vat_return_id)
+        .options(selectinload(VatReturnSnapshot.lines))
+    )
+    if not row:
+        raise HTTPException(404, "VAT return not found")
+    ensure_permission(db, user, row.company_id, "compliance.manage")
+    if row.status != "DRAFT":
+        raise HTTPException(409, "Only a draft VAT return can be adjusted")
+    by_code = {line.box_code: line for line in row.lines}
+    seen: set[str] = set()
+    for adjustment in data.lines:
+        code = adjustment.box_code.upper()
+        if code in seen:
+            raise HTTPException(422, f"Duplicate VAT box adjustment: {code}")
+        seen.add(code)
+        line = by_code.get(code)
+        if not line:
+            raise HTTPException(422, f"Unknown VAT box: {code}")
+        line.adjustment_base = money(adjustment.adjustment_base)
+        line.adjustment_tax = money(
+            Decimal(line.adjustment_base) * Decimal("0.15")
+            if code in {
+                "SALES_STANDARD", "PURCHASE_STANDARD", "PURCHASE_IMPORTS_CUSTOMS",
+                "PURCHASE_REVERSE_CHARGE", "PURCHASE_IMPORTS_THROUGH_RETURN",
+            }
+            else Decimal("0")
+        )
+    for code, line in by_code.items():
+        if code not in seen:
+            line.adjustment_base = Decimal("0.00")
+            line.adjustment_tax = Decimal("0.00")
+    has_changes = any(Decimal(line.adjustment_base) != 0 for line in row.lines)
+    has_changes = has_changes or data.prior_period_correction != 0 or data.carried_forward_vat != 0
+    if has_changes and not (data.adjustment_reason or "").strip():
+        raise HTTPException(422, "Adjustment reason is required when VAT adjustments are entered")
+    row.prior_period_correction = money(data.prior_period_correction)
+    row.carried_forward_vat = money(data.carried_forward_vat)
+    row.adjustment_reason = (data.adjustment_reason or "").strip() or None
+    row.adjustments_updated_by = user.id
+    row.adjustments_updated_at = utc_now()
+    _recalculate_adjusted_vat(row)
+    write_audit(
+        db, action="VAT_RETURN_ADJUSTMENTS_UPDATED", entity_type="VAT_RETURN",
+        entity_id=row.id, user_id=user.id, company_id=row.company_id,
+        after={
+            "adjusted_boxes": sorted(seen),
+            "prior_period_correction": str(row.prior_period_correction),
+            "carried_forward_vat": str(row.carried_forward_vat),
+            "net_vat": str(row.net_vat_payable),
+        },
+    )
+    db.commit()
     return serialize_vat_return(row)
 
 

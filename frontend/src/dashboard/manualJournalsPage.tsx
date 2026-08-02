@@ -46,6 +46,7 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
   const [message,setMessage]=useState(''); const [busy,setBusy]=useState(false);
   // header
   const [entryDate,setEntryDate]=useState(iso());
+  const [reversalDate,setReversalDate]=useState(iso());
   const [reference,setReference]=useState('');
   const [description,setDescription]=useState('');
   const [cfActivity,setCfActivity]=useState('');
@@ -124,7 +125,8 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
   const workflow=async(id:number,action:'submit'|'approve'|'post'|'reverse')=>{
     setBusy(true);setMessage('');
     try{
-      const r=await json(`/api/v1/finance/journals/${id}/${action}`,{method:'POST'});
+      const suffix=action==='reverse'?`?reversal_date=${encodeURIComponent(reversalDate)}`:'';
+      const r=await json(`/api/v1/finance/journals/${id}/${action}${suffix}`,{method:'POST'});
       const labels:any={submit:ar?'تم التقديم':'Submitted',approve:ar?'تم الاعتماد':'Approved',post:ar?'تم الترحيل':'Posted',reverse:ar?'تم العكس':'Reversed'};
       setMessage(`${labels[action]} — ${r.number||id}`);await load();
     }catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
@@ -232,6 +234,9 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
     </Panel>
 
     <Panel title={ar?'دورة القيود (تقديم ← اعتماد ← ترحيل)':'Journal workflow (submit → approve → post)'} icon={<Send size={18}/>}>
+      <div style={{padding:'0 12px 10px',maxWidth:280}}>
+        <label style={{fontSize:12}}>{ar?'تاريخ عكس القيد':'Reversal date'}<input type="date" style={field} value={reversalDate} onChange={e=>setReversalDate(e.target.value)}/></label>
+      </div>
       <div style={{overflowX:'auto',padding:'0 4px 12px'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr>

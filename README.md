@@ -1,12 +1,12 @@
-# CORVAX v1.0 Agreement Completion RC27.4
+# CORVAX v1.0 Agreement Completion RC27.4 R5
 
 هذه الحزمة هي خط الأساس المصحح بعد RC27.
 
 ## بيانات الإصدار المعتمدة
 
-- Version: `1.0.0-agreement-completion-rc27.4`
-- Migration head: `e19800000001`
-- Frontend production build: `1,808` modules — PASSED
+- Version: `1.0.0-agreement-completion-rc27.4-r5`
+- Migration head: `e20300000001`
+- Frontend production build: `2,039` modules — PASSED
 - Backend compilation: PASSED
 - Security, branch scope, health, RC20, RC21 and RC25 verification: PASSED in the RC27.2 execution round
 - Migration head, readiness and release info are now derived from Alembic at runtime, not hard-coded
@@ -17,7 +17,7 @@
 
 The internal software scope is complete for controlled staging, pilot and UAT. Production approval remains evidence-driven and cannot be asserted from code alone. It requires a real PostgreSQL staging/production environment, sanitized or approved real data, signed UAT, parallel operation, independent penetration/accounting/tax reviews and official credentials for ZATCA, banks, WPS/Mudad, Qiwa, Muqeem and GOSI.
 
-Apply migrations through `e19800000001`; use `backend/.env.production.template`; do not enable demo seeding, Demo-data reset, or automatic schema creation in production.
+Apply migrations through `e20300000001`; use `backend/.env.production.template`; do not enable demo seeding, Demo-data reset, or automatic schema creation in production.
 
 ## Comprehensive Reporting Center
 

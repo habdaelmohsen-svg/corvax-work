@@ -490,6 +490,8 @@ def approve_purchase_order(po_id:int,user:User=Depends(get_current_user),db:Sess
     if not po:raise HTTPException(404,"Purchase order not found")
     ensure_permission(db,user,po.company_id,"procurement.approve")
     if po.status!="DRAFT":raise HTTPException(409,"Only draft purchase orders can be approved")
+    if po.created_by==user.id:
+        raise HTTPException(409,"Maker-checker control: purchase-order creator cannot approve it")
     po.status="APPROVED";po.approved_by=user.id
     # Commit the net value against an approved budget line when the dimension exists.
     period = db.scalar(select(FiscalPeriod).join(FiscalYear).where(FiscalYear.company_id==po.company_id,FiscalPeriod.start_date<=po.order_date,FiscalPeriod.end_date>=po.order_date))
@@ -538,15 +540,42 @@ def invoice_goods_receipt(grn_id:int,data:SupplierInvoiceIn,user:User=Depends(ge
     if not grn:raise HTTPException(404,"Goods receipt not found")
     po=grn.purchase_order
     ensure_permission(db,user,grn.company_id,"procurement.invoice")
+    if grn.purchase_invoice_id:
+        raise HTTPException(409,"Goods receipt is already linked to a supplier invoice")
+    if data.due_date < data.invoice_date:
+        raise HTTPException(422,"Invoice due date cannot precede the invoice date")
+    duplicate_supplier_number=db.scalar(select(PurchaseInvoice.id).where(
+        PurchaseInvoice.company_id==grn.company_id,
+        PurchaseInvoice.supplier_id==po.supplier_id,
+        PurchaseInvoice.supplier_invoice_number==data.supplier_invoice_number,
+    ))
+    if duplicate_supplier_number:
+        raise HTTPException(409,"Supplier invoice number already exists for this supplier")
     ensure_open_period(db,grn.company_id,data.invoice_date)
     grni=get_account(db,grn.company_id,"214010");input_vat=get_account(db,grn.company_id,"114010");ap=get_account(db,grn.company_id,"211010")
     subtotal=money(grn.total_cost)
     vat=money(sum((line.quantity*next(p.vat_rate for p in po.lines if p.id==line.purchase_order_line_id)*line.unit_cost/Decimal("100") for line in grn.lines),Decimal("0")))
     total=money(subtotal+vat)
     invoice=PurchaseInvoice(company_id=grn.company_id,number=_doc_number(db,PurchaseInvoice,grn.company_id,"PI",data.invoice_date.year),invoice_date=data.invoice_date,due_date=data.due_date,supplier_id=po.supplier_id,supplier_invoice_number=data.supplier_invoice_number,status="POSTED",subtotal=subtotal,vat_amount=vat,total=total,created_by=user.id)
-    invoice.lines.append(PurchaseInvoiceLine(description=f"Matched to {grn.number}",expense_account_id=grni.id,quantity=1,unit_price=subtotal,vat_rate=vat/subtotal*100 if subtotal else 0,subtotal=subtotal,vat_amount=vat,total=total))
+    for grn_line in grn.lines:
+        po_line=next(line for line in po.lines if line.id==grn_line.purchase_order_line_id)
+        line_subtotal=money(grn_line.quantity*grn_line.unit_cost)
+        line_vat=money(line_subtotal*po_line.vat_rate/Decimal("100"))
+        invoice.lines.append(PurchaseInvoiceLine(
+            description=f"{grn.number} · {grn_line.item.name_en}",
+            expense_account_id=grni.id,
+            quantity=grn_line.quantity,
+            unit_price=grn_line.unit_cost,
+            vat_rate=po_line.vat_rate,
+            subtotal=line_subtotal,
+            vat_amount=line_vat,
+            total=money(line_subtotal+line_vat),
+            item_id=grn_line.item_id,
+            warehouse_id=grn.warehouse_id,
+            goods_receipt_line_id=grn_line.id,
+        ))
     journal=create_posted_journal(db,company_id=grn.company_id,user_id=user.id,posting_date=data.invoice_date,reference=invoice.number,description=f"Supplier invoice matched to {grn.number}",lines=[{"account_id":grni.id,"debit":subtotal,"credit":0},{"account_id":input_vat.id,"debit":vat,"credit":0},{"account_id":ap.id,"debit":0,"credit":total}])
-    invoice.journal_id=journal.id;db.add(invoice);db.flush();ensure_purchase_invoice_open_item(db,invoice)
+    invoice.journal_id=journal.id;db.add(invoice);db.flush();grn.purchase_invoice_id=invoice.id;ensure_purchase_invoice_open_item(db,invoice)
     for grn_line in grn.lines:
         po_line=next(line for line in po.lines if line.id==grn_line.purchase_order_line_id);po_line.invoiced_quantity=quantity(po_line.invoiced_quantity+grn_line.quantity)
     po.status="INVOICED" if all(quantity(line.invoiced_quantity)>=quantity(line.received_quantity) for line in po.lines) else po.status
@@ -593,4 +622,28 @@ def stock_summary(company_id:int,user:User=Depends(get_current_user),db:Session=
 def list_purchase_orders(company_id:int,user:User=Depends(get_current_user),db:Session=Depends(get_db)):
     ensure_permission(db,user,company_id,"inventory.read")
     rows=db.scalars(select(PurchaseOrder).where(PurchaseOrder.company_id==company_id).options(selectinload(PurchaseOrder.lines)).order_by(PurchaseOrder.id.desc())).all()
-    return [{"id":r.id,"number":r.number,"order_date":r.order_date,"supplier":r.supplier.name_en,"warehouse":r.warehouse.name_en,"status":r.status,"subtotal":r.subtotal,"vat_amount":r.vat_amount,"total":r.total,"received_percent":money(sum((line.received_quantity for line in r.lines),Decimal("0"))/sum((line.quantity for line in r.lines),Decimal("1"))*100),"lines":[{"id":line.id,"item_id":line.item_id,"quantity":line.quantity,"received_quantity":line.received_quantity,"invoiced_quantity":line.invoiced_quantity} for line in r.lines]} for r in rows]
+    return [{"id":r.id,"number":r.number,"order_date":r.order_date,"supplier":r.supplier.name_en,"warehouse":r.warehouse.name_en,"status":r.status,
+        "source_requisition_id":r.source_requisition_id,"source_quotation_id":r.source_quotation_id,
+        "subtotal":r.subtotal,"vat_amount":r.vat_amount,"total":r.total,"received_percent":money(sum((line.received_quantity for line in r.lines),Decimal("0"))/sum((line.quantity for line in r.lines),Decimal("1"))*100),"lines":[{"id":line.id,"item_id":line.item_id,"quantity":line.quantity,"received_quantity":line.received_quantity,"invoiced_quantity":line.invoiced_quantity} for line in r.lines]} for r in rows]
+
+
+@router.get("/goods-receipts")
+def list_goods_receipts(company_id:int,user:User=Depends(get_current_user),db:Session=Depends(get_db)):
+    ensure_permission(db,user,company_id,"inventory.read")
+    rows=db.scalars(
+        select(GoodsReceipt)
+        .where(GoodsReceipt.company_id==company_id)
+        .options(selectinload(GoodsReceipt.lines))
+        .order_by(GoodsReceipt.receipt_date.desc(),GoodsReceipt.id.desc())
+    ).all()
+    return [{
+        "id":r.id,"number":r.number,"receipt_date":r.receipt_date,
+        "purchase_order_number":r.purchase_order.number,
+        "warehouse":r.warehouse.name_en,"status":r.status,
+        "total_cost":r.total_cost,"purchase_invoice_id":r.purchase_invoice_id,
+        "lines":[{
+            "id":line.id,"item_id":line.item_id,"item_code":line.item.code,
+            "quantity":line.quantity,"unit_cost":line.unit_cost,
+            "lot_number":line.lot_number,"expiry_date":line.expiry_date,
+        } for line in r.lines],
+    } for r in rows]

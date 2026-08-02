@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.core.time import utc_now
 from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user, branch_scope_condition
-from app.models import Account, BankAccount, Party, User
+from app.models import Account, BankAccount, Branch, CostCenter, Party, User
 from app.models.assets_close import AssetCategory, FixedAsset
 from app.models.cip_projects import (
     CipContract, CipCost, CipPayment, CipProgressCertificate, CipProject,
@@ -121,21 +121,38 @@ def _next_number(db: Session, model, company_id: int, prefix: str, year: int) ->
 class ProjectIn(BaseModel):
     company_id: int
     code: str = Field(min_length=1, max_length=40)
-    name_ar: str
-    name_en: str
+    name_ar: str = Field(min_length=1, max_length=250)
+    name_en: str | None = Field(default=None, max_length=250)
     description: str | None = None
-    budget_amount: float = 0
+    budget_amount: float = Field(default=0, ge=0)
     start_date: date | None = None
     expected_completion_date: date | None = None
+    branch_id: int | None = None
+    cost_center_id: int | None = None
 
 
 @router.post("/projects", status_code=201)
 def create_project(data: ProjectIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ensure_permission(db, user, data.company_id, "cip.manage")
-    dup = db.scalar(select(CipProject).where(CipProject.company_id == data.company_id, CipProject.code == data.code))
+    code = data.code.strip().upper()
+    dup = db.scalar(select(CipProject).where(CipProject.company_id == data.company_id, CipProject.code == code))
     if dup:
         raise HTTPException(409, "Project code already exists")
-    p = CipProject(**data.model_dump(), status="PLANNING", created_by=user.id)
+    if data.expected_completion_date and data.start_date and data.expected_completion_date < data.start_date:
+        raise HTTPException(422, "Expected completion date cannot precede project start date")
+    if data.branch_id and not db.scalar(select(Branch.id).where(
+        Branch.id == data.branch_id, Branch.company_id == data.company_id, Branch.active.is_(True),
+    )):
+        raise HTTPException(422, "Branch does not belong to this company or is inactive")
+    if data.cost_center_id and not db.scalar(select(CostCenter.id).where(
+        CostCenter.id == data.cost_center_id, CostCenter.company_id == data.company_id, CostCenter.active.is_(True),
+    )):
+        raise HTTPException(422, "Cost center does not belong to this company or is inactive")
+    payload = data.model_dump()
+    payload["code"] = code
+    payload["name_ar"] = data.name_ar.strip()
+    payload["name_en"] = (data.name_en or data.name_ar).strip()
+    p = CipProject(**payload, status="PLANNING", created_by=user.id)
     db.add(p); db.flush()
     write_audit(db, action="CIP_PROJECT_CREATED", entity_type="CIP_PROJECT", entity_id=p.id, user_id=user.id, company_id=data.company_id, after={"code": p.code})
     db.commit()
@@ -158,6 +175,8 @@ def list_projects(company_id: int, user: User = Depends(get_current_user), db: S
                     "budget_amount": p.budget_amount, "capitalized_cost": p.capitalized_cost,
                     "expensed_cost": p.expensed_cost, "committed_contracts": _money(committed),
                     "start_date": p.start_date.isoformat() if p.start_date else None,
+                    "expected_completion_date": p.expected_completion_date.isoformat() if p.expected_completion_date else None,
+                    "branch_id": p.branch_id, "cost_center_id": p.cost_center_id,
                     "ready_for_use_date": p.ready_for_use_date.isoformat() if p.ready_for_use_date else None,
                     "status": p.status, "fixed_asset_id": p.fixed_asset_id})
     return out
@@ -191,6 +210,8 @@ def create_contract(data: ContractIn, user: User = Depends(get_current_user), db
     project = db.scalar(select(CipProject).where(CipProject.id == data.project_id, CipProject.company_id == data.company_id))
     if not project:
         raise HTTPException(404, "Project not found")
+    if project.status not in {"PLANNING", "IN_PROGRESS"}:
+        raise HTTPException(409, f"Project status {project.status} does not allow new contracts")
     party = db.scalar(select(Party).where(Party.id == data.party_id, Party.company_id == data.company_id))
     if not party:
         raise HTTPException(404, "Party (contractor/supplier) not found")
@@ -255,6 +276,9 @@ def create_certificate(data: CertificateIn, user: User = Depends(get_current_use
         raise HTTPException(404, "Contract not found")
     if contract.status != "ACTIVE":
         raise HTTPException(409, "Contract is not active")
+    project = db.get(CipProject, contract.project_id)
+    if not project or project.status not in {"PLANNING", "IN_PROGRESS"}:
+        raise HTTPException(409, "Project is not open for new progress certificates")
     certified = db.scalar(select(func.coalesce(func.sum(CipProgressCertificate.work_value), 0)).where(
         CipProgressCertificate.contract_id == contract.id, CipProgressCertificate.status.in_(("DRAFT", "APPROVED", "PAID")))) or 0
     remaining = Decimal(str(contract.contract_value)) - Decimal(str(certified))
@@ -276,6 +300,24 @@ def create_certificate(data: CertificateIn, user: User = Depends(get_current_use
             "retention_amount": cert.retention_amount, "net_payable": cert.net_payable, "status": cert.status}
 
 
+@router.get("/certificates")
+def list_certificates(company_id: int, contract_id: int | None = Query(default=None), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "cip.read")
+    query = select(CipProgressCertificate).where(CipProgressCertificate.company_id == company_id)
+    if contract_id:
+        query = query.where(CipProgressCertificate.contract_id == contract_id)
+    rows = db.scalars(query.order_by(CipProgressCertificate.certificate_date.desc(), CipProgressCertificate.id.desc())).all()
+    return [{
+        "id": row.id, "number": row.number, "contract_id": row.contract_id,
+        "contract_number": row.contract.number if row.contract else None,
+        "certificate_date": row.certificate_date.isoformat(), "work_value": row.work_value,
+        "vat_amount": row.vat_amount, "retention_amount": row.retention_amount,
+        "net_payable": row.net_payable, "paid_amount": row.paid_amount,
+        "supplier_invoice_number": row.supplier_invoice_number, "status": row.status,
+        "created_by": row.created_by, "approved_by": row.approved_by,
+    } for row in rows]
+
+
 @router.post("/certificates/{cert_id}/approve")
 def approve_certificate(cert_id: int, company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Approving posts the obligation - this is where CIP and VAT are recognised."""
@@ -289,18 +331,21 @@ def approve_certificate(cert_id: int, company_id: int, user: User = Depends(get_
         raise HTTPException(403, "Approver must be different from the preparer")
     contract = db.get(CipContract, cert.contract_id)
     project = db.get(CipProject, contract.project_id)
+    if not project or project.status not in {"PLANNING", "IN_PROGRESS"}:
+        raise HTTPException(409, "Project is not open for certificate approval")
 
     cip = _ensure_account(db, company_id, CIP_CODE)
     payable = _ensure_account(db, company_id, CONTRACTORS_PAYABLE)
-    lines = [{"account_id": cip.id, "debit": cert.work_value, "credit": 0, "description": f"CIP {project.code} - {contract.number}"}]
+    dimensions = {"branch_id": project.branch_id, "cost_center_id": project.cost_center_id}
+    lines = [{"account_id": cip.id, "debit": cert.work_value, "credit": 0, "description": f"CIP {project.code} - {contract.number}", **dimensions}]
     if Decimal(str(cert.vat_amount)) > 0:
         vat_acc = _account(db, company_id, VAT_INPUT)
-        lines.append({"account_id": vat_acc.id, "debit": cert.vat_amount, "credit": 0, "description": "VAT input"})
+        lines.append({"account_id": vat_acc.id, "debit": cert.vat_amount, "credit": 0, "description": "VAT input", **dimensions})
     payable_amount = _money(Decimal(str(cert.work_value)) + Decimal(str(cert.vat_amount)) - Decimal(str(cert.retention_amount)))
-    lines.append({"account_id": payable.id, "debit": 0, "credit": payable_amount, "description": f"Payable {contract.number}"})
+    lines.append({"account_id": payable.id, "debit": 0, "credit": payable_amount, "description": f"Payable {contract.number}", **dimensions})
     if Decimal(str(cert.retention_amount)) > 0:
         ret = _ensure_account(db, company_id, RETENTION_PAYABLE)
-        lines.append({"account_id": ret.id, "debit": 0, "credit": cert.retention_amount, "description": "Retention held"})
+        lines.append({"account_id": ret.id, "debit": 0, "credit": cert.retention_amount, "description": "Retention held", **dimensions})
 
     journal = create_posted_journal(
         db, company_id=company_id, user_id=user.id, posting_date=cert.certificate_date,
@@ -353,6 +398,10 @@ def create_cost(data: CostIn, user: User = Depends(get_current_user), db: Sessio
     project = db.scalar(select(CipProject).where(CipProject.id == data.project_id, CipProject.company_id == data.company_id))
     if not project:
         raise HTTPException(404, "Project not found")
+    if project.status not in {"PLANNING", "IN_PROGRESS"}:
+        raise HTTPException(409, f"Project status {project.status} does not allow new costs")
+    if data.category not in CAPITALIZABLE and data.category not in NON_CAPITALIZABLE:
+        raise HTTPException(422, "Unknown project cost category")
     treatment = (data.treatment or ("EXPENSE" if data.category in NON_CAPITALIZABLE else "CAPITALIZE")).upper()
     if treatment not in ("CAPITALIZE", "EXPENSE"):
         raise HTTPException(422, "treatment must be CAPITALIZE or EXPENSE")
@@ -377,11 +426,12 @@ def create_cost(data: CostIn, user: User = Depends(get_current_user), db: Sessio
     else:
         code = data.expense_account_code or "613010"
         target = _account(db, data.company_id, code)
-    lines.append({"account_id": target.id, "debit": amount, "credit": 0, "description": data.description_ar[:100]})
+    dimensions = {"branch_id": project.branch_id, "cost_center_id": project.cost_center_id}
+    lines.append({"account_id": target.id, "debit": amount, "credit": 0, "description": data.description_ar[:100], **dimensions})
     if vat > 0:
         vat_acc = _account(db, data.company_id, VAT_INPUT)
-        lines.append({"account_id": vat_acc.id, "debit": vat, "credit": 0, "description": "VAT input"})
-    lines.append({"account_id": payable.id, "debit": 0, "credit": _money(amount + vat), "description": "Project cost payable"})
+        lines.append({"account_id": vat_acc.id, "debit": vat, "credit": 0, "description": "VAT input", **dimensions})
+    lines.append({"account_id": payable.id, "debit": 0, "credit": _money(amount + vat), "description": "Project cost payable", **dimensions})
 
     journal = create_posted_journal(
         db, company_id=data.company_id, user_id=user.id, posting_date=data.cost_date,
@@ -443,18 +493,59 @@ def create_payment(data: PaymentIn, user: User = Depends(get_current_user), db: 
         raise HTTPException(422, "Bank account not found or has no GL account")
     amount = _money(data.amount)
     kind = data.payment_kind.upper()
+    if kind not in {"CERTIFICATE", "RETENTION_RELEASE"}:
+        raise HTTPException(422, "payment_kind must be CERTIFICATE or RETENTION_RELEASE")
+    certificates = db.scalars(select(CipProgressCertificate).where(
+        CipProgressCertificate.contract_id == contract.id,
+        CipProgressCertificate.status.in_(("APPROVED", "PAID")),
+    )).all()
+    payments = db.scalars(select(CipPayment).where(CipPayment.contract_id == contract.id)).all()
+    certificate = None
+    if data.certificate_id:
+        certificate = db.scalar(select(CipProgressCertificate).where(
+            CipProgressCertificate.id == data.certificate_id,
+            CipProgressCertificate.contract_id == contract.id,
+            CipProgressCertificate.company_id == data.company_id,
+            CipProgressCertificate.status.in_(("APPROVED", "PAID")),
+        ))
+        if not certificate:
+            raise HTTPException(422, "Certificate does not belong to this contract or is not approved")
     if kind == "RETENTION_RELEASE":
+        if contract.warranty_end_date and data.payment_date < contract.warranty_end_date:
+            raise HTTPException(422, f"Retention cannot be released before warranty end date {contract.warranty_end_date}")
+        retention_held = sum((Decimal(str(cert.retention_amount)) for cert in certificates), Decimal("0"))
+        retention_released = sum((Decimal(str(payment.amount)) for payment in payments if payment.payment_kind == "RETENTION_RELEASE"), Decimal("0"))
+        available = _money(retention_held - retention_released)
+        if amount > available:
+            raise HTTPException(422, f"Retention release exceeds available balance ({available})")
         src = _ensure_account(db, data.company_id, RETENTION_PAYABLE)
         desc = f"Retention release {contract.number}"
     else:
+        if certificate:
+            already_paid = sum((
+                Decimal(str(payment.amount)) for payment in payments
+                if payment.payment_kind == "CERTIFICATE" and payment.certificate_id == certificate.id
+            ), Decimal("0"))
+            available = _money(Decimal(str(certificate.net_payable)) - already_paid)
+        else:
+            payable_raised = sum((Decimal(str(cert.net_payable)) for cert in certificates), Decimal("0"))
+            already_paid = sum((Decimal(str(payment.amount)) for payment in payments if payment.payment_kind == "CERTIFICATE"), Decimal("0"))
+            available = _money(payable_raised - already_paid)
+        if amount > available:
+            raise HTTPException(422, f"Payment exceeds approved outstanding balance ({available})")
         src = _ensure_account(db, data.company_id, CONTRACTORS_PAYABLE)
         desc = f"Payment {contract.number}"
+    project = db.get(CipProject, contract.project_id)
+    dimensions = {
+        "branch_id": project.branch_id if project else None,
+        "cost_center_id": project.cost_center_id if project else None,
+    }
     journal = create_posted_journal(
         db, company_id=data.company_id, user_id=user.id, posting_date=data.payment_date,
         reference=data.reference or contract.number, description=desc,
         lines=[
-            {"account_id": src.id, "debit": amount, "credit": 0, "description": desc},
-            {"account_id": bank.gl_account_id, "debit": 0, "credit": amount, "description": desc},
+            {"account_id": src.id, "debit": amount, "credit": 0, "description": desc, **dimensions},
+            {"account_id": bank.gl_account_id, "debit": 0, "credit": amount, "description": desc, **dimensions},
         ],
     )
     pay = CipPayment(
@@ -464,9 +555,9 @@ def create_payment(data: PaymentIn, user: User = Depends(get_current_user), db: 
         bank_account_id=bank.id, reference=data.reference, journal_id=journal.id, created_by=user.id,
     )
     db.add(pay); db.flush()
-    if data.certificate_id:
-        cert = db.get(CipProgressCertificate, data.certificate_id)
-        if cert and cert.company_id == data.company_id:
+    if data.certificate_id and kind == "CERTIFICATE":
+        cert = certificate
+        if cert:
             cert.paid_amount = _money(Decimal(str(cert.paid_amount)) + amount)
             if Decimal(str(cert.paid_amount)) >= Decimal(str(cert.net_payable)):
                 cert.status = "PAID"
@@ -558,6 +649,10 @@ def capitalize_project(project_id: int, data: CapitalizeIn, user: User = Depends
         raise HTTPException(404, "Project not found")
     if project.status == "CAPITALIZED":
         raise HTTPException(409, "Project already capitalized")
+    if project.status in {"CANCELLED"}:
+        raise HTTPException(409, "Cancelled project cannot be capitalized")
+    if project.start_date and data.ready_for_use_date < project.start_date:
+        raise HTTPException(422, "Ready-for-use date cannot precede project start date")
     cost = Decimal(str(project.capitalized_cost))
     if cost <= 0:
         raise HTTPException(422, "Project has no capitalized cost to transfer")
@@ -574,8 +669,8 @@ def capitalize_project(project_id: int, data: CapitalizeIn, user: User = Depends
         db, company_id=data.company_id, user_id=user.id, posting_date=data.ready_for_use_date,
         reference=project.code, description=f"Capitalize project {project.code} into fixed asset",
         lines=[
-            {"account_id": ppe.id, "debit": cost, "credit": 0, "description": f"PPE from {project.code}"},
-            {"account_id": cip.id, "debit": 0, "credit": cost, "description": f"CIP cleared {project.code}"},
+            {"account_id": ppe.id, "debit": cost, "credit": 0, "description": f"PPE from {project.code}", "branch_id": project.branch_id, "cost_center_id": project.cost_center_id},
+            {"account_id": cip.id, "debit": 0, "credit": cost, "description": f"CIP cleared {project.code}", "branch_id": project.branch_id, "cost_center_id": project.cost_center_id},
         ],
     )
     count = db.scalar(select(func.count(FixedAsset.id)).where(FixedAsset.company_id == data.company_id)) or 0

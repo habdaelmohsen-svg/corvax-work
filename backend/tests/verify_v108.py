@@ -110,6 +110,8 @@ with TestClient(app) as client:
     assert client.post(f"/api/v1/financial-close/consolidation-worksheets/{worksheet_id}/review", headers=reviewer).status_code == 200
     worksheet_approved = client.post(f"/api/v1/financial-close/consolidation-worksheets/{worksheet_id}/approve", headers=approver)
     assert worksheet_approved.status_code == 200 and worksheet_approved.json()["status"] == "APPROVED_FOR_CONSOLIDATION", worksheet_approved.text
+    worksheet_list = client.get(f"/api/v1/financial-close/consolidation-worksheets?group_id={group_id}", headers=reviewer)
+    assert worksheet_list.status_code == 200 and any(x["id"] == worksheet_id for x in worksheet_list.json())
 
     # Lead schedule tied exactly to the posted GL plus hashed PDF evidence and independent sign-off.
     with SessionLocal() as db:

@@ -77,7 +77,26 @@ def main() -> None:
         }))
         approver = {"Authorization": f"Bearer {approver_login['access_token']}"}
 
-        # 1) COA exports a real XLSX and imports only after a clean validation.
+        # 1) The COA lifecycle creates, renames and removes an unused account.
+        # This is separate from import so all three interactive controls are
+        # protected by a maintained end-to-end assertion.
+        interactive = ok(client.post("/api/v1/chart-of-accounts", headers=admin, json={
+            "company_id": 1, "code": "990001", "name_ar": "حساب مؤقت للتحقق",
+            "name_en": "Temporary verification account", "account_type": "EXPENSE",
+            "statement_group": "OTHER_EXPENSE",
+        }), 201)
+        assert interactive["code"] == "990001" and interactive["is_postable"]
+        renamed = ok(client.patch("/api/v1/chart-of-accounts/990001", headers=admin, json={
+            "company_id": 1, "name_ar": "حساب مؤقت محدث",
+            "name_en": "Updated temporary account", "active": True,
+        }))
+        assert renamed["name_ar"] == "حساب مؤقت محدث" and renamed["active"]
+        removed = ok(client.delete("/api/v1/chart-of-accounts/990001?company_id=1", headers=admin))
+        assert removed["deleted"] == "990001"
+        with SessionLocal() as db:
+            assert not db.scalar(select(Account.id).where(Account.company_id == 1, Account.code == "990001"))
+
+        # 2) COA exports a real XLSX and imports only after a clean validation.
         exported = client.get("/api/v1/chart-of-accounts/export.xlsx?company_id=1", headers=admin)
         assert exported.status_code == 200
         exported_book = load_workbook(BytesIO(exported.content), read_only=True)
@@ -103,7 +122,7 @@ def main() -> None:
         }))
         assert applied["applied"]
 
-        # 2) Opening balances validate, preserve their hash and post with maker-checker.
+        # 3) Opening balances validate, preserve their hash and post with maker-checker.
         with SessionLocal() as db:
             inventory_ids = {row.inventory_account_id for row in db.scalars(select(Item).where(Item.company_id == 1)).all()}
             asset = db.scalar(select(Account).where(
@@ -137,13 +156,15 @@ def main() -> None:
             headers=admin,
             files={"file": ("opening-r4.xlsx", opening_file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         ), 201)
+        batch_detail = ok(client.get(f"/api/v1/opening-balances/{batch['id']}", headers=admin))
+        assert batch_detail["id"] == batch["id"] and batch_detail["lines"]
         submitted = ok(client.post(f"/api/v1/opening-balances/{batch['id']}/submit", headers=admin))
         assert submitted["status"] == "PENDING_APPROVAL"
         assert client.post(f"/api/v1/opening-balances/{batch['id']}/approve-post", headers=admin).status_code == 409
         posted = ok(client.post(f"/api/v1/opening-balances/{batch['id']}/approve-post", headers=approver))
         assert posted["status"] == "POSTED" and posted["journal_id"]
 
-        # 3) Item categories drive accounting and valuation; the type stays editable.
+        # 4) Item categories drive accounting and valuation; the type stays editable.
         with SessionLocal() as db:
             asset_account = db.scalar(select(Account).where(
                 Account.company_id == 1, Account.account_type == "ASSET", Account.is_postable.is_(True),

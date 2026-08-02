@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from app.core.security import hash_password  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
-    BankAccount, Branch, DeliveryPlatform, Item, MenuItem, Role, User, UserCompanyRole, Warehouse,
+    BankAccount, Branch, DeliveryPlatform, FiscalPeriod, FiscalYear, Item, MenuItem, Role, User, UserCompanyRole, Warehouse,
 )
 
 PASSWORD = "Corvax@123"
@@ -69,6 +70,14 @@ def main() -> None:
         reviewer_json = {**reviewer, "Content-Type": "application/json"}
 
         with SessionLocal() as db:
+            relevant_dates = (date(2026, 7, 16), date.today())
+            periods = db.scalars(
+                select(FiscalPeriod).join(FiscalYear).where(FiscalYear.company_id == COMPANY_ID)
+            ).all()
+            for period in periods:
+                if any(period.start_date <= value <= period.end_date for value in relevant_dates):
+                    period.status = "OPEN"
+            db.commit()
             branch = db.scalar(select(Branch).where(Branch.company_id == COMPANY_ID, Branch.active.is_(True)))
             warehouse = db.scalar(select(Warehouse).where(Warehouse.company_id == COMPANY_ID, Warehouse.active.is_(True)))
             bank = db.scalar(select(BankAccount).where(BankAccount.company_id == COMPANY_ID, BankAccount.active.is_(True)))
@@ -89,6 +98,12 @@ def main() -> None:
             "customer_name": "عميل اختبار", "mobile": "0500000000", "guest_count": 2,
             "reservation_at": "2026-07-16T19:00:00", "duration_minutes": 90, "notes": "RC13 verification",
         }))
+        seated = ok(client.patch(f"/api/v1/restaurant/reservations/{reservation['id']}/status", headers=admin_json, json={"status": "SEATED"}))
+        assert seated["status"] == "SEATED"
+        occupied = ok(client.patch(f"/api/v1/restaurant/tables/{table['id']}/status", headers=admin_json, json={"status": "OCCUPIED"}))
+        assert occupied["status"] == "OCCUPIED"
+        available = ok(client.patch(f"/api/v1/restaurant/tables/{table['id']}/status", headers=admin_json, json={"status": "AVAILABLE"}))
+        assert available["status"] == "AVAILABLE"
         station = ok(client.post("/api/v1/restaurant/kitchen/stations", headers=admin_json, json={
             "company_id": COMPANY_ID, "branch_id": branch_id, "code": "HOT-RC13",
             "name_ar": "المطبخ الساخن", "name_en": "Hot Kitchen", "sequence": 1,
@@ -123,6 +138,13 @@ def main() -> None:
         assert client.post(f"/api/v1/restaurant/controls/{control['id']}/approve", headers=admin).status_code == 409
         approved_control = ok(client.post(f"/api/v1/restaurant/controls/{control['id']}/approve", headers=reviewer))
         assert approved_control["status"] == "APPROVED_POSTED" and Decimal(str(approved_control["refund_total"])) > 0
+
+        rejected_control = ok(client.post(f"/api/v1/restaurant/orders/{cash_order['id']}/controls", headers=admin_json, json={
+            "request_type": "VOID", "reason": "Independent rejection lifecycle", "restore_inventory": False,
+            "lines": [{"pos_order_line_id": cash_order["lines"][0]["id"] if "id" in cash_order["lines"][0] else 1, "quantity": 1}],
+        }))
+        rejected_control = ok(client.post(f"/api/v1/restaurant/controls/{rejected_control['id']}/reject", headers=reviewer_json, json={"reason": "Control evidence is incomplete"}))
+        assert rejected_control["status"] == "REJECTED"
 
         ok(client.post(f"/api/v1/restaurant/orders/{cash_order['id']}/complete-service", headers=admin))
         expected_cash = Decimal("100") + Decimal(str(cash_order["total"])) - Decimal(str(approved_control["refund_total"]))

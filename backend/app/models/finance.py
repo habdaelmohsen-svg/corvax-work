@@ -160,12 +160,18 @@ class PurchaseInvoiceLine(Base):
     unit_price = Column(Numeric(18, 4), nullable=False)
     vat_rate = Column(Numeric(8, 4), nullable=False, default=15)
     tax_code_id = Column(Integer, ForeignKey("tax_codes.id"), index=True)
+    item_id = Column(Integer, ForeignKey("items.id"), index=True)
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"), index=True)
+    goods_receipt_line_id = Column(Integer, ForeignKey("goods_receipt_lines.id"), unique=True, index=True)
     subtotal = Column(Numeric(18, 2), nullable=False)
     vat_amount = Column(Numeric(18, 2), nullable=False)
     total = Column(Numeric(18, 2), nullable=False)
     invoice = relationship("PurchaseInvoice", back_populates="lines")
     expense_account = relationship("Account", lazy="joined")
     tax_code = relationship("TaxCode", lazy="joined")
+    item = relationship("Item", lazy="joined")
+    warehouse = relationship("Warehouse", lazy="joined")
+    goods_receipt_line = relationship("GoodsReceiptLine", lazy="joined")
 
 class Receipt(Base):
     __tablename__ = "receipts"

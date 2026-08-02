@@ -373,6 +373,10 @@ def delete_adjustment(return_id: int, adjustment_id: int, user: User = Depends(g
     if row.status != "DRAFT": raise HTTPException(409, "Adjustments can only be changed while the return is draft")
     adj = db.scalar(select(ZakatTaxAdjustment).where(ZakatTaxAdjustment.id == adjustment_id, ZakatTaxAdjustment.return_id == row.id))
     if not adj: raise HTTPException(404, "Adjustment not found")
+    # Keep the already-loaded relationship consistent in this request.  Merely
+    # marking ``adj`` deleted leaves it in ``row.adjustments`` until the session
+    # expires, so recalculation and the immediate response can still include it.
+    row.adjustments.remove(adj)
     db.delete(adj); db.flush(); recalculate(db, row); db.commit(); return serialize_return(_return(db, row.id))
 
 

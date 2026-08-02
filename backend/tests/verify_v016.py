@@ -116,6 +116,8 @@ with TestClient(app) as client:
     # Verified database backup.
     backup = ok(client.post("/api/v1/backups?company_id=1", headers=admin), 201)
     verified = ok(client.post(f"/api/v1/backups/{backup['id']}/verify", headers=admin))
+    downloaded = client.get(f"/api/v1/backups/{backup['id']}/download", headers=admin)
+    assert downloaded.status_code == 200 and downloaded.content
     assert verified["status"] == "VERIFIED"
 
     # Accounting control after automated EOS posting.

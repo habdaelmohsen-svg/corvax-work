@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """Non-destructive PostgreSQL readiness smoke with JSON evidence."""
 from __future__ import annotations
-import argparse, json, os, time
+import argparse, json, os, sys, time
 from pathlib import Path
 from sqlalchemy import create_engine, text
 
-EXPECTED_HEAD='e19800000001'
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+ sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.core.migration_head import expected_migration_head
+
+EXPECTED_HEAD = expected_migration_head()
 
 def main()->int:
  p=argparse.ArgumentParser(); p.add_argument('--url',default=os.getenv('DATABASE_URL')); p.add_argument('--evidence',default='docs/operations/evidence/postgres_smoke.json'); a=p.parse_args()
+ if not EXPECTED_HEAD: raise SystemExit('Could not determine the Alembic migration head')
  if not a.url or not a.url.startswith(('postgresql://','postgres://','postgresql+psycopg://')): raise SystemExit('A PostgreSQL DATABASE_URL is required')
  url=a.url.replace('postgres://','postgresql+psycopg://',1) if a.url.startswith('postgres://') else a.url.replace('postgresql://','postgresql+psycopg://',1)
  started=time.perf_counter(); checks={}; status='PASSED'

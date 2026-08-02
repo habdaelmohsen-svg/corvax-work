@@ -15,6 +15,7 @@ from app.api.backups import router as backups_router
 from app.api.banking import router as banking_router
 from app.api.budgeting import router as budgeting_router
 from app.api.inventory import router as inventory_router
+from app.api.procurement import router as procurement_router
 from app.api.inventory_traceability import router as inventory_traceability_router  # H9
 from app.api.new_departments import router as new_departments_router  # H10
 from app.api.sales_commissions import router as sales_commissions_router  # H11
@@ -141,6 +142,7 @@ app.include_router(modules_router, prefix="/api/v1")
 app.include_router(banking_router, prefix="/api/v1")
 app.include_router(budgeting_router, prefix="/api/v1")
 app.include_router(inventory_router, prefix="/api/v1")
+app.include_router(procurement_router, prefix="/api/v1")
 app.include_router(inventory_traceability_router, prefix="/api/v1")  # H9
 app.include_router(new_departments_router, prefix="/api/v1")  # H10
 app.include_router(sales_commissions_router, prefix="/api/v1")  # H11

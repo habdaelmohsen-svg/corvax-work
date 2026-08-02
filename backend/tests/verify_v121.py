@@ -50,6 +50,7 @@ def main():
       line_id=db.execute(select(__import__('app.models',fromlist=['SalesInvoiceLine']).SalesInvoiceLine.id).where(__import__('app.models',fromlist=['SalesInvoiceLine']).SalesInvoiceLine.invoice_id==si['id'])).scalar_one()
     scn1=ok(c.post('/api/v1/credit-notes',headers=admin,json={'company_id':1,'note_type':'SALES','note_date':'2026-08-05','original_invoice_id':si['id'],'reason_code':'RETURN','reason':'Partial customer return','lines':[{'original_line_id':line_id,'quantity':4,'item_id':item_id,'warehouse_id':wh_id,'inventory_disposition':'RETURN_TO_STOCK'}]}),201)
     assert D(scn1['subtotal'])==D(400) and D(scn1['vat_amount'])==D(60) and D(scn1['total'])==D(460)
+    scn1_detail=ok(c.get(f"/api/v1/credit-notes/documents/{scn1['id']}",headers=admin)); assert scn1_detail['id']==scn1['id'] and scn1_detail['lines']
     ok(c.post(f"/api/v1/credit-notes/documents/{scn1['id']}/submit",headers=admin))
     assert c.post(f"/api/v1/credit-notes/documents/{scn1['id']}/approve-post",headers=admin).status_code==409
     scn1=ok(c.post(f"/api/v1/credit-notes/documents/{scn1['id']}/approve-post",headers=approver))
@@ -57,13 +58,22 @@ def main():
     aging=ok(c.get('/api/v1/subledgers/aging?company_id=1&ledger_type=AR&as_of_date=2026-08-05',headers=admin))
     assert D(aging['gross_open_items'])==D(690) and D(aging['reconciliation_difference'])==0
 
+    rejected=ok(c.post('/api/v1/credit-notes',headers=admin,json={'company_id':1,'note_type':'SALES','note_date':'2026-08-07','original_invoice_id':si['id'],'reason_code':'TEST_REJECT','reason':'R6 rejection lifecycle','lines':[{'original_line_id':line_id,'quantity':1,'inventory_disposition':'NONE'}]}),201)
+    ok(c.post(f"/api/v1/credit-notes/documents/{rejected['id']}/submit",headers=admin))
+    rejected=ok(c.post(f"/api/v1/credit-notes/documents/{rejected['id']}/reject",headers=approver,json={'reason':'Supporting evidence is incomplete'})); assert rejected['status']=='REJECTED'
+
     # Pay the remaining invoice, then return the remaining units: creates customer credit.
     receipt=ok(c.post('/api/v1/subledgers/receipts',headers=admin,json={'company_id':1,'receipt_date':'2026-08-06','customer_id':customer_id,'bank_account_id':bank_id,'amount':690,'reference':'RC21-RECEIPT','allocations':[{'open_item_id':aging['details'][0]['id'],'amount':690}]}),201)
     scn2=ok(c.post('/api/v1/credit-notes',headers=admin,json={'company_id':1,'note_type':'SALES','note_date':'2026-08-08','original_invoice_id':si['id'],'reason_code':'FINAL_RETURN','reason':'Remaining customer return','lines':[{'original_line_id':line_id,'quantity':6,'item_id':item_id,'warehouse_id':wh_id,'inventory_disposition':'QUARANTINE'}]}),201)
     ok(c.post(f"/api/v1/credit-notes/documents/{scn2['id']}/submit",headers=admin)); scn2=ok(c.post(f"/api/v1/credit-notes/documents/{scn2['id']}/approve-post",headers=approver))
     assert D(scn2['unapplied_credit'])==D(690)
     credits=ok(c.get('/api/v1/credit-notes/credit-balances/open?company_id=1&ledger_type=AR',headers=admin)); assert len(credits)==1 and D(credits[0]['available_amount'])==D(690)
-    cash=ok(c.post(f"/api/v1/credit-notes/credit-balances/{credits[0]['id']}/cash-settle",headers=admin,json={'bank_account_id':bank_id,'amount':690,'settlement_date':'2026-08-09','reference':'RC21-CUSTOMER-REFUND'}))
+    replacement_invoice=ok(c.post('/api/v1/subledgers/sales-invoices',headers=admin,json={'company_id':1,'invoice_date':'2026-08-09','due_date':'2026-09-09','customer_id':customer_id,'reference':'RC21-CREDIT-APPLICATION','lines':[{'description':'Replacement order','account_code':'411010','quantity':1,'unit_price':100,'tax_code':'S15'}]}),201)
+    ok(c.post(f"/api/v1/subledgers/sales-invoices/{replacement_invoice['id']}/post",headers=admin))
+    replacement_aging=ok(c.get('/api/v1/subledgers/aging?company_id=1&ledger_type=AR&as_of_date=2026-08-09',headers=admin))
+    replacement_item=next(x for x in replacement_aging['details'] if x['source_id']==replacement_invoice['id'])
+    applied=ok(c.post(f"/api/v1/credit-notes/credit-balances/{credits[0]['id']}/apply",headers=admin,json={'open_item_id':replacement_item['id'],'amount':115,'application_date':'2026-08-09'})); assert D(applied['available_amount'])==D(575) and D(applied['open_amount'])==0
+    cash=ok(c.post(f"/api/v1/credit-notes/credit-balances/{credits[0]['id']}/cash-settle",headers=admin,json={'bank_account_id':bank_id,'amount':575,'settlement_date':'2026-08-09','reference':'RC21-CUSTOMER-REFUND'}))
     assert D(cash['available_amount'])==0
     ar=ok(c.get('/api/v1/subledgers/aging?company_id=1&ledger_type=AR&as_of_date=2026-08-09',headers=admin)); assert D(ar['reconciliation_difference'])==0
 
@@ -108,7 +118,7 @@ def main():
     jb={x['box_code']:x for x in july['lines']}; assert D(jb['SALES_STANDARD']['tax_amount'])==D(150) and D(jb['PURCHASE_STANDARD']['tax_amount'])==D(150) and D(jb['SALES_EXPORT']['base_amount'])==D(300)
     aug=ok(c.post('/api/v1/compliance/vat-return',headers=admin,json={'company_id':1,'period_start':'2026-08-01','period_end':'2026-08-31'}),201)
     ab={x['box_code']:x for x in aug['lines']}
-    assert D(ab['SALES_STANDARD']['base_amount'])==D(-1000) and D(ab['SALES_STANDARD']['tax_amount'])==D(-150)
+    assert D(ab['SALES_STANDARD']['base_amount'])==D(-900) and D(ab['SALES_STANDARD']['tax_amount'])==D(-135)
     assert D(ab['PURCHASE_STANDARD']['base_amount'])==D(-400) and D(ab['PURCHASE_STANDARD']['tax_amount'])==D(-60)
     assert D(ab['SALES_EXPORT']['base_amount'])==D(-300)
     assert D(aug['output_reconciliation_difference'])==0 and D(aug['input_reconciliation_difference'])==0

@@ -114,10 +114,14 @@ def main():
         scenario = ok(c.post(f"/api/v1/internal-completion/planning/scenarios/{scenario['id']}/freeze", headers=approver))
         assert scenario["status"] == "FROZEN"
         variance = ok(c.get(f"/api/v1/internal-completion/planning/scenarios/{scenario['id']}/variance", headers=admin))
+        scenario_csv = c.get(f"/api/v1/internal-completion/planning/scenarios/{scenario['id']}/export.csv", headers=admin)
+        assert scenario_csv.status_code == 200 and scenario_csv.content.startswith(b'\xef\xbb\xbf')
         assert len(variance["rows"]) == 1 and D(variance["rows"][0]["actual"]) != D(0)
 
         backup = ok(c.post("/api/v1/backups?company_id=1", headers=admin), 201)
         backup = ok(c.post(f"/api/v1/backups/{backup['id']}/verify", headers=admin))
+        backup_file = c.get(f"/api/v1/backups/{backup['id']}/download", headers=admin)
+        assert backup_file.status_code == 200 and backup_file.content
         assert backup["status"] == "VERIFIED"
 
         close = ok(c.post("/api/v1/internal-completion/close/runs", headers=admin, json={"company_id":1,"fiscal_period_id":period_id}), 201)

@@ -1,0 +1,9 @@
+{
+  "generated_at": "2026-07-31T17:05:06.976699+00:00",
+  "route_count": 702,
+  "covered_count": 702,
+  "uncovered_count": 0,
+  "coverage_percent": 100.0,
+  "uncovered_by_module": [],
+  "uncovered_routes": []
+}
