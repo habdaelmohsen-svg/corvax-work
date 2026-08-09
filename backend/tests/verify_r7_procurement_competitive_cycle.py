@@ -59,11 +59,14 @@ def main():
 
         pr = ok(client.post("/api/v1/procurement/requisitions", headers=buyer, json={
             "company_id": 4, "request_date": "2026-08-03", "needed_by": "2026-08-20",
-            "warehouse_id": warehouse["id"], "department": "Production",
+            "warehouse_id": warehouse["id"], "suggested_supplier_id": supplier_b["id"], "department": "Production",
             "justification": "R7 production material replenishment after reorder alert",
             "lines": [{"item_id": raw["id"], "quantity": 200, "estimated_unit_price": 12, "specifications": "Lot tracked; expiry at least 12 months"}],
         }), 201)
         assert Decimal(str(pr["estimated_total"])) == Decimal("2400.00")
+        assert pr["suggested_supplier_id"] == supplier_b["id"]
+        assert pr["suggested_supplier_name_en"] == supplier_b["name_en"]
+        assert pr["suggested_supplier_vat_number"] == "310000000000003"
         ok(client.post(f"/api/v1/procurement/requisitions/{pr['id']}/submit", headers=buyer))
         assert client.post(f"/api/v1/procurement/requisitions/{pr['id']}/approve", headers=buyer).status_code == 409
         approved_pr = ok(client.post(f"/api/v1/procurement/requisitions/{pr['id']}/approve", headers=approver))
@@ -116,7 +119,35 @@ def main():
         approved_po = ok(client.post(f"/api/v1/inventory/purchase-orders/{po['id']}/approve", headers=po_approver))
         assert approved_po["status"] == "APPROVED"
 
-    print("CORVAX R7 PR -> independent approval -> two-supplier RFQ -> comparison -> award -> independent PO approval: PASS")
+        # "Last purchase price" must come from an actual posted receipt, not
+        # from a draft quotation or the approved-but-unreceived PO.
+        before_receipt = ok(client.get(
+            f"/api/v1/procurement/items/{raw['id']}/last-purchase?company_id=4&supplier_id={supplier_b['id']}",
+            headers=buyer,
+        ))
+        existing_company_purchase = before_receipt["company_last_purchase"]
+        history_po = ok(client.post("/api/v1/inventory/purchase-orders", headers=buyer, json={
+            "company_id": 4, "order_date": "2026-07-12", "expected_receipt_date": "2026-07-13",
+            "supplier_id": supplier_a["id"], "warehouse_id": warehouse["id"],
+            "lines": [{"item_id": raw["id"], "quantity": 20, "unit_price": 10, "vat_rate": 15}],
+        }), 201)
+        ok(client.post(f"/api/v1/inventory/purchase-orders/{history_po['id']}/approve", headers=po_approver))
+        receipt = ok(client.post(f"/api/v1/inventory/purchase-orders/{history_po['id']}/receive", headers=buyer, json={
+            "receipt_date": "2026-07-13",
+            "lines": [{"purchase_order_line_id": history_po["lines"][0]["id"], "quantity": 20, "lot_number": "R8-LAST-PRICE"}],
+        }), 201)
+        history = ok(client.get(
+            f"/api/v1/procurement/items/{raw['id']}/last-purchase?company_id=4&supplier_id={supplier_b['id']}",
+            headers=buyer,
+        ))
+        assert history["selected_supplier"]["vat_number"] == "310000000000003"
+        assert history["supplier_last_purchase"] is None
+        assert history["company_last_purchase"]["goods_receipt_number"] == receipt["number"]
+        assert history["company_last_purchase"]["supplier_id"] == supplier_a["id"]
+        assert Decimal(str(history["company_last_purchase"]["unit_price"])) == Decimal("10.0000")
+        assert history["company_last_purchase"] != existing_company_purchase
+
+    print("CORVAX R8 PR supplier context -> competitive award -> actual receipt last-price evidence: PASS")
 
 
 if __name__ == "__main__":

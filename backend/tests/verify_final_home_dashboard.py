@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EXECUTIVE = (ROOT / "frontend/src/dashboard/executive.tsx").read_text(encoding="utf-8")
 TARGETS = (ROOT / "frontend/src/dashboard/executiveNavigation.ts").read_text(encoding="utf-8")
 ROUTES = (ROOT / "frontend/src/dashboard/routes.tsx").read_text(encoding="utf-8")
+NAVIGATION = (ROOT / "frontend/src/dashboard/navigation.tsx").read_text(encoding="utf-8")
 SHELL = (ROOT / "frontend/src/dashboard/Shell.tsx").read_text(encoding="utf-8")
 UI = (ROOT / "frontend/src/dashboard/ui.tsx").read_text(encoding="utf-8")
 
@@ -63,5 +64,13 @@ target_values = set(re.findall(r": '([A-Za-z]+)',", TARGETS))
 route_keys = set(re.findall(r"\s+([A-Za-z]+):<", ROUTES))
 missing = sorted(target_values - route_keys)
 assert not missing, f"executive navigation targets without a rendered route: {missing}"
+
+# A rendered legacy alias is still unusable when Shell authorises navigation
+# exclusively from navItems. This is the exact regression that made the
+# revenue KPI show an access-denied notice even for a wildcard manager.
+nav_keys = set(re.findall(r"\{ key: '([A-Za-z]+)'", NAVIGATION))
+unreachable = sorted(target_values - nav_keys)
+assert not unreachable, f"executive navigation targets absent from authorised nav: {unreachable}"
+assert "revenue: 'reports'" in TARGETS
 
 print("CORVAX FINAL HOME DASHBOARD: PASS")

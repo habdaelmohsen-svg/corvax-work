@@ -1,7 +1,7 @@
 {
   "name": "corvax-business-platform-frontend",
   "private": true,
-  "version": "1.0.0-agreement-completion-rc27.4-r5",
+  "version": "1.0.0-agreement-completion-rc27.4-r8",
   "type": "module",
   "scripts": {
     "dev": "vite",

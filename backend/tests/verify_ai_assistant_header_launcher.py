@@ -56,4 +56,11 @@ assert "@media (max-width: 820px)" in CSS
 assert ".corvax-ai-launcher__copy { display: none; }" in CSS
 assert len(re.findall(r"(?m)^\s*\.corvax-ai-launcher \{", CSS)) == 2
 
+# Long database/source references must wrap inside the drawer. The regression
+# produced a horizontal scrollbar through the answer thread at desktop zoom.
+thread_css = CSS.split(".corvax-ai-thread {", 1)[1].split("}", 1)[0]
+assert "overflow-x: hidden" in thread_css
+assert "overflow-wrap: anywhere" in CSS
+assert ".corvax-ai-panel > * { min-width: 0; }" in CSS
+
 print("CORVAX AI ASSISTANT HEADER LAUNCHER: PASS")

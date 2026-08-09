@@ -15,6 +15,17 @@ const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr
 const btn={padding:'8px 13px',borderRadius:8,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:600} as const;
 const smallBtn={...btn,padding:'4px 9px',fontSize:12} as const;
 
+type ActualPurchase={
+  unit_price:number|string;quantity:number|string;purchase_date:string;goods_receipt_number:string;
+  purchase_order_number:string;supplier_id:number;supplier_code:string;supplier_name_ar:string;
+  supplier_name_en:string;supplier_vat_number?:string|null;source:'POSTED_GOODS_RECEIPT';
+};
+type LastPurchaseResponse={
+  item_id:number;item_code:string;
+  supplier_last_purchase:ActualPurchase|null;
+  company_last_purchase:ActualPurchase|null;
+};
+
 export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:number}){
   const [requisitions,setRequisitions]=useState<any[]>([]);const [rfqs,setRfqs]=useState<any[]>([]);
   const [items,setItems]=useState<any[]>([]);const [warehouses,setWarehouses]=useState<any[]>([]);const [suppliers,setSuppliers]=useState<any[]>([]);
@@ -22,6 +33,8 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
   const [requestDate,setRequestDate]=useState(iso());const [neededBy,setNeededBy]=useState(addDays(14));const [warehouse,setWarehouse]=useState('');
   const [department,setDepartment]=useState('');const [justification,setJustification]=useState('');const [item,setItem]=useState('');
   const [quantity,setQuantity]=useState('');const [estimatedPrice,setEstimatedPrice]=useState('');const [specifications,setSpecifications]=useState('');
+  const [suggestedSupplier,setSuggestedSupplier]=useState('');
+  const [lastPurchase,setLastPurchase]=useState<LastPurchaseResponse|null>(null);const [lastPurchaseLoading,setLastPurchaseLoading]=useState(false);
   const [rejectReason,setRejectReason]=useState('');
   const [rfqReq,setRfqReq]=useState('');const [issueDate,setIssueDate]=useState(iso());const [closingDate,setClosingDate]=useState(addDays(7));
   const [selectedSuppliers,setSelectedSuppliers]=useState<number[]>([]);
@@ -48,7 +61,22 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
   };
   useEffect(()=>{void load()},[companyId]);
 
+  useEffect(()=>{
+    if(!item){setLastPurchase(null);return;}
+    let active=true;setLastPurchaseLoading(true);
+    const supplierQuery=suggestedSupplier?`&supplier_id=${Number(suggestedSupplier)}`:'';
+    json(`/api/v1/procurement/items/${Number(item)}/last-purchase?company_id=${companyId}${supplierQuery}`)
+      .then(result=>{if(active)setLastPurchase(result);})
+      .catch(()=>{if(active)setLastPurchase(null);})
+      .finally(()=>{if(active)setLastPurchaseLoading(false);});
+    return()=>{active=false;};
+  },[companyId,item,suggestedSupplier]);
+
   const selectedRfq=rfqs.find(r=>String(r.id)===quoteRfq);
+  const selectedSupplier=suppliers.find(s=>String(s.id)===suggestedSupplier);
+  const supplierPurchase=lastPurchase?.supplier_last_purchase||null;
+  const priceReference=supplierPurchase||lastPurchase?.company_last_purchase||null;
+  const fallbackToOtherSupplier=Boolean(suggestedSupplier&&!supplierPurchase&&lastPurchase?.company_last_purchase);
   useEffect(()=>{
     if(!selectedRfq)return;
     const invited=selectedRfq.suppliers||[];if(!invited.some((s:any)=>String(s.id)===quoteSupplier))setQuoteSupplier(invited[0]?String(invited[0].id):'');
@@ -61,7 +89,7 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
   };
   const createRequisition=async()=>{
     if(!warehouse||!item||!quantity||!department.trim()||!justification.trim()){setMessage(ar?'أكمل بيانات طلب الشراء':'Complete the requisition');return}
-    await act('/api/v1/procurement/requisitions','POST',{company_id:companyId,request_date:requestDate,needed_by:neededBy,warehouse_id:Number(warehouse),department,justification,lines:[{item_id:Number(item),quantity:Number(quantity),estimated_unit_price:Number(estimatedPrice)||0,specifications:specifications||null}]},ar?'تم حفظ طلب الشراء كمسودة':'Purchase requisition saved as draft');
+    await act('/api/v1/procurement/requisitions','POST',{company_id:companyId,request_date:requestDate,needed_by:neededBy,warehouse_id:Number(warehouse),suggested_supplier_id:suggestedSupplier?Number(suggestedSupplier):null,department,justification,lines:[{item_id:Number(item),quantity:Number(quantity),estimated_unit_price:Number(estimatedPrice)||0,specifications:specifications||null}]},ar?'تم حفظ طلب الشراء كمسودة':'Purchase requisition saved as draft');
     setQuantity('');setEstimatedPrice('');setSpecifications('');
   };
   const createRfq=async()=>{
@@ -74,7 +102,7 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
     setQuoteRef('');setPrices({});
   };
   const normalized=search.trim().toLowerCase();
-  const shownPr=useMemo(()=>!normalized?requisitions:requisitions.filter(r=>[r.number,r.department,r.justification,r.status].join(' ').toLowerCase().includes(normalized)),[requisitions,normalized]);
+  const shownPr=useMemo(()=>!normalized?requisitions:requisitions.filter(r=>[r.number,r.department,r.justification,r.status,r.suggested_supplier_code,r.suggested_supplier_name_ar,r.suggested_supplier_name_en,r.suggested_supplier_vat_number].join(' ').toLowerCase().includes(normalized)),[requisitions,normalized]);
   const shownRfqs=useMemo(()=>!normalized?rfqs:rfqs.filter(r=>[r.number,r.requisition_number,r.status,...(r.suppliers||[]).map((s:any)=>s.code)].join(' ').toLowerCase().includes(normalized)),[rfqs,normalized]);
   const comparisonQuotes=(selectedRfq?.quotations||[]).slice().sort((a:any,b:any)=>Number(a.total)-Number(b.total));
   const approvedWithoutRfq=requisitions.filter(r=>r.status==='APPROVED'&&!rfqs.some(q=>q.requisition_id===r.id));
@@ -94,26 +122,38 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
         <label>{ar?'تاريخ الطلب':'Request date'}<input data-testid="pr-date" type="date" style={field} value={requestDate} onChange={e=>setRequestDate(e.target.value)}/></label>
         <label>{ar?'مطلوب قبل':'Needed by'}<input data-testid="pr-needed" type="date" style={field} value={neededBy} onChange={e=>setNeededBy(e.target.value)}/></label>
         <label>{ar?'المستودع':'Warehouse'}<select data-testid="pr-warehouse" style={field} value={warehouse} onChange={e=>setWarehouse(e.target.value)}>{warehouses.map(w=><option key={w.id} value={w.id}>{w.code} — {ar?w.name_ar:w.name_en}</option>)}</select></label>
+        <label>{ar?'المورد المقترح (اختياري)':'Suggested supplier (optional)'}<select data-testid="pr-suggested-supplier" style={field} value={suggestedSupplier} onChange={e=>setSuggestedSupplier(e.target.value)}><option value="">{ar?'بدون مورد مقترح — تختاره المشتريات لاحقًا':'No suggestion — procurement selects later'}</option>{suppliers.map(s=><option key={s.id} value={s.id}>{s.code} — {ar?s.name_ar:s.name_en}</option>)}</select></label>
+        <label>{ar?'الرقم الضريبي للمورد المقترح':'Suggested supplier VAT number'}<input data-testid="pr-supplier-vat" style={field} value={selectedSupplier?.vat_number||''} readOnly placeholder={ar?'يظهر تلقائيًا من بطاقة المورد':'Loaded from supplier master data'}/></label>
         <label>{ar?'القسم الطالب':'Requesting department'}<input data-testid="pr-department" style={field} value={department} onChange={e=>setDepartment(e.target.value)}/></label>
         <label>{ar?'مبرر الشراء':'Justification'}<input data-testid="pr-justification" style={field} value={justification} onChange={e=>setJustification(e.target.value)}/></label>
         <label>{ar?'الصنف':'Item'}<select data-testid="pr-item" style={field} value={item} onChange={e=>setItem(e.target.value)}>{items.map(i=><option key={i.id} value={i.id}>{i.code} — {ar?i.name_ar:i.name_en}</option>)}</select></label>
         <label>{ar?'الكمية':'Quantity'}<input data-testid="pr-quantity" type="number" min="0" style={field} value={quantity} onChange={e=>setQuantity(e.target.value)}/></label>
         <label>{ar?'السعر التقديري':'Estimated unit price'}<input data-testid="pr-estimated-price" type="number" min="0" style={field} value={estimatedPrice} onChange={e=>setEstimatedPrice(e.target.value)}/></label>
         <label>{ar?'المواصفات':'Specifications'}<input data-testid="pr-specifications" style={field} value={specifications} onChange={e=>setSpecifications(e.target.value)}/></label>
-      </div><div style={{padding:12}}><button data-testid="pr-create" style={btn} disabled={busy} onClick={createRequisition}>{ar?'حفظ الطلب':'Save requisition'}</button></div>
+      </div>
+      <div data-testid="pr-last-purchase" style={{margin:'0 12px 12px',padding:12,border:'1px solid var(--border)',borderRadius:10,background:'var(--panel-2, #f1f5f9)',display:'flex',gap:12,alignItems:'center',justifyContent:'space-between',flexWrap:'wrap'}}>
+        <div>
+          <strong>{ar?'آخر سعر شراء فعلي مرحّل':'Latest posted actual purchase price'}</strong>
+          <div style={{fontSize:20,fontWeight:800,marginTop:4}}>{lastPurchaseLoading?(ar?'جارٍ التحميل...':'Loading...'):priceReference?fmt(Number(priceReference.unit_price)):(ar?'لا يوجد استلام سابق':'No previous receipt')}</div>
+          {priceReference&&<small style={{display:'block',marginTop:3,opacity:.78}}>{priceReference.goods_receipt_number} · {priceReference.purchase_date} · {ar?priceReference.supplier_name_ar:priceReference.supplier_name_en} · {ar?'ضريبي:':'VAT:'} {priceReference.supplier_vat_number||'—'}</small>}
+          {fallbackToOtherSupplier&&<small style={{display:'block',marginTop:4,color:'#b45309'}}>{ar?'لا يوجد استلام سابق من المورد المقترح؛ السعر المعروض هو آخر استلام للصنف من مورد آخر.':'The suggested supplier has no prior receipt; this is the latest receipt from another supplier.'}</small>}
+        </div>
+        <button data-testid="pr-use-last-price" type="button" style={{...smallBtn,opacity:priceReference?1:.5}} disabled={!priceReference} onClick={()=>priceReference&&setEstimatedPrice(String(priceReference.unit_price))}>{ar?'استخدامه كسعر تقديري':'Use as estimate'}</button>
+      </div>
+      <div style={{padding:12}}><button data-testid="pr-create" style={btn} disabled={busy} onClick={createRequisition}>{ar?'حفظ الطلب':'Save requisition'}</button></div>
     </Panel>
     <Panel title={ar?'سجل طلبات الشراء':'Purchase requisition register'} icon={<ClipboardCheck size={18}/> }>
       <div style={{padding:'0 12px 10px'}}><input data-testid="pr-reject-reason" style={field} value={rejectReason} onChange={e=>setRejectReason(e.target.value)} placeholder={ar?'سبب الرفض عند استخدام زر رفض (5 أحرف على الأقل)':'Rejection reason when using Reject (minimum 5 chars)'}/></div>
-      <DataTable headers={[ar?'الرقم':'Number',ar?'القسم':'Department',ar?'التاريخ':'Date',ar?'المطلوب':'Needed',ar?'التقديري':'Estimate',ar?'الحالة':'Status',ar?'إجراء':'Action']} rows={shownPr.map(r=>[r.number,r.department,r.request_date,r.needed_by,fmt(Number(r.estimated_total||0)),r.status,
+      <DataTable headers={[ar?'الرقم':'Number',ar?'القسم':'Department',ar?'المورد المقترح':'Suggested supplier',ar?'الرقم الضريبي':'VAT number',ar?'التاريخ':'Date',ar?'المطلوب':'Needed',ar?'التقديري':'Estimate',ar?'الحالة':'Status',ar?'إجراء':'Action']} rows={shownPr.map(r=>[r.number,r.department,(ar?r.suggested_supplier_name_ar:r.suggested_supplier_name_en)||r.suggested_supplier_name_ar||r.suggested_supplier_name_en||'—',r.suggested_supplier_vat_number||'—',r.request_date,r.needed_by,fmt(Number(r.estimated_total||0)),r.status,
         <span data-testid={`pr-actions-${r.id}`} key={r.id} style={{display:'flex',gap:5,flexWrap:'wrap'}}><span data-testid={`pr-status-${r.id}`}>{r.status}</span>{r.status==='DRAFT'&&<button data-testid={`pr-submit-${r.id}`} style={smallBtn} disabled={busy} onClick={()=>act(`/api/v1/procurement/requisitions/${r.id}/submit`,'POST',undefined,ar?'تم إرسال الطلب':'Requisition submitted')}>{ar?'إرسال':'Submit'}</button>}{r.status==='SUBMITTED'&&<><button data-testid={`pr-approve-${r.id}`} style={smallBtn} disabled={busy} onClick={()=>act(`/api/v1/procurement/requisitions/${r.id}/approve`,'POST',undefined,ar?'تم اعتماد الطلب':'Requisition approved')}>{ar?'اعتماد':'Approve'}</button><button data-testid={`pr-reject-${r.id}`} style={{...smallBtn,background:'#b91c1c'}} disabled={busy||rejectReason.trim().length<5} onClick={()=>act(`/api/v1/procurement/requisitions/${r.id}/reject`,'POST',{reason:rejectReason},ar?'تم رفض الطلب':'Requisition rejected')}>{ar?'رفض':'Reject'}</button></>}{r.status==='APPROVED'&&(rfqs.some(q=>q.requisition_id===r.id)?'RFQ ✓':(ar?'جاهز لـRFQ':'RFQ ready'))}</span>])}/>
     </Panel>
 
     <Panel title={ar?'إنشاء طلب عرض سعر':'Create request for quotation'} icon={<Send size={18}/> }>
       <div style={grid}>
-        <label>{ar?'طلب الشراء المعتمد':'Approved requisition'}<select data-testid="rfq-pr" style={field} value={rfqReq} onChange={e=>setRfqReq(e.target.value)}><option value="">—</option>{approvedWithoutRfq.map(r=><option key={r.id} value={r.id}>{r.number} — {r.department}</option>)}</select></label>
+        <label>{ar?'طلب الشراء المعتمد':'Approved requisition'}<select data-testid="rfq-pr" style={field} value={rfqReq} onChange={e=>setRfqReq(e.target.value)}><option value="">—</option>{approvedWithoutRfq.map(r=><option key={r.id} value={r.id}>{r.number} — {r.department}{r.suggested_supplier_name_ar?` — ${r.suggested_supplier_name_ar}`:''}</option>)}</select></label>
         <label>{ar?'تاريخ الإصدار':'Issue date'}<input type="date" style={field} value={issueDate} onChange={e=>setIssueDate(e.target.value)}/></label>
         <label>{ar?'إغلاق العروض':'Closing date'}<input type="date" style={field} value={closingDate} onChange={e=>setClosingDate(e.target.value)}/></label>
-      </div><div style={{padding:'0 12px 12px'}}><strong>{ar?'الموردون المدعوون (اثنان على الأقل)':'Invited suppliers (at least two)'}</strong><div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:8}}>{suppliers.map(s=><label key={s.id}><input data-testid={`rfq-supplier-${s.id}`} type="checkbox" checked={selectedSuppliers.includes(s.id)} onChange={e=>setSelectedSuppliers(v=>e.target.checked?[...v,s.id]:v.filter(id=>id!==s.id))}/> {s.code} — {ar?s.name_ar:s.name_en}</label>)}</div></div>
+      </div><div style={{padding:'0 12px 12px'}}><strong>{ar?'الموردون المدعوون (اثنان على الأقل)':'Invited suppliers (at least two)'}</strong><div style={{display:'flex',gap:12,flexWrap:'wrap',marginTop:8}}>{suppliers.map(s=><label key={s.id}><input data-testid={`rfq-supplier-${s.id}`} type="checkbox" checked={selectedSuppliers.includes(s.id)} onChange={e=>setSelectedSuppliers(v=>e.target.checked?[...v,s.id]:v.filter(id=>id!==s.id))}/> {s.code} — {ar?s.name_ar:s.name_en} · {ar?'ضريبي:':'VAT:'} {s.vat_number||'—'}</label>)}</div></div>
       <div style={{padding:12}}><button data-testid="rfq-create" style={btn} disabled={busy} onClick={createRfq}>{ar?'إنشاء RFQ':'Create RFQ'}</button></div>
     </Panel>
     <Panel title={ar?'سجل RFQ':'RFQ register'} icon={<FileSpreadsheet size={18}/> }>

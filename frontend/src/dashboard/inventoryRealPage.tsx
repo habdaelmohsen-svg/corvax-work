@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react';
 import {Boxes, Warehouse as WarehouseIcon, ShoppingCart, PackageCheck, ArrowLeftRight, FileText, Plus} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel, fmt} from './ui';
+import {InventoryValuationControls} from './inventoryValuationControls';
 
 // The real procurement and stock cycle:
 //   purchase order -> approve -> goods receipt (raises stock, credits 214010)
@@ -32,7 +33,7 @@ const smallBtn={padding:'4px 11px',borderRadius:7,border:'none',background:'var(
 const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(185px,1fr))',gap:12,padding:12} as const;
 
 export function InventoryPage({ar,companyId}:{ar:boolean;companyId:number}){
-  const [tab,setTab]=useState<'stock'|'orders'|'moves'|'warehouses'>('stock');
+  const [tab,setTab]=useState<'stock'|'orders'|'moves'|'warehouses'|'classify'|'nrv'>('stock');
   const [warehouses,setWarehouses]=useState<WH[]>([]);
   const [items,setItems]=useState<Item[]>([]);
   const [suppliers,setSuppliers]=useState<Party[]>([]);
@@ -210,7 +211,8 @@ export function InventoryPage({ar,companyId}:{ar:boolean;companyId:number}){
 
     <div style={{display:'flex',gap:8,margin:'14px 0',flexWrap:'wrap'}}>
       {([['stock',ar?'الأرصدة':'Stock'],['orders',ar?'دورة الشراء':'Purchase cycle'],
-         ['moves',ar?'الصرف والتحويل':'Issues & transfers'],['warehouses',ar?'المستودعات':'Warehouses']] as [typeof tab,string][])
+         ['moves',ar?'الصرف والتحويل':'Issues & transfers'],['warehouses',ar?'المستودعات':'Warehouses'],
+         ['classify',ar?'تصنيف الأصناف':'Item classification'],['nrv',ar?'تقييم NRV':'NRV assessment']] as [typeof tab,string][])
         .map(([k,l])=><button key={k} onClick={()=>setTab(k)}
           style={{...btn,background:tab===k?'var(--accent, #1e40af)':'transparent',
             color:tab===k?'#fff':'var(--text)',border:'1px solid var(--border)'}}>{l}</button>)}
@@ -355,5 +357,7 @@ export function InventoryPage({ar,companyId}:{ar:boolean;companyId:number}){
           rows={warehouses.map(w=>[w.code,ar?w.name_ar:w.name_en])}/>
       </Panel>
     </>}
+
+    {(tab==='classify'||tab==='nrv')&&<InventoryValuationControls ar={ar} companyId={companyId} mode={tab}/>} 
   </>;
 }

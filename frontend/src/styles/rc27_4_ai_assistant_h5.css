@@ -108,6 +108,7 @@
   visibility: hidden;
   transition: transform .24s cubic-bezier(.22,.75,.22,1), opacity .18s ease, visibility .18s;
 }
+.corvax-ai-panel > * { min-width: 0; }
 [dir="rtl"] .corvax-ai-panel { transform: translateX(calc(-100% - 28px)); }
 .corvax-ai.is-open .corvax-ai-panel { transform: translateX(0); opacity: 1; visibility: visible; }
 
@@ -176,6 +177,7 @@
 .corvax-ai-thread {
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 17px 15px 10px;
   display: flex;
   flex-direction: column;
@@ -184,11 +186,11 @@
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--corvax-ai-muted) 38%, transparent) transparent;
 }
-.corvax-ai-message { display: flex; align-items: flex-start; gap: 9px; max-width: 93%; }
+.corvax-ai-message { display: flex; align-items: flex-start; gap: 9px; min-width: 0; max-width: 93%; }
 .corvax-ai-message.is-user { align-self: flex-end; flex-direction: row-reverse; }
 .corvax-ai-message.is-assistant { align-self: flex-start; }
 .corvax-ai-avatar { width: 30px; height: 30px; border-radius: 10px; font-size: 13px; margin-top: 2px; }
-.corvax-ai-bubble { min-width: 0; padding: 11px 13px; border: 1px solid var(--corvax-ai-border); border-radius: 15px; background: var(--corvax-ai-surface); box-shadow: 0 3px 12px rgba(11,32,53,.05); }
+.corvax-ai-bubble { min-width: 0; max-width: 100%; padding: 11px 13px; overflow-wrap: anywhere; word-break: break-word; border: 1px solid var(--corvax-ai-border); border-radius: 15px; background: var(--corvax-ai-surface); box-shadow: 0 3px 12px rgba(11,32,53,.05); }
 .corvax-ai-message.is-user .corvax-ai-bubble { color: #fff; border-color: transparent; background: linear-gradient(145deg, var(--corvax-ai-primary), var(--corvax-ai-primary-dark)); border-end-end-radius: 5px; }
 .corvax-ai-message.is-assistant .corvax-ai-bubble { border-start-start-radius: 5px; }
 .corvax-ai-bubble p { margin: 0; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }
@@ -200,7 +202,7 @@
 .corvax-ai-source > span:first-child { color: var(--corvax-ai-primary); font-weight: 900; }
 .corvax-ai-source > span:last-child { display: flex; flex-direction: column; min-width: 0; }
 .corvax-ai-source strong { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.corvax-ai-source small { margin-top: 2px; color: var(--corvax-ai-muted); font-size: 9px; }
+.corvax-ai-source small { margin-top: 2px; max-width: 100%; color: var(--corvax-ai-muted); font-size: 9px; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .corvax-ai-confidence { display: inline-flex; margin-top: 9px; padding: 4px 7px; border-radius: 999px; font-size: 9px; font-weight: 800; }
 .corvax-ai-confidence.is-high { color: var(--corvax-ai-success); background: color-mix(in srgb, var(--corvax-ai-success) 10%, transparent); }
 .corvax-ai-confidence.is-medium { color: var(--corvax-ai-warning); background: color-mix(in srgb, var(--corvax-ai-warning) 10%, transparent); }
@@ -211,7 +213,7 @@
 .corvax-ai-typing i:nth-child(3) { animation-delay: .24s; }
 .corvax-ai-typing span { margin-inline-start: 4px; }
 
-.corvax-ai-quick { padding: 7px 14px 10px; display: flex; gap: 6px; overflow-x: auto; background: var(--corvax-ai-bg); }
+.corvax-ai-quick { padding: 7px 14px 10px; display: flex; flex-wrap: wrap; gap: 6px; overflow-x: hidden; background: var(--corvax-ai-bg); }
 .corvax-ai-quick button { flex: 0 0 auto; min-height: 34px; padding: 6px 10px; border: 1px solid var(--corvax-ai-border); border-radius: 999px; color: var(--corvax-ai-muted); background: var(--corvax-ai-surface); font-size: 10px; cursor: pointer; }
 .corvax-ai-quick button:hover { color: var(--corvax-ai-primary); border-color: color-mix(in srgb, var(--corvax-ai-primary) 35%, transparent); }
 

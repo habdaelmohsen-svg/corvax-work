@@ -12,7 +12,7 @@ from app.core.time import utc_now
 from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user
 from app.models import (
-    Item, Party, PurchaseOrder, PurchaseOrderLine, PurchaseRequisition,
+    GoodsReceipt, GoodsReceiptLine, Item, Party, PurchaseOrder, PurchaseOrderLine, PurchaseRequisition,
     PurchaseRequisitionLine, RequestForQuotation, RFQLine, RFQSupplier,
     SupplierQuotation, SupplierQuotationLine, User, Warehouse,
 )
@@ -35,6 +35,7 @@ class RequisitionIn(BaseModel):
     request_date: date
     needed_by: date
     warehouse_id: int
+    suggested_supplier_id: int | None = None
     department: str = Field(min_length=2, max_length=120)
     justification: str = Field(min_length=5, max_length=500)
     lines: list[RequisitionLineIn] = Field(min_length=1)
@@ -92,6 +93,58 @@ def _supplier(db: Session, company_id: int, supplier_id: int) -> Party:
     return row
 
 
+def _latest_received_purchase(db: Session, company_id: int, item_id: int, supplier_id: int | None = None) -> dict | None:
+    """Latest actual receipt price, never a draft or unreceived quotation.
+
+    A purchase-order price is a commitment; the goods-receipt line is the
+    auditable evidence that the company actually bought and received the item.
+    """
+    query = (
+        select(
+            GoodsReceiptLine.unit_cost,
+            GoodsReceiptLine.quantity,
+            GoodsReceipt.receipt_date,
+            GoodsReceipt.number,
+            PurchaseOrder.id,
+            PurchaseOrder.number,
+            Party.id,
+            Party.code,
+            Party.name_ar,
+            Party.name_en,
+            Party.vat_number,
+        )
+        .join(GoodsReceipt, GoodsReceipt.id == GoodsReceiptLine.goods_receipt_id)
+        .join(PurchaseOrder, PurchaseOrder.id == GoodsReceipt.purchase_order_id)
+        .join(Party, Party.id == PurchaseOrder.supplier_id)
+        .where(
+            GoodsReceipt.company_id == company_id,
+            GoodsReceipt.status == "POSTED",
+            GoodsReceiptLine.item_id == item_id,
+        )
+    )
+    if supplier_id is not None:
+        query = query.where(PurchaseOrder.supplier_id == supplier_id)
+    result = db.execute(
+        query.order_by(GoodsReceipt.receipt_date.desc(), GoodsReceiptLine.id.desc()).limit(1)
+    ).first()
+    if not result:
+        return None
+    return {
+        "unit_price": result[0],
+        "quantity": result[1],
+        "purchase_date": result[2],
+        "goods_receipt_number": result[3],
+        "purchase_order_id": result[4],
+        "purchase_order_number": result[5],
+        "supplier_id": result[6],
+        "supplier_code": result[7],
+        "supplier_name_ar": result[8],
+        "supplier_name_en": result[9],
+        "supplier_vat_number": result[10],
+        "source": "POSTED_GOODS_RECEIPT",
+    }
+
+
 def _req_query():
     return select(PurchaseRequisition).options(
         selectinload(PurchaseRequisition.lines).selectinload(PurchaseRequisitionLine.item)
@@ -108,10 +161,16 @@ def _rfq_query():
 
 
 def _req_dict(row: PurchaseRequisition) -> dict:
+    supplier = row.suggested_supplier
     return {
         "id": row.id, "company_id": row.company_id, "number": row.number,
         "request_date": row.request_date, "needed_by": row.needed_by,
         "warehouse_id": row.warehouse_id, "warehouse_code": row.warehouse.code,
+        "suggested_supplier_id": row.suggested_supplier_id,
+        "suggested_supplier_code": supplier.code if supplier else None,
+        "suggested_supplier_name_ar": supplier.name_ar if supplier else None,
+        "suggested_supplier_name_en": supplier.name_en if supplier else None,
+        "suggested_supplier_vat_number": supplier.vat_number if supplier else None,
         "department": row.department, "justification": row.justification,
         "status": row.status, "estimated_total": row.estimated_total,
         "created_by": row.created_by, "approved_by": row.approved_by,
@@ -172,13 +231,15 @@ def create_requisition(data: RequisitionIn, user: User = Depends(get_current_use
     if data.needed_by < data.request_date:
         raise HTTPException(422, "Needed-by date cannot be before request date")
     warehouse = get_warehouse(db, data.company_id, data.warehouse_id)
+    suggested_supplier = _supplier(db, data.company_id, data.suggested_supplier_id) if data.suggested_supplier_id else None
     if len({line.item_id for line in data.lines}) != len(data.lines):
         raise HTTPException(422, "Duplicate item in purchase requisition")
     row = PurchaseRequisition(
         company_id=data.company_id,
         number=_number(db, PurchaseRequisition, data.company_id, "PR", data.request_date.year),
         request_date=data.request_date, needed_by=data.needed_by,
-        warehouse_id=warehouse.id, department=data.department.strip(),
+        warehouse_id=warehouse.id, suggested_supplier_id=suggested_supplier.id if suggested_supplier else None,
+        department=data.department.strip(),
         justification=data.justification.strip(), status="DRAFT", created_by=user.id,
     )
     total = Decimal("0")
@@ -196,6 +257,35 @@ def create_requisition(data: RequisitionIn, user: User = Depends(get_current_use
     write_audit(db, action="PURCHASE_REQUISITION_CREATED", entity_type="PURCHASE_REQUISITION", entity_id=row.id, user_id=user.id, company_id=data.company_id, after={"number": row.number, "estimated_total": str(row.estimated_total)})
     db.commit()
     return _req_dict(db.scalar(_req_query().where(PurchaseRequisition.id == row.id)))
+
+
+@router.get("/items/{item_id}/last-purchase")
+def last_purchase_price(
+    item_id: int,
+    company_id: int,
+    supplier_id: int | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return supplier-specific and company-wide actual last receipt prices."""
+    ensure_permission(db, user, company_id, "inventory.read")
+    item = get_item(db, company_id, item_id)
+    supplier = _supplier(db, company_id, supplier_id) if supplier_id else None
+    supplier_last = _latest_received_purchase(db, company_id, item.id, supplier.id) if supplier else None
+    company_last = _latest_received_purchase(db, company_id, item.id)
+    return {
+        "item_id": item.id,
+        "item_code": item.code,
+        "selected_supplier": {
+            "id": supplier.id,
+            "code": supplier.code,
+            "name_ar": supplier.name_ar,
+            "name_en": supplier.name_en,
+            "vat_number": supplier.vat_number,
+        } if supplier else None,
+        "supplier_last_purchase": supplier_last,
+        "company_last_purchase": company_last,
+    }
 
 
 @router.get("/requisitions")

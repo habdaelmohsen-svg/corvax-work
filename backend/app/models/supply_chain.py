@@ -159,6 +159,10 @@ class PurchaseRequisition(Base):
     request_date = Column(Date, nullable=False, index=True)
     needed_by = Column(Date, nullable=False)
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
+    # A requisition may carry a requester suggestion for benchmarking and
+    # continuity, but procurement remains free to invite and award other
+    # suppliers through the controlled RFQ comparison.
+    suggested_supplier_id = Column(Integer, ForeignKey("parties.id"), index=True)
     department = Column(String(120), nullable=False)
     justification = Column(String(500), nullable=False)
     status = Column(String(25), nullable=False, default="DRAFT", index=True)
@@ -172,6 +176,7 @@ class PurchaseRequisition(Base):
     rejection_reason = Column(String(500))
     created_at = Column(DateTime, nullable=False, default=utc_now)
     warehouse = relationship("Warehouse", lazy="joined")
+    suggested_supplier = relationship("Party", foreign_keys=[suggested_supplier_id], lazy="joined")
     lines = relationship("PurchaseRequisitionLine", back_populates="requisition", cascade="all, delete-orphan", lazy="selectin")
 
 
