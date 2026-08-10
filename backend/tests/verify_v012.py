@@ -43,7 +43,7 @@ with TestClient(app) as client:
     }))
     po_reviewer = {"Authorization": f"Bearer {reviewer_login['access_token']}"}
     health = assert_ok(client.get("/health"))
-    assert health["version"] == "1.0.0-agreement-completion-rc27.4-r9"
+    assert health["version"] == "1.0.0-agreement-completion-rc27.4-r9.1"
     assert health.get("status") == "ok"
 
     # Budget control from seeded approved budget.

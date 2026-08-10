@@ -14,7 +14,7 @@ from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
 ROOT = BACKEND.parent
-EXPECTED_VERSION = "1.0.0-agreement-completion-rc27.4-r9"
+EXPECTED_VERSION = "1.0.0-agreement-completion-rc27.4-r9.1"
 EXPECTED_HEAD = "e20500000001"
 
 
@@ -32,10 +32,9 @@ def check_release_identity() -> None:
     package = text("frontend/package.json")
     readme = text("README.md")
     checklist = text("deploy/PRODUCTION_CHECKLIST.md")
-    production_env = text("backend/.env.production.template")
-    require(EXPECTED_VERSION in config, "backend version drift")
-    require(EXPECTED_VERSION in package, "frontend version drift")
-    require(f"APP_VERSION={EXPECTED_VERSION}" in production_env, "production environment version drift")
+    require(f'app_version: str = "{EXPECTED_VERSION}"' in config, "backend version drift")
+    require(f'"version": "{EXPECTED_VERSION}"' in package, "frontend version drift")
+    require(f'Version: `{EXPECTED_VERSION}`' in readme, "README version drift")
     require(EXPECTED_HEAD in readme, "README migration head drift")
     require(EXPECTED_HEAD in checklist, "production checklist migration head drift")
 

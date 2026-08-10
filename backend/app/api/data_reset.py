@@ -1,9 +1,10 @@
-"""Controlled removal of explicitly registered CORVAX demonstration records.
+"""Controlled data-reset workflows for CORVAX test environments.
 
-This endpoint never classifies a row as Demo from a name, reference, date,
-creator, or environment.  A row is eligible only when a trusted seeding/demo
-workflow recorded its exact table and primary key in ``demo_data_records``.
-Unregistered rows are treated as real/manual data and cannot be deleted here.
+The legacy company-scoped workflow removes only records explicitly registered
+by a trusted seeder in ``demo_data_records``.  The separate UAT workflow is an
+intentional, system-wide operational reset guarded by environment, role, exact
+confirmation, dry run, signed authorization and audit controls.  Both workflows
+are permanently unavailable in production.
 """
 from __future__ import annotations
 
@@ -17,14 +18,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import MetaData, Table, delete, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import MetaData, Table, delete, func, literal, select, text, union_all
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db import Base, get_db
 from app.dependencies import ensure_permission, get_current_user
-from app.models import Company, DemoDataRecord, User
+from app.models import Company, DemoDataRecord, Role, User, UserCompanyRole
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/data-reset", tags=["data reset"])
@@ -34,12 +35,49 @@ router = APIRouter(prefix="/data-reset", tags=["data reset"])
 DEMO_DELETE_ORDER = ("journal_lines", "stock_movements", "journal_entries")
 AUTHORIZATION_TTL_SECONDS = 10 * 60
 
+# A full UAT reset is intentionally system-wide.  These are the only records
+# retained because they are required to keep the installation reachable and
+# structurally usable after operational/test data has been removed.  The set is
+# FK-closed: no preserved table is allowed to depend on a reset table.
+UAT_PRESERVED_TABLES = frozenset(
+    {
+        "companies",
+        "branches",
+        "accounts",
+        "cost_centers",
+        "fiscal_years",
+        "fiscal_periods",
+        "currencies",
+        "permissions",
+        "roles",
+        "role_permissions",
+        "users",
+        "user_sessions",
+        "user_company_roles",
+        "user_company_role_branches",
+        "password_history",
+        "audit_logs",
+        "backup_records",
+        "legal_rule_versions",
+        "sod_rules",
+        "tax_codes",
+    }
+)
+UAT_RESET_ENVIRONMENTS = frozenset({"development", "testing", "uat"})
+UAT_CONFIRMATION_PHRASE = "تهيئة UAT كاملة - مسح جميع بيانات التشغيل"
+
 
 class ResetIn(BaseModel):
     company_id: int
     confirmation: str = Field(min_length=1, max_length=300)
     dry_run: bool = True
     # Issued only by a successful, fresh dry run and required for real deletion.
+    authorization_token: str | None = Field(default=None, max_length=4000)
+
+
+class UATResetIn(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=300)
+    dry_run: bool = True
     authorization_token: str | None = Field(default=None, max_length=4000)
 
 
@@ -440,5 +478,265 @@ def execute_reset(
         "message_en": (
             f"Removed {total_deleted} registered Demo rows only. "
             f"{snapshot['preserved_unregistered_total']} unregistered rows were preserved unchanged."
+        ),
+    }
+
+
+def _uat_enabled() -> bool:
+    return (
+        settings.environment.strip().lower() in UAT_RESET_ENVIRONMENTS
+        and bool(settings.allow_data_reset)
+    )
+
+
+def _ensure_uat_execution_enabled() -> None:
+    environment = settings.environment.strip().lower()
+    if environment == "production":
+        raise HTTPException(403, "Full UAT reset is permanently disabled in production")
+    if environment not in UAT_RESET_ENVIRONMENTS:
+        raise HTTPException(403, "Full UAT reset requires ENVIRONMENT=uat")
+    if not settings.allow_data_reset:
+        raise HTTPException(403, "Full UAT reset is disabled; set ALLOW_DATA_RESET=true in UAT only")
+
+
+def _ensure_super_admin(db: Session, user: User) -> None:
+    role = db.scalar(
+        select(Role.id)
+        .join(UserCompanyRole, UserCompanyRole.role_id == Role.id)
+        .where(UserCompanyRole.user_id == user.id, Role.code == "SUPER_ADMIN")
+        .limit(1)
+    )
+    if role is None:
+        raise HTTPException(403, "Only SUPER_ADMIN can execute a system-wide UAT reset")
+
+
+def _uat_target_tables() -> list[Table]:
+    existing = set(Base.metadata.tables)
+    missing = UAT_PRESERVED_TABLES - existing
+    if missing:
+        raise RuntimeError(f"UAT preserved-table contract references missing tables: {sorted(missing)}")
+
+    # TRUNCATE ... CASCADE must never discover a preserved child table.  Fail
+    # closed if a future migration introduces such a dependency without first
+    # updating the reset contract and its regression test.
+    for table_name in UAT_PRESERVED_TABLES:
+        table = Base.metadata.tables[table_name]
+        for foreign_key in table.foreign_keys:
+            parent_name = foreign_key.column.table.name
+            if parent_name not in UAT_PRESERVED_TABLES:
+                raise RuntimeError(
+                    f"Preserved table {table_name} depends on reset table {parent_name}"
+                )
+
+    return [
+        Base.metadata.tables[name]
+        for name in sorted(existing - UAT_PRESERVED_TABLES)
+    ]
+
+
+def _uat_snapshot(db: Session) -> dict[str, Any]:
+    targets = _uat_target_tables()
+    statements = [
+        select(
+            literal(table.name).label("table_name"),
+            func.count().label("row_count"),
+        ).select_from(table)
+        for table in targets
+    ]
+    counts = {
+        str(table_name): int(row_count or 0)
+        for table_name, row_count in db.execute(union_all(*statements)).all()
+    }
+    nonempty = {name: count for name, count in counts.items() if count > 0}
+    fingerprint = [[name, nonempty[name]] for name in sorted(nonempty)]
+    digest = hashlib.sha256(
+        json.dumps(fingerprint, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "tables": nonempty,
+        "total_rows": sum(nonempty.values()),
+        "tables_affected": len(nonempty),
+        "target_table_count": len(targets),
+        "digest": digest,
+    }
+
+
+def _execute_uat_truncate(db: Session, targets: list[Table]) -> None:
+    dialect = db.bind.dialect.name if db.bind is not None else ""
+    if dialect == "postgresql":
+        preparer = db.bind.dialect.identifier_preparer
+        table_list = ", ".join(preparer.quote(table.name) for table in targets)
+        db.execute(text(f"TRUNCATE TABLE {table_list} RESTART IDENTITY CASCADE"))
+        return
+
+    if dialect == "sqlite":
+        # SQLite cannot TRUNCATE, but it can defer every FK until the enclosing
+        # transaction commits.  Because the preserved-table set is FK-closed,
+        # the database is consistent again once all reset tables are empty.
+        db.execute(text("PRAGMA defer_foreign_keys = ON"))
+        for table in targets:
+            db.execute(delete(table))
+        return
+
+    # Development fallback.  Production/UAT deployments use PostgreSQL and the
+    # regression gate uses SQLite; other engines must prove their FK behaviour.
+    for table in reversed(Base.metadata.sorted_tables):
+        if table.name not in UAT_PRESERVED_TABLES:
+            db.execute(delete(table))
+
+
+@router.get("/uat-preview")
+def preview_uat_reset(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Preview a system-wide operational-data purge for a controlled UAT environment."""
+    _ensure_super_admin(db, user)
+    snapshot = _uat_snapshot(db)
+    company_count = int(db.scalar(select(func.count()).select_from(Company)) or 0)
+    user_count = int(db.scalar(select(func.count()).select_from(User)) or 0)
+    return {
+        "scope": "SYSTEM_WIDE_UAT",
+        "confirmation_phrase": UAT_CONFIRMATION_PHRASE,
+        "total_rows": snapshot["total_rows"],
+        "tables": snapshot["tables"],
+        "tables_affected": snapshot["tables_affected"],
+        "target_table_count": snapshot["target_table_count"],
+        "enabled": _uat_enabled(),
+        "environment": settings.environment,
+        "production_blocked": settings.environment.strip().lower() == "production",
+        "preserved": {
+            "companies": company_count,
+            "users": user_count,
+            "table_count": len(UAT_PRESERVED_TABLES),
+            "tables": sorted(UAT_PRESERVED_TABLES),
+        },
+        "note_ar": (
+            "سيتم مسح جميع بيانات التشغيل والتجربة في كل الشركات، بما فيها الحركات "
+            "والعملاء والموردون والأصناف والمخزون والموظفون. ستبقى بنية الدخول "
+            "والشركات والفروع ودليل الحسابات والصلاحيات والفترات وسجل التدقيق."
+        ),
+        "note_en": (
+            "All operational and test data across every company will be removed, including "
+            "transactions, parties, items, inventory and employees. Access, company structure, "
+            "the chart of accounts, permissions, fiscal periods and audit history are retained."
+        ),
+    }
+
+
+@router.post("/uat-execute")
+def execute_uat_reset(
+    data: UATResetIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Dry-run or execute an all-company operational reset in an explicit UAT environment."""
+    _ensure_super_admin(db, user)
+    _ensure_uat_execution_enabled()
+    if data.confirmation != UAT_CONFIRMATION_PHRASE:
+        raise HTTPException(
+            422,
+            {
+                "message_ar": f"عبارة التأكيد غير مطابقة. اكتب بالضبط: {UAT_CONFIRMATION_PHRASE}",
+                "message_en": f"Confirmation does not match. Type exactly: {UAT_CONFIRMATION_PHRASE}",
+            },
+        )
+
+    snapshot = _uat_snapshot(db)
+    if data.dry_run:
+        authorization_token = None
+        if snapshot["total_rows"]:
+            now = int(time.time())
+            authorization_token = _sign_authorization(
+                {
+                    "uid": user.id,
+                    "cid": 0,
+                    "mode": "SYSTEM_WIDE_UAT",
+                    "digest": snapshot["digest"],
+                    "iat": now,
+                    "exp": now + AUTHORIZATION_TTL_SECONDS,
+                }
+            )
+        write_audit(
+            db,
+            action="UAT_OPERATIONAL_RESET_DRY_RUN",
+            entity_type="SYSTEM",
+            entity_id="ALL_COMPANIES",
+            user_id=user.id,
+            after={
+                "rows_to_delete": snapshot["total_rows"],
+                "tables_affected": snapshot["tables_affected"],
+                "snapshot_digest": snapshot["digest"],
+            },
+        )
+        db.commit()
+        return {
+            "dry_run": True,
+            "scope": "SYSTEM_WIDE_UAT",
+            "rows_deleted": 0,
+            "rows_that_would_be_deleted": snapshot["total_rows"],
+            "tables_affected": snapshot["tables_affected"],
+            "detail": snapshot["tables"],
+            "authorization_token": authorization_token,
+            "authorization_expires_in_seconds": (
+                AUTHORIZATION_TTL_SECONDS if authorization_token else 0
+            ),
+            "message_ar": (
+                f"فحص آمن ناجح: سيُحذف {snapshot['total_rows']} صف تشغيل وتجربة "
+                f"من {snapshot['tables_affected']} جدولًا في جميع الشركات."
+            ),
+            "message_en": (
+                f"Safe dry run passed: {snapshot['total_rows']} operational/test rows "
+                f"would be removed from {snapshot['tables_affected']} tables across all companies."
+            ),
+        }
+
+    _verify_authorization(
+        data.authorization_token,
+        user_id=user.id,
+        company_id=0,
+        snapshot_digest=snapshot["digest"],
+    )
+    if not snapshot["total_rows"]:
+        raise HTTPException(409, "No operational UAT data remains to delete")
+
+    try:
+        targets = _uat_target_tables()
+        _execute_uat_truncate(db, targets)
+        write_audit(
+            db,
+            action="UAT_OPERATIONAL_RESET_COMPLETED",
+            entity_type="SYSTEM",
+            entity_id="ALL_COMPANIES",
+            user_id=user.id,
+            after={
+                "rows_deleted": snapshot["total_rows"],
+                "tables_affected": snapshot["tables_affected"],
+                "snapshot_digest": snapshot["digest"],
+                "preserved_tables": sorted(UAT_PRESERVED_TABLES),
+            },
+        )
+        db.commit()
+    except (IntegrityError, SQLAlchemyError, RuntimeError) as exc:
+        db.rollback()
+        raise HTTPException(
+            409,
+            "UAT data changed or the preserved-table contract failed; nothing was deleted",
+        ) from exc
+
+    return {
+        "dry_run": False,
+        "scope": "SYSTEM_WIDE_UAT",
+        "rows_deleted": snapshot["total_rows"],
+        "tables_affected": snapshot["tables_affected"],
+        "detail": snapshot["tables"],
+        "message_ar": (
+            f"تمت تهيئة UAT: حُذف {snapshot['total_rows']} صف من بيانات التشغيل والتجربة "
+            "في جميع الشركات، مع الحفاظ على الدخول والشركات ودليل الحسابات والصلاحيات وسجل التدقيق."
+        ),
+        "message_en": (
+            f"UAT reset completed: {snapshot['total_rows']} operational/test rows were removed "
+            "across all companies while access, company structure, the chart of accounts, "
+            "permissions and audit history were retained."
         ),
     }

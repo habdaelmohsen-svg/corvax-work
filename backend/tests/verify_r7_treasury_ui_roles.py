@@ -16,9 +16,6 @@ BACKEND_DIR = PROJECT_DIR / "backend"
 FRONTEND_DIR = PROJECT_DIR / "frontend"
 UI_SCRIPT = FRONTEND_DIR / "uat" / "treasury_three_role_simulation.tsx"
 VITE_NODE = FRONTEND_DIR / "node_modules" / ".bin" / "vite-node"
-SERVER_READY_TIMEOUT_SECONDS = int(
-    os.environ.get("CORVAX_TEST_SERVER_READY_TIMEOUT_SECONDS", "60")
-)
 
 
 def free_port() -> int:
@@ -69,12 +66,7 @@ with tempfile.TemporaryDirectory(prefix="verify_r7_treasury_ui_roles_") as temp_
         stderr=subprocess.STDOUT,
     )
     try:
-        # A fresh CORVAX database applies the complete migration chain and seeds
-        # every maintained module before Uvicorn can serve /health.  Cold CI
-        # filesystems can legitimately take longer than the historical 20s
-        # threshold, especially after a new release migration is added.  Keep
-        # the readiness probe strict, but allow enough time for real startup.
-        deadline = time.monotonic() + SERVER_READY_TIMEOUT_SECONDS
+        deadline = time.monotonic() + 20
         while True:
             if server.poll() is not None:
                 raise RuntimeError(f"Treasury UI test server exited with {server.returncode}")
@@ -110,3 +102,4 @@ with tempfile.TemporaryDirectory(prefix="verify_r7_treasury_ui_roles_") as temp_
         except subprocess.TimeoutExpired:
             server.kill()
             server.wait(timeout=5)
+

@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "CORVAX — The Core Business Platform"
-    app_version: str = "1.0.0-agreement-completion-rc27.4-r9"
+    app_version: str = "1.0.0-agreement-completion-rc27.4-r9.1"
     environment: str = "development"
     database_url: str = "sqlite:///./data/corvax.db"
 
@@ -38,9 +38,9 @@ class Settings(BaseSettings):
     # Recovery door: when true, the administrator password is reset on every
     # start. Intended to unlock a locked-out owner. Turn it off afterwards.
     bootstrap_force_admin_reset: bool = False
-    # Trial-data reset is an explicitly enabled non-production maintenance
-    # capability.  The API additionally enforces permission, confirmation,
-    # a fresh dry-run authorization and an exact demo-record registry.
+    # Data reset is an explicitly enabled non-production maintenance capability.
+    # The API additionally enforces permissions, exact confirmation, dry-run
+    # authorization and separate contracts for Demo-only and full UAT resets.
     allow_data_reset: bool = False
     auto_create_schema: bool = True
     allowed_origins: str = "*"
@@ -124,7 +124,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self):
-        if self.environment.lower() == "production":
+        environment = self.environment.strip().lower()
+        # UAT uses the same security baseline as production.  Its only deliberate
+        # difference is that the guarded reset capability may be enabled there.
+        if environment in {"production", "staging", "uat"}:
             if self.secret_key == "dev-only-change-me" or len(self.secret_key) < 32:  # nosec B105
                 raise ValueError("Production SECRET_KEY must be changed and contain at least 32 characters")
             if self.allowed_origins.strip() == "*":
@@ -133,7 +136,7 @@ class Settings(BaseSettings):
                 raise ValueError("Production TRUSTED_HOSTS cannot be wildcard")
             if self.seed_demo_data:
                 raise ValueError("Production SEED_DEMO_DATA must be false")
-            if self.allow_data_reset:
+            if environment == "production" and self.allow_data_reset:
                 raise ValueError("Production ALLOW_DATA_RESET must be false")
             if self.auto_create_schema:
                 raise ValueError("Production AUTO_CREATE_SCHEMA must be false; use Alembic migrations only")

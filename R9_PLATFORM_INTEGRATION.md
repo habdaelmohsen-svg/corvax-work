@@ -1,18 +1,19 @@
-# CORVAX RC27.4 R9 — Platform Assurance Integration Record
+# CORVAX RC27.4 R9 — Platform Assurance Integration Contract
 
-This package is fully integrated into the R9 release branch. The sections below record the
-completed bindings, migration contract, permissions and safeguards; they are not pending
-release-integrator tasks.
+This package is implemented and tested in isolation. The following changes are intentionally
+left for the release integrator because `main.py`, model facades, navigation, migrations and the
+release gate were protected from edits in this workstream.
 
 ## 1. Backend registration
 
-1. `app.models.r9_platform` is registered through the model facade before metadata evaluation.
-2. `app.api.r9_platform` is included with the common `/api/v1` prefix.
+1. Register `app.models.r9_platform` before `Base.metadata.create_all` is ever evaluated. In the
+   production path, add the module to the existing model facade rather than relying on import order.
+2. Import `app.api.r9_platform` and include `r9_platform.router` with the common `/api/v1` prefix.
 3. Do not enable production `AUTO_CREATE_SCHEMA`; deploy the Alembic revision first.
 
 ## 2. Alembic revision
 
-Revision `e20500000001` follows the previous single head and creates, in dependency order:
+Create one revision after the current single head. It must create, in dependency order:
 
 1. `r9_platform_alerts`: integer PK; non-null company FK; fingerprint 64; category 30; severity 12;
    Arabic/English titles 250; JSON text details; source type/id; status; assignee/due; resolver,
@@ -49,9 +50,9 @@ both only under monitored emergency access. The endpoint still enforces maker-ch
 
 ## 4. Frontend registration
 
-1. `R9PlatformPage` is lazy-imported from `frontend/src/dashboard/r9PlatformPage.tsx` in `routes.tsx`.
-2. Navigation includes System Assurance under Governance, protected by `platform.view`.
-3. The page receives the selected `companyId` and language flag and never infers a company from a batch ID.
+1. Lazy-import `R9PlatformPage` from `frontend/src/dashboard/r9PlatformPage.tsx` in `routes.tsx`.
+2. Add one navigation item under Governance / System Assurance, protected by `platform.view`.
+3. Pass the already selected `companyId` and language flag. Never infer a company from the batch ID.
 
 ## 5. Production safeguards
 

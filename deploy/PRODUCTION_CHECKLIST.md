@@ -5,6 +5,7 @@
 - [ ] `ENVIRONMENT=production`
 - [ ] `SECRET_KEY` عشوائي بطول 32+ حرفًا ومخزن في Secret Manager.
 - [ ] `SEED_DEMO_DATA=false`
+- [ ] `ALLOW_DATA_RESET=false` ولا يوجد أي استثناء لهذا الشرط في الإنتاج.
 - [ ] `ALLOWED_ORIGINS` نطاقات HTTPS محددة وليست `*`.
 - [ ] `TRUSTED_HOSTS` نطاقات محددة وليست `*`.
 - [ ] `FORCE_HTTPS=true` أو تطبيق HTTPS Redirect على Load Balancer موثوق.

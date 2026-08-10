@@ -64,7 +64,7 @@ export const navItems: NavItem[] = [
   { key: 'close', ar: 'الإقفال المالي', en: 'Financial Close', icon: FileCheck2, scope: allScopes, group: 'finance', requires: ['period'] },
   { key: 'assurance', ar: 'التأكيد المالي الحازم', en: 'Financial Assurance Gate', icon: ShieldCheck, scope: allScopes, group: 'finance' },
   { key: 'compliance', ar: 'الالتزام والضرائب', en: 'Compliance & Tax', icon: ShieldCheck, scope: allScopes, group: 'tax', requires: ['compliance'] },
-  { key: 'dataReset', ar: 'حذف البيانات التجريبية', en: 'Trial Data Reset', icon: Eraser, scope: allScopes, requires: ['data.reset'], group: 'system' },
+  { key: 'dataReset', ar: 'تهيئة بيانات UAT', en: 'UAT Data Reset', icon: Eraser, scope: allScopes, requires: ['data.reset'], group: 'system' },
   { key: 'security', ar: 'الأمان والنسخ الاحتياطي', en: 'Security & Backup', icon: DatabaseBackup, scope: allScopes, requires: ['security'] , group: 'system' },
   { key: 'users', ar: 'المستخدمون', en: 'Users', icon: UserCog, scope: allScopes, group: 'system', requires: ['users'] },
   { key: 'accessGovernance', ar: 'حوكمة الصلاحيات', en: 'Access Governance', icon: KeyRound, scope: allScopes, requires: ['access'] , group: 'governance' },

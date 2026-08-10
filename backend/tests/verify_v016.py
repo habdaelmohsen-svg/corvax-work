@@ -28,7 +28,7 @@ def ok(response, expected=200):
 with TestClient(app) as client:
     login = ok(client.post("/api/v1/auth/login", json={"email":"admin@corvaxplatform.com","password":"Corvax@123"}))
     admin = {"Authorization": f"Bearer {login['access_token']}"}
-    assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4-r9"
+    assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4-r9.1"
 
     # Create independent approver and security test users.
     cfo = ok(client.post("/api/v1/admin/users", headers=admin, json={

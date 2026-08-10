@@ -20,6 +20,14 @@ const btn={padding:'9px 16px',borderRadius:9,border:'none',background:'var(--acc
 const smallBtn={padding:'4px 10px',borderRadius:7,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:600,fontSize:12} as const;
 const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,padding:12} as const;
 
+function normaliseUsername(value:string){
+  return value.trim().toLowerCase().replace(/\s+/g,'.').replace(/[._-]{2,}/g,'.').replace(/^[._-]+|[._-]+$/g,'');
+}
+function validUsername(value:string){
+  return value.length>=3 && [...value].every((character)=>/[\p{L}\p{N}._-]/u.test(character));
+}
+function validEmail(value:string){return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)}
+
 type Row={id:number;name_ar:string;name_en:string;email:string;username?:string;active:boolean;require_password_change?:boolean;locked_until?:string|null;memberships?:{company_id:number;role:string}[]};
 
 const ROLES:[string,string,string][]=[
@@ -55,19 +63,23 @@ export function UsersPage({ar,companyId}:{ar:boolean;companyId:number}){
   useEffect(()=>{load()},[companyId]);
 
   const create=async()=>{
-    if(!nameAr||!nameEn||!username||!password){setMsg(ar?'الاسمان واسم المستخدم وكلمة المرور إلزامية':'Names, username and password are required');return;}
+    const login=normaliseUsername(username||nameEn);
+    const resolvedEmail=(email.trim()||`${login}@corvax.local`).toLowerCase();
+    if(!nameAr.trim()||!nameEn.trim()||!login||!password){setMsg(ar?'الاسمان وكلمة المرور إلزامية، واسم الدخول يُنشأ تلقائيًا من الاسم الإنجليزي':'Names and password are required; the login is generated from the English name');return;}
+    if(!validUsername(login)){setMsg(ar?'اسم الدخول يجب أن يكون 3 أحرف على الأقل، ويقبل الحروف والأرقام والنقطة والشرطة فقط. مثال: hussein.mahmoud':'Username needs at least 3 characters and may contain letters, numbers, dot, dash or underscore. Example: hussein.mahmoud');return;}
+    if(!validEmail(resolvedEmail)){setMsg(ar?'صيغة البريد غير صحيحة. اتركه فارغًا ليُنشئه النظام تلقائيًا.':'The email format is invalid. Leave it blank to generate one automatically.');return;}
     if(password.length<6){setMsg(ar?'كلمة المرور المؤقتة 6 أحرف على الأقل':'Temporary password needs at least 6 characters');return;}
     setBusy(true);setMsg('');
     try{
-      const body={company_id:companyId,name_ar:nameAr,name_en:nameEn,
-        username:username.trim().toLowerCase(),
-        email:(email.trim()||`${username.trim().toLowerCase()}@corvax.local`).toLowerCase(),
+      const body={company_id:companyId,name_ar:nameAr.trim(),name_en:nameEn.trim(),
+        username:login,
+        email:resolvedEmail,
         password,require_password_change:true,
         memberships:[{company_id:companyId,role_code:role}]};
       const r=await json('/api/v1/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       setMsg(ar
-        ? `تم إنشاء المستخدم "${username}" — سيُطلب منه تغيير كلمة المرور عند أول دخول`
-        : `User "${username}" created — a password change will be required at first sign-in`);
+        ? `تم إنشاء المستخدم "${r.username||login}" — سيُطلب منه تغيير كلمة المرور عند أول دخول`
+        : `User "${r.username||login}" created — a password change will be required at first sign-in`);
       setNameAr('');setNameEn('');setUsername('');setEmail('');setPassword('');await load();
     }catch(e:any){setMsg(String(e.message||e));}finally{setBusy(false);}
   };
@@ -110,14 +122,16 @@ export function UsersPage({ar,companyId}:{ar:boolean;companyId:number}){
     <Panel title={ar?'إضافة مستخدم جديد':'Add a new user'} icon={<UserPlus size={18}/>}>
       <div style={{padding:'8px 12px 0',fontSize:13,opacity:0.8,lineHeight:1.8}}>
         {ar
-          ? 'أدخل اسم مستخدم قصير وكلمة مرور مؤقتة. سيدخل الموظف بهما مرة واحدة، ثم يُجبره النظام على وضع كلمة مرور خاصة به لا تعرفها أنت.'
-          : 'Give the employee a short login name and a temporary password. It works once, then the system forces them to set their own password that you do not know.'}
+          ? 'يُنشئ النظام اسم الدخول تلقائيًا من الاسم الإنجليزي، ويمكنك تعديله. سيدخل الموظف به مع كلمة المرور المؤقتة مرة واحدة، ثم يضع كلمة مرور خاصة به.'
+          : 'The login is generated from the English name and can be edited. The employee uses it with the temporary password once, then sets a private password.'}
       </div>
       <div style={grid}>
         <label>{ar?'الاسم (عربي)':'Name (Arabic)'}<input style={field} value={nameAr} onChange={e=>setNameAr(e.target.value)}/></label>
         <label>{ar?'الاسم (إنجليزي)':'Name (English)'}<input style={field} value={nameEn} onChange={e=>setNameEn(e.target.value)}/></label>
-        <label>{ar?'اسم المستخدم (للدخول)':'Username (for sign-in)'}<input style={field} value={username} onChange={e=>setUsername(e.target.value)} placeholder="ahmed"/></label>
-        <label>{ar?'كلمة المرور المؤقتة':'Temporary password'}<input style={field} value={password} onChange={e=>setPassword(e.target.value)}/></label>
+        <label>{ar?'اسم المستخدم (للدخول) — تلقائي':'Username (for sign-in) — automatic'}<input style={field} value={username} onChange={e=>setUsername(e.target.value)} onBlur={()=>setUsername(normaliseUsername(username||nameEn))} placeholder={normaliseUsername(nameEn)||'hussein.mahmoud'}/>
+          {(username||nameEn)&&<small style={{display:'block',marginTop:4,color:validUsername(normaliseUsername(username||nameEn))?'#166534':'#b91c1c'}}>{ar?'اسم الدخول الفعلي: ':'Actual login: '}<b dir="ltr">{normaliseUsername(username||nameEn)||'—'}</b></small>}
+        </label>
+        <label>{ar?'كلمة المرور المؤقتة':'Temporary password'}<input type="password" style={field} value={password} onChange={e=>setPassword(e.target.value)}/></label>
         <label>{ar?'الدور':'Role'}<select style={field} value={role} onChange={e=>setRole(e.target.value)}>{ROLES.map(([v])=><option key={v} value={v}>{label(v)}</option>)}</select></label>
         <label>{ar?'البريد (اختياري)':'Email (optional)'}<input type="email" style={field} value={email} onChange={e=>setEmail(e.target.value)} placeholder={ar?'يُولَّد تلقائيًا':'auto-generated'}/></label>
       </div>
