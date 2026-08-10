@@ -36,6 +36,7 @@ export function PurchasesPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [pSupplier,setPSupplier]=useState(''); const [pBank,setPBank]=useState(''); const [pAmount,setPAmount]=useState('');
   const [paymentDate,setPaymentDate]=useState(iso()); const [paymentRef,setPaymentRef]=useState(''); const [autoAllocate,setAutoAllocate]=useState(true);
   const [query,setQuery]=useState('');
+  const [duplicateRisk,setDuplicateRisk]=useState<any>(null);
 
   const load=async()=>{
     try{
@@ -55,9 +56,15 @@ export function PurchasesPage({ar,companyId}:{ar:boolean;companyId:number}){
     }catch(e:any){setMessage(String(e.message||e));}
   };
   useEffect(()=>{load()},[companyId]);
+  useEffect(()=>{
+    if(!supplier||!supplierInv.trim()){setDuplicateRisk(null);return}let active=true;
+    const timer=window.setTimeout(()=>{const amount=Number(qty||0)*Number(price||0)*(1+Number(vat||0)/100);json(`/api/v1/procurement/suppliers/${supplier}/invoice-risk?company_id=${companyId}&invoice_number=${encodeURIComponent(supplierInv.trim())}&amount=${amount}`).then(x=>active&&setDuplicateRisk(x)).catch(()=>active&&setDuplicateRisk(null));},250);
+    return()=>{active=false;window.clearTimeout(timer)};
+  },[companyId,supplier,supplierInv,qty,price,vat]);
 
   const createInvoice=async()=>{
     if(!supplier||!price){setMessage(ar?'اختر المورد وأدخل السعر':'Select supplier and price');return;}
+    if(duplicateRisk?.blocking){setMessage(ar?'موقوف رقابيًا: رقم فاتورة المورد مستخدم سابقًا. افتح المطابقات قبل إنشاء فاتورة أخرى.':'Control block: supplier invoice number already exists. Review matches before creating another invoice.');return;}
     setBusy(true);setMessage('');
     try{
       const inv=await json('/api/v1/subledgers/purchase-invoices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_id:companyId,invoice_date:invDate,due_date:due,supplier_id:Number(supplier),supplier_invoice_number:supplierInv||`UI-${Date.now()}`,lines:[{description:desc||'Purchase',account_code:account,quantity:Number(qty),unit_price:Number(price),vat_rate:Number(vat)}]})});
@@ -104,8 +111,9 @@ export function PurchasesPage({ar,companyId}:{ar:boolean;companyId:number}){
         <label>{ar?'سعر الوحدة':'Unit price'}<input data-testid="purchase-invoice-price" type="number" style={field} value={price} onChange={e=>setPrice(e.target.value)}/></label>
         <label>{ar?'الضريبة %':'VAT %'}<input data-testid="purchase-invoice-vat" type="number" style={field} value={vat} onChange={e=>setVat(e.target.value)}/></label>
       </div>
+      {supplierInv.trim()&&<div data-testid="purchase-duplicate-risk" style={{margin:'0 12px 10px',padding:10,borderRadius:9,background:duplicateRisk?.blocking?'#fff1f2':'#ecfdf5',color:duplicateRisk?.blocking?'#9f1239':'#047857',fontWeight:700}}>{duplicateRisk?.blocking?(ar?`فاتورة مكررة محتملة — ${duplicateRisk.match_count} مطابقة؛ الإنشاء موقوف`:`Potential duplicate invoice — ${duplicateRisk.match_count} match(es); creation blocked`):(ar?'لا توجد فاتورة بنفس الرقم لهذا المورد':'No invoice with the same number for this supplier')}</div>}
       <div style={{padding:'0 12px 8px'}}><label><input data-testid="purchase-post-immediately" type="checkbox" checked={postImmediately} onChange={e=>setPostImmediately(e.target.checked)}/> {ar?'ترحيل فورًا (اتركها غير محددة لفصل المُعدّ عن المُرحّل)':'Post immediately (leave off to separate maker from poster)'}</label></div>
-      <div style={{padding:12}}><button data-testid="purchase-invoice-create" style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={createInvoice}>{postImmediately?(ar?'إنشاء وترحيل':'Create & post'):(ar?'حفظ كمسودة':'Save draft')}</button></div>
+      <div style={{padding:12}}><button data-testid="purchase-invoice-create" style={{...btn,opacity:(busy||duplicateRisk?.blocking)?0.6:1}} disabled={busy||Boolean(duplicateRisk?.blocking)} onClick={createInvoice}>{postImmediately?(ar?'إنشاء وترحيل':'Create & post'):(ar?'حفظ كمسودة':'Save draft')}</button></div>
     </Panel>
 
     <Panel title={ar?'سند صرف':'Supplier payment'} icon={<Wallet size={18}/>}>

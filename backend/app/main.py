@@ -72,6 +72,7 @@ from app.api.internal_completion import router as internal_completion_router
 from app.api.ai_assistant import router as ai_assistant_router
 from app.api.system_reports import router as system_reports_router
 from app.api.opening_balances import router as opening_balances_router
+from app.api.r9_platform import router as r9_platform_router
 from app.core.config import settings
 from app.core.migration_head import expected_migration_head
 from app.core.middleware import RateLimitMiddleware, RequestContextMiddleware
@@ -187,6 +188,7 @@ app.include_router(internal_completion_router, prefix="/api/v1")
 app.include_router(ai_assistant_router, prefix="/api/v1")
 app.include_router(system_reports_router, prefix="/api/v1")
 app.include_router(opening_balances_router, prefix="/api/v1")
+app.include_router(r9_platform_router, prefix="/api/v1")
 
 
 @app.get("/health")

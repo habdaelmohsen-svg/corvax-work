@@ -1,5 +1,5 @@
 import {useEffect, useMemo, useState} from 'react';
-import {ClipboardCheck, FileSpreadsheet, Search, Send, Trophy} from 'lucide-react';
+import {AlertTriangle, Building2, ClipboardCheck, FileSpreadsheet, Search, Send, ShieldCheck, Trophy} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel, fmt} from './ui';
 
@@ -42,17 +42,23 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
   const [quoteDate,setQuoteDate]=useState(iso());const [validUntil,setValidUntil]=useState(addDays(30));const [leadDays,setLeadDays]=useState('7');
   const [paymentTerms,setPaymentTerms]=useState('30 days');const [prices,setPrices]=useState<Record<number,string>>({});
   const [awardReason,setAwardReason]=useState('Lowest technically compliant total cost');
+  const [workflow,setWorkflow]=useState<any>({summary:{},rows:[]});const [selectedFlow,setSelectedFlow]=useState<any>(null);
+  const [profileSupplier,setProfileSupplier]=useState('');const [profile,setProfile]=useState<any>(null);
+  const [profileDraft,setProfileDraft]=useState<any>({commercial_registration:'',contact_name:'',contact_email:'',contact_phone:'',payment_terms_days:30,delivery_score:0,quality_score:0,price_score:0,rejection_rate:0});
+  const [pendingIban,setPendingIban]=useState('');
 
   const load=async()=>{
     try{
-      const [pr,rfq,it,wh,pa]=await Promise.all([
+      const [pr,rfq,it,wh,pa,flow]=await Promise.all([
         json(`/api/v1/procurement/requisitions?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/procurement/rfqs?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/inventory/items?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/inventory/warehouses?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/subledgers/parties?company_id=${companyId}&party_type=SUPPLIER`).catch(()=>[]),
+        json(`/api/v1/procurement/workflow-center?company_id=${companyId}`).catch(()=>({summary:{},rows:[]})),
       ]);
-      setRequisitions(pr||[]);setRfqs(rfq||[]);setItems(it||[]);setWarehouses(wh||[]);setSuppliers(pa||[]);
+      setRequisitions(pr||[]);setRfqs(rfq||[]);setItems(it||[]);setWarehouses(wh||[]);setSuppliers(pa||[]);setWorkflow(flow||{summary:{},rows:[]});
+      if(!profileSupplier&&pa?.length)setProfileSupplier(String(pa[0].id));
       if(!warehouse&&wh?.length)setWarehouse(String(wh[0].id));if(!item&&it?.length)setItem(String(it[0].id));
       const approved=(pr||[]).find((x:any)=>x.status==='APPROVED'&&!(rfq||[]).some((q:any)=>q.requisition_id===x.id));
       if(!rfqReq&&approved)setRfqReq(String(approved.id));
@@ -60,6 +66,12 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
     }catch(e:any){setMessage(String(e.message||e))}
   };
   useEffect(()=>{void load()},[companyId]);
+
+  useEffect(()=>{
+    if(!profileSupplier){setProfile(null);return}let active=true;
+    json(`/api/v1/procurement/suppliers/${profileSupplier}/profile?company_id=${companyId}`).then(x=>{if(!active)return;setProfile(x);setProfileDraft({commercial_registration:x.commercial_registration||'',contact_name:x.contact_name||'',contact_email:x.contact_email||'',contact_phone:x.contact_phone||'',payment_terms_days:Number(x.payment_terms_days||30),delivery_score:Number(x.delivery_score||0),quality_score:Number(x.quality_score||0),price_score:Number(x.price_score||0),rejection_rate:Number(x.rejection_rate||0)})}).catch(e=>active&&setMessage(String(e.message||e)));
+    return()=>{active=false};
+  },[companyId,profileSupplier]);
 
   useEffect(()=>{
     if(!item){setLastPurchase(null);return;}
@@ -84,8 +96,8 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
   },[quoteRfq,rfqs]);
 
   const act=async(url:string,method='POST',body?:any,success='')=>{
-    setBusy(true);setMessage('');try{await json(url,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});setMessage(success);await load();}
-    catch(e:any){setMessage(String(e.message||e))}finally{setBusy(false)}
+    setBusy(true);setMessage('');try{const result=await json(url,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});setMessage(success);await load();return result;}
+    catch(e:any){setMessage(String(e.message||e));return null}finally{setBusy(false)}
   };
   const createRequisition=async()=>{
     if(!warehouse||!item||!quantity||!department.trim()||!justification.trim()){setMessage(ar?'أكمل بيانات طلب الشراء':'Complete the requisition');return}
@@ -101,6 +113,9 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
     await act('/api/v1/procurement/quotations','POST',{company_id:companyId,rfq_id:selectedRfq.id,supplier_id:Number(quoteSupplier),supplier_reference:quoteRef,quote_date:quoteDate,valid_until:validUntil,lead_time_days:Number(leadDays)||0,payment_terms:paymentTerms,lines:(selectedRfq.lines||[]).map((l:any)=>({rfq_line_id:l.id,unit_price:Number(prices[l.id]),vat_rate:15}))},ar?'تم تسجيل عرض المورد':'Supplier quotation recorded');
     setQuoteRef('');setPrices({});
   };
+  const saveProfile=async()=>{if(!profileSupplier)return;const x=await act(`/api/v1/procurement/suppliers/${profileSupplier}/profile?company_id=${companyId}`,'PUT',profileDraft,ar?'تم حفظ ملف المورد وسجلت التعديلات للمراجعة':'Supplier profile saved with audit trail');if(x)setProfile(x);};
+  const requestIban=async()=>{if(!profileSupplier||pendingIban.replace(/\s/g,'').length<15){setMessage(ar?'أدخل IBAN صحيحًا':'Enter a valid IBAN');return}const x=await act(`/api/v1/procurement/suppliers/${profileSupplier}/iban-change?company_id=${companyId}`,'POST',{iban:pendingIban,reason:'Supplier bank destination change independently verified by procurement'},ar?'أُرسل تغيير IBAN لاعتماد مستقل؛ السداد على الحساب الجديد محظور حتى الاعتماد':'IBAN change sent for independent approval; new destination remains blocked');if(x)setProfile(x);setPendingIban('');};
+  const approveIban=async()=>{if(!profileSupplier)return;const x=await act(`/api/v1/procurement/suppliers/${profileSupplier}/iban-change/approve?company_id=${companyId}`,'POST',undefined,ar?'تم اعتماد IBAN من مستخدم مستقل':'IBAN independently approved');if(x)setProfile(x);};
   const normalized=search.trim().toLowerCase();
   const shownPr=useMemo(()=>!normalized?requisitions:requisitions.filter(r=>[r.number,r.department,r.justification,r.status,r.suggested_supplier_code,r.suggested_supplier_name_ar,r.suggested_supplier_name_en,r.suggested_supplier_vat_number].join(' ').toLowerCase().includes(normalized)),[requisitions,normalized]);
   const shownRfqs=useMemo(()=>!normalized?rfqs:rfqs.filter(r=>[r.number,r.requisition_number,r.status,...(r.suppliers||[]).map((s:any)=>s.code)].join(' ').toLowerCase().includes(normalized)),[rfqs,normalized]);
@@ -108,6 +123,43 @@ export function ProcurementWorkflowTab({ar,companyId}:{ar:boolean;companyId:numb
   const approvedWithoutRfq=requisitions.filter(r=>r.status==='APPROVED'&&!rfqs.some(q=>q.requisition_id===r.id));
 
   return <>
+    <Panel title={ar?'مركز متابعة دورة الشراء من الاحتياج حتى السداد':'Procure-to-pay workflow control center'} icon={<ShieldCheck size={18}/> }>
+      <div className="kpis" style={{padding:12}}>
+        <Kpi title={ar?'الدورات':'Cycles'} value={String(workflow.summary?.total||0)} trend={ar?'مستندات مترابطة':'Linked documents'} good/>
+        <Kpi title={ar?'مكتملة':'Complete'} value={String(workflow.summary?.complete||0)} trend={ar?'حتى تخصيص السداد':'Through payment allocation'} good/>
+        <Kpi title={ar?'متوقفة +3 أيام':'Stalled +3 days'} value={String(workflow.summary?.stalled||0)} trend={ar?'تحتاج تدخل المالك الحالي':'Current owner action'} good={!workflow.summary?.stalled}/>
+        <Kpi title={ar?'مخاطر رقابية':'Control risks'} value={String(workflow.summary?.at_risk||0)} trend={ar?'سعر/تأخير/استلام/سداد':'Price/delay/receipt/payment'} good={!workflow.summary?.at_risk}/>
+      </div>
+      <DataTable headers={[ar?'طلب الشراء':'PR',ar?'المورد':'Supplier',ar?'المرحلة':'Stage',ar?'المالك الحالي':'Current owner',ar?'مدة التوقف':'Stalled',ar?'القيمة':'Value',ar?'فرق السعر':'Price variance',ar?'الرقابة':'Controls',ar?'التفاصيل':'Drill-through']} rows={(workflow.rows||[]).map((x:any)=>[
+        x.requisition.number,(ar?x.supplier_name_ar:x.supplier_name_en)||'—',x.stage,x.current_owner,`${x.stalled_days} ${ar?'يوم':'days'}`,fmt(Number(x.po_total||x.invoiced_total||0)),x.price_variance_percent==null?'—':`${fmt(Number(x.price_variance_percent))}%`,
+        x.control_flags?.length?<span style={{color:'#b45309',fontWeight:700}}><AlertTriangle size={14}/> {x.control_flags.join(' · ')}</span>:'✓',
+        <button data-testid={`workflow-drill-${x.requisition.id}`} key={x.requisition.id} style={smallBtn} onClick={()=>setSelectedFlow(selectedFlow?.requisition?.id===x.requisition.id?null:x)}>{ar?'فتح التسلسل':'Open timeline'}</button>
+      ])}/>
+      {selectedFlow&&<div data-testid="workflow-drill-through" style={{margin:12,padding:14,border:'1px solid var(--border)',borderRadius:10,background:'var(--panel-2,#f8fafc)'}}>
+        <strong>{selectedFlow.requisition.number} — {ar?'تسلسل المستندات والمبالغ':'Document and amount timeline'}</strong>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:10}}>{[
+          selectedFlow.requisition,selectedFlow.rfq,selectedFlow.purchase_order,...(selectedFlow.receipts||[]),...(selectedFlow.invoices||[]),...(selectedFlow.payments||[]),
+        ].filter(Boolean).map((d:any,i:number)=><span key={`${d.path}-${i}`} style={{padding:'7px 10px',borderRadius:8,border:'1px solid var(--border)'}}>{d.number} · {d.status||'POSTED'}</span>)}</div>
+        <small style={{display:'block',marginTop:10}}>{ar?'المطلوب/المستلم:':'Ordered/received:'} {fmt(Number(selectedFlow.ordered_quantity))}/{fmt(Number(selectedFlow.received_quantity))} · {ar?'مفوتر:':'Invoiced:'} {fmt(Number(selectedFlow.invoiced_total))} · {ar?'مسدد:':'Paid:'} {fmt(Number(selectedFlow.paid_total))} · {ar?'متبقي:':'Outstanding:'} {fmt(Number(selectedFlow.outstanding_total))}</small>
+      </div>}
+    </Panel>
+
+    <Panel title={ar?'ملف المورد الاحترافي والرقابة البنكية':'Professional supplier profile and bank controls'} icon={<Building2 size={18}/> }>
+      <div style={grid}>
+        <label>{ar?'المورد':'Supplier'}<select data-testid="supplier-profile-select" style={field} value={profileSupplier} onChange={e=>setProfileSupplier(e.target.value)}>{suppliers.map(s=><option key={s.id} value={s.id}>{s.code} — {ar?s.name_ar:s.name_en}</option>)}</select></label>
+        <label>{ar?'السجل التجاري':'Commercial registration'}<input style={field} value={profileDraft.commercial_registration} onChange={e=>setProfileDraft({...profileDraft,commercial_registration:e.target.value})}/></label>
+        <label>{ar?'مسؤول التواصل':'Contact'}<input style={field} value={profileDraft.contact_name} onChange={e=>setProfileDraft({...profileDraft,contact_name:e.target.value})}/></label>
+        <label>{ar?'البريد':'Email'}<input style={field} value={profileDraft.contact_email} onChange={e=>setProfileDraft({...profileDraft,contact_email:e.target.value})}/></label>
+        <label>{ar?'الهاتف':'Phone'}<input style={field} value={profileDraft.contact_phone} onChange={e=>setProfileDraft({...profileDraft,contact_phone:e.target.value})}/></label>
+        <label>{ar?'شروط السداد (يوم)':'Payment terms (days)'}<input type="number" style={field} value={profileDraft.payment_terms_days} onChange={e=>setProfileDraft({...profileDraft,payment_terms_days:Number(e.target.value)})}/></label>
+        {(['delivery_score','quality_score','price_score','rejection_rate'] as const).map(k=><label key={k}>{ar?({delivery_score:'الالتزام بالتوريد',quality_score:'الجودة',price_score:'تنافسية السعر',rejection_rate:'نسبة الرفض %'} as any)[k]:k.replace(/_/g,' ')}<input type="number" min="0" max="100" style={field} value={profileDraft[k]} onChange={e=>setProfileDraft({...profileDraft,[k]:Number(e.target.value)})}/></label>)}
+      </div>
+      {profile&&<div style={{padding:'0 12px 10px',display:'flex',gap:14,flexWrap:'wrap'}}><span>{ar?'ضريبي:':'VAT:'} {profile.vat_number||'—'}</span><span>{ar?'التقييم:':'Score:'} {fmt(Number(profile.overall_score||0))}%</span><span>{ar?'الاستلامات:':'Receipts:'} {profile.receipt_count}</span><span>{ar?'قيمة الاستلامات:':'Received value:'} {fmt(Number(profile.lifetime_received_value||0))}</span><span>{ar?'الفواتير:':'Invoices:'} {profile.invoice_count}</span></div>}
+      {profile?.item_price_indicators?.length>0&&<DataTable headers={[ar?'الصنف':'Item',ar?'آخر سعر فعلي':'Last actual price',ar?'متوسط آخر 3':'Average last 3',ar?'متوسط آخر 5':'Average last 5',ar?'آخر استلام':'Last receipt']} rows={profile.item_price_indicators.map((x:any)=>[`${x.item_code} — ${ar?x.item_name_ar:x.item_name_en}`,fmt(Number(x.last_price)),fmt(Number(x.average_last_3_prices)),fmt(Number(x.average_last_5_prices)),x.last_receipt_date])}/>}
+      <div style={{padding:'0 12px 12px',display:'flex',gap:8,alignItems:'end',flexWrap:'wrap'}}><button data-testid="supplier-profile-save" style={btn} disabled={busy} onClick={saveProfile}>{ar?'حفظ الملف':'Save profile'}</button><label style={{minWidth:260}}>{ar?'طلب IBAN جديد (لا يُفعّل قبل الاعتماد)':'New IBAN request (inactive until approval)'}<input data-testid="supplier-iban-input" style={field} value={pendingIban} onChange={e=>setPendingIban(e.target.value)}/></label><button data-testid="supplier-iban-request" style={{...btn,background:'#b45309'}} disabled={busy} onClick={requestIban}>{ar?'إرسال للمراجعة':'Request review'}</button>{profile?.iban_status==='PENDING_APPROVAL'&&<button data-testid="supplier-iban-approve" style={{...btn,background:'#047857'}} disabled={busy} onClick={approveIban}>{ar?'اعتماد مستقل':'Independent approve'}</button>}</div>
+      {profile&&<div data-testid="supplier-iban-risk" style={{padding:12,background:profile.iban_change_risk==='HIGH'?'#fff1f2':'var(--panel-2,#f8fafc)'}}>{ar?'حالة IBAN:':'IBAN status:'} <strong>{profile.iban_status}</strong> · {ar?'المعتمد:':'Approved:'} {profile.approved_iban_masked||'—'} · {ar?'المعلق:':'Pending:'} {profile.pending_iban_masked||'—'} · {ar?'المخاطر:':'Risk:'} <strong>{profile.iban_change_risk}</strong></div>}
+    </Panel>
+
     <div className="kpis">
       <Kpi title={ar?'طلبات الشراء':'Requisitions'} value={String(requisitions.length)} trend={ar?'من الاحتياج حتى الاعتماد':'Need to approval'} good/>
       <Kpi title={ar?'طلبات عروض الأسعار':'RFQs'} value={String(rfqs.length)} trend={ar?'منافسة موثقة':'Documented competition'} good/>

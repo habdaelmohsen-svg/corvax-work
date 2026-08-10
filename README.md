@@ -1,12 +1,12 @@
-# CORVAX v1.0 Agreement Completion RC27.4 R8
+# CORVAX v1.0 Agreement Completion RC27.4 R9
 
 هذه الحزمة هي خط الأساس المصحح بعد RC27.
 
 ## بيانات الإصدار المعتمدة
 
-- Version: `1.0.0-agreement-completion-rc27.4-r8`
-- Migration head: `e20400000001`
-- Frontend production build: `2,041` modules — PASSED
+- Version: `1.0.0-agreement-completion-rc27.4-r9`
+- Migration head: `e20500000001`
+- Frontend production build: `2,042` modules — PASSED
 - Backend compilation: PASSED
 - Security, branch scope, health, RC20, RC21 and RC25 verification: PASSED in the RC27.2 execution round
 - Migration head, readiness and release info are now derived from Alembic at runtime, not hard-coded
@@ -17,7 +17,7 @@
 
 The internal software scope is complete for controlled staging, pilot and UAT. Production approval remains evidence-driven and cannot be asserted from code alone. It requires a real PostgreSQL staging/production environment, sanitized or approved real data, signed UAT, parallel operation, independent penetration/accounting/tax reviews and official credentials for ZATCA, banks, WPS/Mudad, Qiwa, Muqeem and GOSI.
 
-Apply migrations through `e20400000001`; use `backend/.env.production.template`; do not enable demo seeding, Demo-data reset, or automatic schema creation in production.
+Apply migrations through `e20500000001`; use `backend/.env.production.template`; do not enable demo seeding, Demo-data reset, or automatic schema creation in production.
 
 ## RC27.4 R8 Owner Findings Closure
 
@@ -25,7 +25,7 @@ Apply migrations through `e20400000001`; use `backend/.env.production.template`;
 - The read-only system assistant wraps long answers and sources without horizontal overflow.
 - Purchase requisitions can carry an optional suggested supplier, show its VAT number, and retrieve the latest actual posted GRN purchase price.
 - Item classification and IAS 2 NRV assessment are located under Inventory & Warehouses, not shipment tracking.
-- Clean verification gate: `63/63` scenarios passed; migration head: `e20400000001`.
+- R9 verification gate: `69/69` scripts passed in `683.5s`; migration head `e20500000001`.
 
 ## Comprehensive Reporting Center
 

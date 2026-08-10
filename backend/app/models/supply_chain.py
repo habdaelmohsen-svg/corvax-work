@@ -283,8 +283,46 @@ class SupplierQuotationLine(Base):
     rfq_line = relationship("RFQLine", lazy="joined")
 
 
+class SupplierProcurementProfile(Base):
+    """Controlled supplier attributes that do not belong in the AP party card.
+
+    Banking changes deliberately use a pending/approved pair so the maker can
+    never silently replace the payment destination used by treasury.
+    """
+    __tablename__ = "supplier_procurement_profiles"
+    __table_args__ = (
+        UniqueConstraint("company_id", "supplier_id", name="uq_supplier_procurement_profile"),
+    )
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_id = Column(Integer, ForeignKey("parties.id", ondelete="CASCADE"), nullable=False, index=True)
+    commercial_registration = Column(String(80))
+    contact_name = Column(String(160))
+    contact_email = Column(String(254))
+    contact_phone = Column(String(40))
+    payment_terms_days = Column(Integer, nullable=False, default=30)
+    delivery_score = Column(Numeric(5, 2), nullable=False, default=0)
+    quality_score = Column(Numeric(5, 2), nullable=False, default=0)
+    price_score = Column(Numeric(5, 2), nullable=False, default=0)
+    rejection_rate = Column(Numeric(7, 4), nullable=False, default=0)
+    approved_iban = Column(EncryptedString(1024))
+    pending_iban = Column(EncryptedString(1024))
+    iban_status = Column(String(25), nullable=False, default="NOT_PROVIDED", index=True)
+    iban_change_risk = Column(String(20), nullable=False, default="NONE", index=True)
+    iban_change_requested_by = Column(Integer, ForeignKey("users.id"))
+    iban_change_requested_at = Column(DateTime)
+    iban_approved_by = Column(Integer, ForeignKey("users.id"))
+    iban_approved_at = Column(DateTime)
+    active = Column(Boolean, nullable=False, default=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    supplier = relationship("Party", lazy="joined")
+
+
 # -------------------- IFRS 15 / gym contracts --------------------
 
 __all__ = ['Warehouse', 'Item', 'StockMovement', 'PurchaseOrder', 'PurchaseOrderLine', 'GoodsReceipt', 'GoodsReceiptLine',
            'PurchaseRequisition', 'PurchaseRequisitionLine', 'RequestForQuotation', 'RFQSupplier', 'RFQLine',
-           'SupplierQuotation', 'SupplierQuotationLine']
+           'SupplierQuotation', 'SupplierQuotationLine', 'SupplierProcurementProfile']

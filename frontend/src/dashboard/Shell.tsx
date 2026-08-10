@@ -148,7 +148,7 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
           <div><strong>{userName}</strong><span>{ar ? 'مستخدم معتمد' : 'Authorized user'}</span></div>
           <button className="logout-icon" onClick={onLogout} title={ar ? 'تسجيل الخروج' : 'Logout'}><LogOut size={17}/></button>
         </div>
-        <div className="version-line"><span>© 2026 CORVAX</span><b>RC27.4 · R8</b></div>
+        <div className="version-line"><span>© 2026 CORVAX</span><b>RC27.4 · R9</b></div>
       </div>
     </aside>
 

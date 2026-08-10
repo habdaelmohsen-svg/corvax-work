@@ -25,7 +25,7 @@ with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'}))
     h={'Authorization':f"Bearer {login['access_token']}"}
     health=ok(c.get('/health'))
-    assert health['version']=='1.0.0-agreement-completion-rc27.4'
+    assert health['version']=='1.0.0-agreement-completion-rc27.4-r9'
 
     # Open 2026 periods for the year-end verification scenario.
     with SessionLocal() as db:

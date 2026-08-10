@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {Boxes, Warehouse as WarehouseIcon, ShoppingCart, PackageCheck, ArrowLeftRight, FileText, Plus} from 'lucide-react';
+import {AlertTriangle, Boxes, Warehouse as WarehouseIcon, ShoppingCart, PackageCheck, ArrowLeftRight, FileText, Plus} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel, fmt} from './ui';
 import {InventoryValuationControls} from './inventoryValuationControls';
@@ -15,6 +15,7 @@ type Party={id:number;code?:string;name_ar:string;name_en:string;party_type:stri
 type PO={id:number;number:string;order_date:string;status:string;total?:number;supplier?:string;received_percent?:number};
 type GRN={id:number;number:string;receipt_date:string;purchase_order_number:string;warehouse:string;total_cost:number;purchase_invoice_id?:number|null};
 type Stock={item_code?:string;item_name_ar?:string;warehouse_code?:string;quantity?:number;value?:number};
+type InventoryAlert={type:string;severity:string;reference:string;message_ar:string;message_en:string;quantity?:number;threshold?:number;days?:number};
 
 async function json(url:string,init?:RequestInit){
   const r=await apiFetch(url,init); const x=await r.json().catch(()=>({}));
@@ -33,13 +34,14 @@ const smallBtn={padding:'4px 11px',borderRadius:7,border:'none',background:'var(
 const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(185px,1fr))',gap:12,padding:12} as const;
 
 export function InventoryPage({ar,companyId}:{ar:boolean;companyId:number}){
-  const [tab,setTab]=useState<'stock'|'orders'|'moves'|'warehouses'|'classify'|'nrv'>('stock');
+  const [tab,setTab]=useState<'stock'|'orders'|'moves'|'warehouses'|'classify'|'nrv'|'alerts'>('stock');
   const [warehouses,setWarehouses]=useState<WH[]>([]);
   const [items,setItems]=useState<Item[]>([]);
   const [suppliers,setSuppliers]=useState<Party[]>([]);
   const [orders,setOrders]=useState<PO[]>([]);
   const [receipts,setReceipts]=useState<GRN[]>([]);
   const [stock,setStock]=useState<Stock[]>([]);
+  const [alerts,setAlerts]=useState<InventoryAlert[]>([]);
   const [msg,setMsg]=useState(''); const [err,setErr]=useState(false); const [busy,setBusy]=useState(false);
   // purchase order
   const [poSupplier,setPoSupplier]=useState(''); const [poWh,setPoWh]=useState(''); const [poDate,setPoDate]=useState(iso());
@@ -60,18 +62,20 @@ export function InventoryPage({ar,companyId}:{ar:boolean;companyId:number}){
 
   const load=async()=>{
     try{
-      const [w,i,p,o,s,g]=await Promise.all([
+      const [w,i,p,o,s,g,a]=await Promise.all([
         json(`/api/v1/inventory/warehouses?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/inventory/items?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/subledgers/parties?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/inventory/purchase-orders?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/inventory/stock-summary?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/inventory/goods-receipts?company_id=${companyId}`).catch(()=>[]),
+        json(`/api/v1/inventory/alerts?company_id=${companyId}`).catch(()=>({alerts:[]})),
       ]);
       setWarehouses(Array.isArray(w)?w:[]); setItems(Array.isArray(i)?i:[]);
       setSuppliers((Array.isArray(p)?p:[]).filter((x:Party)=>x.party_type==='SUPPLIER'));
       setOrders(Array.isArray(o)?o:[]); setStock(Array.isArray(s)?s:[]);
       setReceipts(Array.isArray(g)?g:[]);
+      setAlerts(Array.isArray(a?.alerts)?a.alerts:[]);
       if(!poWh&&w?.length)setPoWh(String(w[0].id));
       if(!isWh&&w?.length)setIsWh(String(w[0].id));
       if(!trFrom&&w?.length)setTrFrom(String(w[0].id));
@@ -207,12 +211,14 @@ export function InventoryPage({ar,companyId}:{ar:boolean;companyId:number}){
       <Kpi title={ar?'الأصناف':'Items'} value={String(items.length)} trend="" good icon={<Boxes size={22}/>} tone="violet"/>
       <Kpi title={ar?'أوامر شراء مفتوحة':'Open orders'} value={String(openPOs)} trend="" good={openPOs===0} icon={<ShoppingCart size={22}/>} tone="amber"/>
       <Kpi title={ar?'قيمة المخزون':'Stock value'} value={fmt(totalValue)} trend="" good icon={<PackageCheck size={22}/>} tone="green"/>
+      <Kpi title={ar?'تنبيهات المخزون':'Inventory alerts'} value={String(alerts.length)} trend="" good={alerts.length===0} icon={<AlertTriangle size={22}/>} tone="amber"/>
     </div>
 
     <div style={{display:'flex',gap:8,margin:'14px 0',flexWrap:'wrap'}}>
       {([['stock',ar?'الأرصدة':'Stock'],['orders',ar?'دورة الشراء':'Purchase cycle'],
          ['moves',ar?'الصرف والتحويل':'Issues & transfers'],['warehouses',ar?'المستودعات':'Warehouses'],
-         ['classify',ar?'تصنيف الأصناف':'Item classification'],['nrv',ar?'تقييم NRV':'NRV assessment']] as [typeof tab,string][])
+         ['classify',ar?'تصنيف الأصناف':'Item classification'],['nrv',ar?'تقييم NRV':'NRV assessment'],
+         ['alerts',ar?'التنبيهات':'Alerts']] as [typeof tab,string][])
         .map(([k,l])=><button key={k} onClick={()=>setTab(k)}
           style={{...btn,background:tab===k?'var(--accent, #1e40af)':'transparent',
             color:tab===k?'#fff':'var(--text)',border:'1px solid var(--border)'}}>{l}</button>)}
@@ -224,6 +230,12 @@ export function InventoryPage({ar,companyId}:{ar:boolean;companyId:number}){
     {tab==='stock'&&<Panel title={ar?'أرصدة المخزون':'Stock balances'} icon={<Boxes size={18}/>}>
       <DataTable headers={[ar?'الصنف':'Item',ar?'المستودع':'Warehouse',ar?'الكمية':'Quantity',ar?'القيمة':'Value']}
         rows={stock.map(s=>[s.item_code||'—',s.warehouse_code||'—',fmt(Number(s.quantity||0)),fmt(Number(s.value||0))])}/>
+    </Panel>}
+
+    {tab==='alerts'&&<Panel title={ar?'تنبيهات المخزون والتوريد':'Inventory & procurement alerts'} icon={<AlertTriangle size={18}/> }>
+      <div style={{padding:'8px 12px 0',fontSize:13,opacity:.8}}>{ar?'تُحتسب من أوامر الشراء والكميات وحدود إعادة الطلب وتواريخ التشغيلات وآخر حركة فعلية.':'Calculated from POs, quantities, reorder levels, lot expiry and actual last movement.'}</div>
+      <DataTable headers={[ar?'الأولوية':'Severity',ar?'النوع':'Type',ar?'المرجع':'Reference',ar?'التفاصيل':'Details']}
+        rows={alerts.map((row,index)=>[<span key={index} style={{fontWeight:700,color:row.severity==='CRITICAL'?'#b91c1c':row.severity==='HIGH'?'#c2410c':'#a16207'}}>{row.severity}</span>,row.type,row.reference,ar?row.message_ar:row.message_en])}/>
     </Panel>}
 
     {tab==='orders'&&<>

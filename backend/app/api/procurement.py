@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -16,6 +16,9 @@ from app.models import (
     PurchaseRequisitionLine, RequestForQuotation, RFQLine, RFQSupplier,
     SupplierQuotation, SupplierQuotationLine, User, Warehouse,
 )
+from app.models.ar_ap_allocation import FinancialOpenItem, FinancialSettlementAllocation
+from app.models.finance import Payment, PurchaseInvoice, PurchaseInvoiceLine
+from app.models.supply_chain import SupplierProcurementProfile
 from app.services.audit import write_audit
 from app.services.operations import get_item, get_warehouse, money, quantity
 
@@ -76,6 +79,23 @@ class AwardIn(BaseModel):
     award_reason: str = Field(min_length=5, max_length=500)
 
 
+class SupplierProfileIn(BaseModel):
+    commercial_registration: str | None = Field(default=None, max_length=80)
+    contact_name: str | None = Field(default=None, max_length=160)
+    contact_email: str | None = Field(default=None, max_length=254)
+    contact_phone: str | None = Field(default=None, max_length=40)
+    payment_terms_days: int = Field(default=30, ge=0, le=730)
+    delivery_score: Decimal = Field(default=0, ge=0, le=100)
+    quality_score: Decimal = Field(default=0, ge=0, le=100)
+    price_score: Decimal = Field(default=0, ge=0, le=100)
+    rejection_rate: Decimal = Field(default=0, ge=0, le=100)
+
+
+class IbanChangeIn(BaseModel):
+    iban: str = Field(min_length=15, max_length=34, pattern=r"^[A-Za-z0-9 ]+$")
+    reason: str = Field(min_length=10, max_length=500)
+
+
 def _number(db: Session, model, company_id: int, prefix: str, year: int) -> str:
     count = db.scalar(select(func.count(model.id)).where(model.company_id == company_id)) or 0
     return f"{prefix}-{company_id}-{year}-{count + 1:06d}"
@@ -93,7 +113,7 @@ def _supplier(db: Session, company_id: int, supplier_id: int) -> Party:
     return row
 
 
-def _latest_received_purchase(db: Session, company_id: int, item_id: int, supplier_id: int | None = None) -> dict | None:
+def _latest_received_purchase(db: Session, company_id: int, item_id: int, supplier_id: int | None = None, before_date: date | None = None) -> dict | None:
     """Latest actual receipt price, never a draft or unreceived quotation.
 
     A purchase-order price is a commitment; the goods-receipt line is the
@@ -124,6 +144,8 @@ def _latest_received_purchase(db: Session, company_id: int, item_id: int, suppli
     )
     if supplier_id is not None:
         query = query.where(PurchaseOrder.supplier_id == supplier_id)
+    if before_date is not None:
+        query = query.where(GoodsReceipt.receipt_date < before_date)
     result = db.execute(
         query.order_by(GoodsReceipt.receipt_date.desc(), GoodsReceiptLine.id.desc()).limit(1)
     ).first()
@@ -201,6 +223,85 @@ def _quote_dict(row: SupplierQuotation) -> dict:
             "line_total": line.line_total,
         } for line in row.lines],
     }
+
+
+def _mask_iban(value: str | None) -> str | None:
+    compact = "".join(str(value or "").split()).upper()
+    return f"{compact[:2]}••••••••{compact[-4:]}" if compact else None
+
+
+def _profile_dict(row: SupplierProcurementProfile, db: Session) -> dict:
+    supplier = row.supplier
+    receipt_stats = db.execute(
+        select(
+            func.count(GoodsReceipt.id),
+            func.max(GoodsReceipt.receipt_date),
+            func.coalesce(func.sum(GoodsReceipt.total_cost), 0),
+        )
+        .join(PurchaseOrder, PurchaseOrder.id == GoodsReceipt.purchase_order_id)
+        .where(PurchaseOrder.company_id == row.company_id, PurchaseOrder.supplier_id == row.supplier_id, GoodsReceipt.status == "POSTED")
+    ).one()
+    received_price_rows = db.execute(
+        select(GoodsReceiptLine.item_id, Item.code, Item.name_ar, Item.name_en, GoodsReceiptLine.unit_cost, GoodsReceipt.receipt_date)
+        .join(GoodsReceipt, GoodsReceipt.id == GoodsReceiptLine.goods_receipt_id)
+        .join(PurchaseOrder, PurchaseOrder.id == GoodsReceipt.purchase_order_id)
+        .join(Item, Item.id == GoodsReceiptLine.item_id)
+        .where(PurchaseOrder.company_id == row.company_id, PurchaseOrder.supplier_id == row.supplier_id, GoodsReceipt.status == "POSTED")
+        .order_by(GoodsReceipt.receipt_date.desc(), GoodsReceiptLine.id.desc())
+    ).all()
+    grouped_prices: dict[int, dict] = {}
+    for item_id, code, name_ar, name_en, unit_cost, receipt_date in received_price_rows:
+        bucket = grouped_prices.setdefault(item_id, {"item_id": item_id, "item_code": code, "item_name_ar": name_ar, "item_name_en": name_en, "prices": [], "last_receipt_date": receipt_date})
+        if len(bucket["prices"]) < 5: bucket["prices"].append(Decimal(unit_cost))
+    item_price_indicators = []
+    for bucket in grouped_prices.values():
+        values = bucket.pop("prices")
+        item_price_indicators.append(bucket | {"last_price": values[0],
+            "average_last_3_prices": money(sum(values[:3], Decimal("0")) / len(values[:3])),
+            "average_last_5_prices": money(sum(values, Decimal("0")) / len(values))})
+    invoice_count = db.scalar(select(func.count(PurchaseInvoice.id)).where(
+        PurchaseInvoice.company_id == row.company_id, PurchaseInvoice.supplier_id == row.supplier_id,
+    )) or 0
+    return {
+        "id": row.id, "company_id": row.company_id, "supplier_id": row.supplier_id,
+        "supplier_code": supplier.code, "supplier_name_ar": supplier.name_ar,
+        "supplier_name_en": supplier.name_en, "vat_number": supplier.vat_number,
+        "credit_limit": supplier.credit_limit, "active": bool(row.active and supplier.active),
+        "commercial_registration": row.commercial_registration,
+        "contact_name": row.contact_name, "contact_email": row.contact_email, "contact_phone": row.contact_phone,
+        "payment_terms_days": row.payment_terms_days,
+        "delivery_score": row.delivery_score, "quality_score": row.quality_score,
+        "price_score": row.price_score, "rejection_rate": row.rejection_rate,
+        "overall_score": money((Decimal(row.delivery_score) + Decimal(row.quality_score) + Decimal(row.price_score)) / Decimal("3")),
+        "iban_status": row.iban_status, "iban_change_risk": row.iban_change_risk,
+        "approved_iban_masked": _mask_iban(row.approved_iban), "pending_iban_masked": _mask_iban(row.pending_iban),
+        "iban_change_requested_by": row.iban_change_requested_by,
+        "iban_change_requested_at": row.iban_change_requested_at,
+        "iban_approved_by": row.iban_approved_by, "iban_approved_at": row.iban_approved_at,
+        "receipt_count": receipt_stats[0], "last_receipt_date": receipt_stats[1],
+        "lifetime_received_value": money(receipt_stats[2]), "invoice_count": invoice_count,
+        "item_price_indicators": item_price_indicators,
+    }
+
+
+def _get_or_create_profile(db: Session, company_id: int, supplier: Party, user_id: int) -> SupplierProcurementProfile:
+    row = db.scalar(select(SupplierProcurementProfile).where(
+        SupplierProcurementProfile.company_id == company_id,
+        SupplierProcurementProfile.supplier_id == supplier.id,
+    ))
+    if row is None:
+        row = SupplierProcurementProfile(company_id=company_id, supplier_id=supplier.id, created_by=user_id, updated_by=user_id)
+        db.add(row); db.flush()
+    return row
+
+
+def _age_days(moment: datetime | None) -> int:
+    if not moment:
+        return 0
+    now = utc_now()
+    if getattr(moment, "tzinfo", None) is None and getattr(now, "tzinfo", None) is not None:
+        now = now.replace(tzinfo=None)
+    return max(0, (now - moment).days)
 
 
 def _rfq_dict(row: RequestForQuotation) -> dict:
@@ -299,6 +400,167 @@ def list_requisitions(company_id: int, status: str | None = None, q: str | None 
         query = query.where(or_(func.lower(PurchaseRequisition.number).like(term), func.lower(PurchaseRequisition.department).like(term), func.lower(PurchaseRequisition.justification).like(term)))
     rows = db.scalars(query.order_by(PurchaseRequisition.created_at.desc(), PurchaseRequisition.id.desc())).all()
     return [_req_dict(row) for row in rows]
+
+
+@router.get("/workflow-center")
+def procurement_workflow_center(
+    company_id: int,
+    q: str | None = Query(default=None, max_length=100),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Auditor-friendly PR-to-payment control tower with document drill-through."""
+    ensure_permission(db, user, company_id, "inventory.read")
+    query = _req_query().where(PurchaseRequisition.company_id == company_id)
+    if q and q.strip():
+        term = f"%{q.strip().lower()}%"
+        query = query.where(or_(func.lower(PurchaseRequisition.number).like(term), func.lower(PurchaseRequisition.department).like(term)))
+    requisitions = db.scalars(query.order_by(PurchaseRequisition.created_at.desc())).unique().all()
+    rows = []
+    for req in requisitions:
+        rfq = db.scalar(_rfq_query().where(RequestForQuotation.requisition_id == req.id))
+        po = db.scalar(select(PurchaseOrder).options(selectinload(PurchaseOrder.lines)).where(PurchaseOrder.source_requisition_id == req.id))
+        receipts = db.scalars(select(GoodsReceipt).where(GoodsReceipt.purchase_order_id == po.id).order_by(GoodsReceipt.receipt_date) if po else select(GoodsReceipt).where(False)).all()
+        receipt_ids = [x.id for x in receipts]
+        invoices = []
+        if receipt_ids:
+            invoices = db.scalars(
+                select(PurchaseInvoice).distinct()
+                .outerjoin(GoodsReceipt, GoodsReceipt.purchase_invoice_id == PurchaseInvoice.id)
+                .outerjoin(PurchaseInvoiceLine, PurchaseInvoiceLine.invoice_id == PurchaseInvoice.id)
+                .outerjoin(GoodsReceiptLine, GoodsReceiptLine.id == PurchaseInvoiceLine.goods_receipt_line_id)
+                .where(or_(GoodsReceipt.id.in_(receipt_ids), GoodsReceiptLine.goods_receipt_id.in_(receipt_ids)))
+                .order_by(PurchaseInvoice.invoice_date)
+            ).all()
+        open_items = db.scalars(select(FinancialOpenItem).where(
+            FinancialOpenItem.company_id == company_id,
+            FinancialOpenItem.ledger_type == "AP",
+            FinancialOpenItem.source_type == "PURCHASE_INVOICE",
+            FinancialOpenItem.source_id.in_([x.id for x in invoices]) if invoices else False,
+        )).all()
+        allocations = db.scalars(select(FinancialSettlementAllocation).where(
+            FinancialSettlementAllocation.open_item_id.in_([x.id for x in open_items]) if open_items else False,
+            FinancialSettlementAllocation.reversed_at.is_(None),
+        )).all()
+        payments = db.scalars(select(Payment).where(Payment.id.in_({x.payment_id for x in allocations if x.payment_id}))).all() if allocations else []
+        received_qty = sum((Decimal(line.quantity) for rec in receipts for line in rec.lines), Decimal("0"))
+        ordered_qty = sum((Decimal(line.quantity) for line in po.lines), Decimal("0")) if po else Decimal("0")
+        allocated = sum((Decimal(x.amount) for x in allocations), Decimal("0"))
+        invoiced = sum((Decimal(x.total) for x in invoices), Decimal("0"))
+        outstanding = max(Decimal("0"), invoiced - allocated)
+        stage, owner, since = "REQUISITION", "REQUESTER", req.created_at
+        if req.status == "SUBMITTED": stage, owner, since = "REQUISITION_APPROVAL", "PROCUREMENT_APPROVER", req.submitted_at
+        elif req.status == "APPROVED" and not rfq: stage, owner, since = "SOURCING", "BUYER", req.approved_at
+        elif rfq and rfq.status in {"DRAFT", "ISSUED"}: stage, owner, since = "RFQ", "BUYER" if rfq.status == "DRAFT" else "SUPPLIERS", rfq.created_at if rfq.status == "DRAFT" else rfq.issued_at
+        elif rfq and rfq.status == "AWARDED" and po and po.status == "DRAFT": stage, owner, since = "PO_APPROVAL", "PROCUREMENT_APPROVER", po.created_at
+        elif po and received_qty < ordered_qty: stage, owner, since = "RECEIPT", "WAREHOUSE", max((x.created_at for x in receipts), default=po.created_at)
+        elif receipts and not invoices: stage, owner, since = "INVOICE", "ACCOUNTS_PAYABLE", max(x.created_at for x in receipts)
+        elif invoices and outstanding > 0: stage, owner, since = "PAYMENT", "TREASURY", max(x.created_at for x in invoices)
+        elif invoices and outstanding == 0: stage, owner, since = "COMPLETE", "CLOSED", max((x.created_at for x in payments), default=max(x.created_at for x in invoices))
+        supplier = po.supplier if po else (rfq.quotations[0].supplier if rfq and rfq.quotations else req.suggested_supplier)
+        price_indicators = []
+        for line in po.lines if po else []:
+            historical = _latest_received_purchase(db, company_id, line.item_id, po.supplier_id, before_date=po.order_date)
+            variance = None
+            if historical and Decimal(historical["unit_price"]):
+                variance = money((Decimal(line.unit_price) - Decimal(historical["unit_price"])) / Decimal(historical["unit_price"]) * 100)
+            price_indicators.append({"item_id": line.item_id, "current_unit_price": line.unit_price,
+                                     "last_received_unit_price": historical["unit_price"] if historical else None,
+                                     "last_receipt_number": historical["goods_receipt_number"] if historical else None,
+                                     "variance_percent": variance})
+        positive_variances = [Decimal(x["variance_percent"]) for x in price_indicators if x["variance_percent"] is not None]
+        variance = max(positive_variances) if positive_variances else None
+        rows.append({
+            "requisition": {"id": req.id, "number": req.number, "status": req.status, "path": f"/purchases?pr={req.id}"},
+            "rfq": {"id": rfq.id, "number": rfq.number, "status": rfq.status, "path": f"/purchases?rfq={rfq.id}"} if rfq else None,
+            "purchase_order": {"id": po.id, "number": po.number, "status": po.status, "path": f"/inventory?po={po.id}"} if po else None,
+            "receipts": [{"id": x.id, "number": x.number, "status": x.status, "path": f"/inventory?grn={x.id}"} for x in receipts],
+            "invoices": [{"id": x.id, "number": x.number, "status": x.status, "supplier_invoice_number": x.supplier_invoice_number, "path": f"/purchases?invoice={x.id}"} for x in invoices],
+            "payments": [{"id": x.id, "number": x.number, "path": f"/purchases?payment={x.id}"} for x in payments],
+            "department": req.department, "needed_by": req.needed_by,
+            "supplier_id": supplier.id if supplier else None,
+            "supplier_code": supplier.code if supplier else None,
+            "supplier_name_ar": supplier.name_ar if supplier else None,
+            "supplier_name_en": supplier.name_en if supplier else None,
+            "supplier_vat_number": supplier.vat_number if supplier else None,
+            "stage": stage, "current_owner": owner, "stalled_days": _age_days(since), "stage_since": since,
+            "ordered_quantity": ordered_qty, "received_quantity": received_qty,
+            "po_total": po.total if po else None, "invoiced_total": money(invoiced),
+            "paid_total": money(allocated), "outstanding_total": money(outstanding),
+            "price_indicators": price_indicators,
+            "price_variance_percent": variance,
+            "control_flags": [
+                *(["OVERDUE_NEEDED_DATE"] if req.needed_by < date.today() and stage != "COMPLETE" else []),
+                *(["PRICE_INCREASE"] if variance is not None and Decimal(variance) > 5 else []),
+                *(["RECEIPT_SHORTFALL"] if po and received_qty < ordered_qty else []),
+                *(["UNPAID_INVOICE"] if invoices and outstanding > 0 else []),
+            ],
+        })
+    return {"company_id": company_id, "generated_at": utc_now(), "rows": rows,
+            "summary": {"total": len(rows), "complete": sum(x["stage"] == "COMPLETE" for x in rows),
+                        "stalled": sum(x["stalled_days"] >= 3 and x["stage"] != "COMPLETE" for x in rows),
+                        "at_risk": sum(bool(x["control_flags"]) for x in rows)}}
+
+
+@router.get("/suppliers/{supplier_id}/profile")
+def get_supplier_profile(supplier_id: int, company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "inventory.read")
+    supplier = _supplier(db, company_id, supplier_id)
+    row = db.scalar(select(SupplierProcurementProfile).where(SupplierProcurementProfile.company_id == company_id, SupplierProcurementProfile.supplier_id == supplier.id))
+    if row is None:
+        row = SupplierProcurementProfile(company_id=company_id, supplier_id=supplier.id, created_by=user.id, updated_by=user.id)
+        row.supplier = supplier
+    return _profile_dict(row, db)
+
+
+@router.put("/suppliers/{supplier_id}/profile")
+def update_supplier_profile(supplier_id: int, company_id: int, data: SupplierProfileIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "procurement.manage")
+    supplier = _supplier(db, company_id, supplier_id)
+    row = _get_or_create_profile(db, company_id, supplier, user.id)
+    before = {key: str(getattr(row, key, None)) for key in data.model_fields}
+    for key, value in data.model_dump().items(): setattr(row, key, value.strip() if isinstance(value, str) else value)
+    row.updated_by = user.id
+    write_audit(db, action="SUPPLIER_PROFILE_UPDATED", entity_type="SUPPLIER_PROCUREMENT_PROFILE", entity_id=row.id, user_id=user.id, company_id=company_id, before=before, after={k: str(v) for k, v in data.model_dump().items()})
+    db.commit(); return _profile_dict(row, db)
+
+
+@router.post("/suppliers/{supplier_id}/iban-change")
+def request_supplier_iban_change(supplier_id: int, company_id: int, data: IbanChangeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "procurement.manage")
+    supplier = _supplier(db, company_id, supplier_id); row = _get_or_create_profile(db, company_id, supplier, user.id)
+    iban = "".join(data.iban.split()).upper()
+    if row.approved_iban and iban == row.approved_iban: raise HTTPException(409, "IBAN is already approved")
+    row.pending_iban = iban; row.iban_status = "PENDING_APPROVAL"
+    row.iban_change_risk = "HIGH" if row.approved_iban else "MEDIUM"
+    row.iban_change_requested_by = user.id; row.iban_change_requested_at = utc_now(); row.updated_by = user.id
+    write_audit(db, action="SUPPLIER_IBAN_CHANGE_REQUESTED", entity_type="SUPPLIER_PROCUREMENT_PROFILE", entity_id=row.id, user_id=user.id, company_id=company_id, after={"supplier": supplier.code, "iban_masked": _mask_iban(iban), "risk": row.iban_change_risk, "reason": data.reason})
+    db.commit(); return _profile_dict(row, db)
+
+
+@router.post("/suppliers/{supplier_id}/iban-change/approve")
+def approve_supplier_iban_change(supplier_id: int, company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "procurement.approve")
+    supplier = _supplier(db, company_id, supplier_id)
+    row = db.scalar(select(SupplierProcurementProfile).where(SupplierProcurementProfile.company_id == company_id, SupplierProcurementProfile.supplier_id == supplier.id))
+    if not row or row.iban_status != "PENDING_APPROVAL" or not row.pending_iban: raise HTTPException(409, "No pending IBAN change")
+    if row.iban_change_requested_by == user.id: raise HTTPException(409, "Maker-checker: IBAN requester cannot approve")
+    row.approved_iban = row.pending_iban; row.pending_iban = None; row.iban_status = "APPROVED"; row.iban_change_risk = "NONE"
+    row.iban_approved_by = user.id; row.iban_approved_at = utc_now(); row.updated_by = user.id
+    write_audit(db, action="SUPPLIER_IBAN_CHANGE_APPROVED", entity_type="SUPPLIER_PROCUREMENT_PROFILE", entity_id=row.id, user_id=user.id, company_id=company_id, after={"supplier": supplier.code, "iban_masked": _mask_iban(row.approved_iban)})
+    db.commit(); return _profile_dict(row, db)
+
+
+@router.get("/suppliers/{supplier_id}/invoice-risk")
+def supplier_invoice_duplicate_risk(supplier_id: int, company_id: int, invoice_number: str, amount: Decimal | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "inventory.read"); _supplier(db, company_id, supplier_id)
+    normalized = invoice_number.strip().lower()
+    matches = db.scalars(select(PurchaseInvoice).where(
+        PurchaseInvoice.company_id == company_id, PurchaseInvoice.supplier_id == supplier_id,
+        func.lower(func.trim(PurchaseInvoice.supplier_invoice_number)) == normalized,
+    ).order_by(PurchaseInvoice.invoice_date.desc())).all()
+    exact_amount = [x for x in matches if amount is not None and money(x.total) == money(amount)]
+    return {"duplicate": bool(matches), "blocking": bool(exact_amount or matches), "match_count": len(matches),
+            "matches": [{"id": x.id, "number": x.number, "supplier_invoice_number": x.supplier_invoice_number, "invoice_date": x.invoice_date, "total": x.total, "status": x.status} for x in matches]}
 
 
 @router.post("/requisitions/{row_id}/submit")

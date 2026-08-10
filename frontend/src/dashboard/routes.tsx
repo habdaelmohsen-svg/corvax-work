@@ -3,6 +3,7 @@ import type {ReactNode} from 'react';
 import type {CompanyScope, View} from './types';
 
 const FinalCompletionPage = lazy(() => import('./finalCompletionPage').then((module) => ({default: module.FinalCompletionPage})));
+const R9PlatformPage = lazy(() => import('./r9PlatformPage').then((module) => ({default: module.R9PlatformPage})));
 const WorkspacePage = lazy(() => import('./workspacePage').then((module) => ({default: module.WorkspacePage})));
 const ExecutivePage = lazy(() => import('./executive').then((module) => ({default: module.ExecutivePage})));
 const CorePage = lazy(() => import('./financePages').then((module) => ({default: module.CorePage})));
@@ -55,6 +56,7 @@ const AccessGovernancePage = lazy(() => import('./accessGovernanceRealPage').the
 export function DashboardRoutes({ar, companyId, scope, view, onNavigate}: {ar: boolean; companyId: number; scope: CompanyScope; view: View; onNavigate: (view: View) => void}) {
   const pages: Partial<Record<View, ReactNode>> = {
     workbench:<WorkspacePage ar={ar} companyId={companyId} onNavigate={onNavigate}/>, finalCompletion:<FinalCompletionPage ar={ar} companyId={companyId}/>,
+    platformAssurance:<R9PlatformPage ar={ar} companyId={companyId}/>,
     executive:<ExecutivePage ar={ar} companyId={scope} apiCompanyId={companyId} onNavigate={onNavigate}/>, core:<CorePage ar={ar} companyId={companyId}/>,
     finance:<ReportsCenterPage ar={ar} companyId={companyId} initialCategory="FINANCIAL"/>,
     aging:<ReportsCenterPage ar={ar} companyId={companyId} initialCategory="SALES"/>,

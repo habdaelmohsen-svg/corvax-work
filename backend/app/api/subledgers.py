@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -324,6 +325,29 @@ def create_purchase_invoice(
         raise HTTPException(422, "Due date cannot be before invoice date")
     ensure_open_period(db, data.company_id, data.invoice_date)
     supplier = get_party(db, data.company_id, data.supplier_id, {"SUPPLIER"})
+    supplier_invoice_number = data.supplier_invoice_number.strip()
+    normalized_supplier_number = supplier_invoice_number.lower()
+    # R9 AP control: serialize the duplicate check for the same supplier invoice
+    # identity on PostgreSQL. A UI-only check is bypassable and two concurrent
+    # requests could otherwise both pass a normal SELECT-before-INSERT check.
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        lock_key = int.from_bytes(
+            hashlib.sha256(
+                f"{data.company_id}:{supplier.id}:{normalized_supplier_number}".encode("utf-8")
+            ).digest()[:4],
+            byteorder="big",
+            signed=True,
+        )
+        db.execute(
+            select(func.pg_advisory_xact_lock(947_205, lock_key))
+        )
+    duplicate = db.scalar(select(PurchaseInvoice.id).where(
+        PurchaseInvoice.company_id == data.company_id,
+        PurchaseInvoice.supplier_id == supplier.id,
+        func.lower(func.trim(PurchaseInvoice.supplier_invoice_number)) == normalized_supplier_number,
+    ).limit(1))
+    if duplicate is not None:
+        raise HTTPException(409, "Duplicate supplier invoice number for this supplier")
     accounts = {line.account_code: get_account(db, data.company_id, line.account_code) for line in data.lines}
     invoice = PurchaseInvoice(
         company_id=data.company_id,
@@ -331,7 +355,7 @@ def create_purchase_invoice(
         invoice_date=data.invoice_date,
         due_date=data.due_date,
         supplier_id=supplier.id,
-        supplier_invoice_number=data.supplier_invoice_number,
+        supplier_invoice_number=supplier_invoice_number,
         status="DRAFT",
         created_by=user.id,
     )

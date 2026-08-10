@@ -24,6 +24,7 @@ const allScopes: NavItem['scope'] = ['holding', 'gym', 'restaurant', 'manufactur
 export const navItems: NavItem[] = [
   { key: 'workbench', ar: 'مركز العمل والبحث', en: 'Work Center & Search', icon: Workflow, scope: allScopes },
   { key: 'finalCompletion', ar: 'الإكمال الداخلي والجاهزية', en: 'Internal Completion & Readiness', icon: FileCheck2, scope: allScopes, group: 'system' },
+  { key: 'platformAssurance', ar: 'صحة النظام والرقابة', en: 'System Health & Assurance', icon: MonitorCog, scope: allScopes, group: 'system', requires: ['platform.view'] },
   { key: 'executive', ar: 'مركز القرار', en: 'Executive Center', icon: LayoutDashboard, scope: allScopes },
   { key: 'core', ar: 'الشركات والإعدادات', en: 'Enterprise Core', icon: Building2, scope: allScopes , group: 'system' },
   { key: 'chartOfAccounts', ar: 'شجرة الحسابات', en: 'Chart of Accounts', icon: Network, scope: allScopes, requires: ['finance'], group: 'finance' },

@@ -10,7 +10,7 @@ export type View =
   | 'executive' | 'core' | 'finance' | 'aging' | 'returns' | 'salesReturns' | 'purchaseReturns' | 'openingBalances' | 'vatReturn' | 'withholdingTax' | 'exciseTax' | 'zakatIncomeTax' | 'budget' | 'transactions' | 'inventory' | 'inventoryTraceability' | 'operationalControls'
   | 'sales' | 'purchases' | 'maintenance' | 'fleet' | 'legal' | 'users' | 'items' | 'dataReset' | 'chartOfAccounts' | 'manualJournals' | 'cipProjects' | 'reports' | 'crm' | 'treasury' | 'leases' | 'assets' | 'prepaids' | 'accruals'
   | 'gym' | 'restaurant' | 'manufacturing' | 'quality' | 'foodSafety' | 'hr'
-  | 'workbench' | 'finalCompletion' | 'close' | 'assurance' | 'compliance' | 'security' | 'accessGovernance' | 'fx' | 'audit' | 'it';
+  | 'workbench' | 'finalCompletion' | 'platformAssurance' | 'close' | 'assurance' | 'compliance' | 'security' | 'accessGovernance' | 'fx' | 'audit' | 'it';
 
 export type NavItem = {
   key: View;

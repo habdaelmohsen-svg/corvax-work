@@ -41,7 +41,7 @@ def create_user(client: TestClient, admin: dict[str, str], email: str, role_code
 
 with TestClient(app) as client:
     admin = login(client, "admin@corvaxplatform.com", "Corvax@123")
-    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.4"
+    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9"
 
     create_user(client, admin, "accountant.assurance@corvaxplatform.com", "ACCOUNTANT", "Assurance Accountant")
     create_user(client, admin, "controller.assurance@corvaxplatform.com", "FINANCIAL_CONTROLLER", "Financial Controller")

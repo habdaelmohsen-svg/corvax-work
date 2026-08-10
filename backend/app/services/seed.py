@@ -162,6 +162,11 @@ PERMISSIONS = {
     "compliance.read": ("عرض الالتزام والضرائب", "View compliance and tax"),
     "compliance.manage": ("إدارة الالتزام والفوترة الإلكترونية", "Manage compliance and e-invoicing"),
     "backup.manage": ("إدارة النسخ الاحتياطية", "Manage backups"),
+    "platform.view": ("عرض صحة النظام والرقابة التشغيلية", "View platform health and operational assurance"),
+    "platform.manage": ("إدارة صحة النظام والتنبيهات", "Manage platform health and alerts"),
+    "import.stage": ("إعداد واستعراض ملفات الاستيراد", "Stage and validate import files"),
+    "import.approve": ("اعتماد ملفات الاستيراد المرحلية", "Approve staged import files"),
+    "zatca.manage": ("إدارة جاهزية الفوترة الإلكترونية", "Manage e-invoicing readiness"),
     "data.reset": ("حذف بيانات العرض التجريبي", "Delete registered demo data"),
     "finance.manage_fx": ("إدارة العملات الأجنبية", "Manage foreign currency"),
     "consolidation.manage": ("إدارة التوحيد والمعاملات بين الشركات", "Manage consolidation and intercompany"),
@@ -229,6 +234,22 @@ for _report_role in ("ACCOUNTANT", "AUDITOR"):
         "reports.read",
         "reports.export",
         *ROLE_PERMISSION_MAP[_report_role],
+    ]
+
+# R9 uses explicit maker/checker permissions. Auditors and quality managers can
+# inspect evidence, but cannot approve imports or change operational settings.
+_r9_role_grants = {
+    "CFO": ["platform.view", "platform.manage", "import.stage", "import.approve", "zatca.manage"],
+    "FINANCIAL_CONTROLLER": ["platform.view", "import.approve"],
+    "AUDITOR": ["platform.view"],
+    "IT_MANAGER": ["platform.view", "platform.manage", "import.stage"],
+    "ACCOUNTANT": ["platform.view", "import.stage"],
+    "QUALITY_MANAGER": ["platform.view"],
+}
+for _role_code, _permission_codes in _r9_role_grants.items():
+    ROLE_PERMISSION_MAP[_role_code] = [
+        *_permission_codes,
+        *ROLE_PERMISSION_MAP[_role_code],
     ]
 
 COMPANIES = [

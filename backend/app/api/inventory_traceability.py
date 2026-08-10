@@ -6,8 +6,9 @@ strict item classification, and IAS 2 lower-of-cost-or-NRV write-downs.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -16,10 +17,14 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user
-from app.models import Account, Item, StockMovement, User, Warehouse
+from app.models import (
+    Account, GoodsReceipt, GoodsReceiptLine, Item, PurchaseOrder,
+    PurchaseOrderLine, StockMovement, User, Warehouse,
+)
 from app.models.inbound_shipment import (
     ALLOCATION_METHODS, InboundShipment, InboundShipmentLine, ITEM_TYPES,
-    PHYSICAL_ISSUE_METHODS, RAW_MATERIAL_SUBTYPES, VALUATION_METHODS,
+    MobileReceiptInspection, PHYSICAL_ISSUE_METHODS, RAW_MATERIAL_SUBTYPES,
+    VALUATION_METHODS,
 )
 from app.services.audit import write_audit
 from app.services.operations import get_account, get_item, get_warehouse, money, quantity, stock_balance, stock_value
@@ -78,6 +83,34 @@ class NrvIn(BaseModel):
     expense_account_code: str = "620010"      # خسائر انخفاض القيمة
     provision_account_code: str = "113020"    # مخصص انخفاض قيمة المخزون
     write_date: date | None = None
+
+
+class ReceiptEvidenceIn(BaseModel):
+    file_name: str = Field(min_length=1, max_length=240)
+    content_type: str = Field(pattern=r"^(image/(jpeg|png|webp)|application/pdf)$")
+    size_bytes: int = Field(gt=0, le=10_485_760)
+    sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    object_key: str = Field(min_length=1, max_length=500)
+
+
+class MobileReceiptLineIn(BaseModel):
+    purchase_order_line_id: int
+    barcode_value: str = Field(min_length=1, max_length=160)
+    accepted_quantity: Decimal = Field(ge=0)
+    rejected_quantity: Decimal = Field(ge=0, default=0)
+    rejection_reason: str | None = Field(default=None, max_length=500)
+    lot_number: str = Field(min_length=1, max_length=80)
+    production_date: date | None = None
+    expiry_date: date | None = None
+    storage_location: str = Field(min_length=1, max_length=120)
+    evidence: list[ReceiptEvidenceIn] = Field(default_factory=list, max_length=10)
+
+
+class MobileReceiptIn(BaseModel):
+    company_id: int
+    purchase_order_id: int
+    receipt_date: date
+    lines: list[MobileReceiptLineIn] = Field(min_length=1)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -307,6 +340,294 @@ def receive_shipment(shipment_id: int, company_id: int,
     db.commit()
     return {"id": shipment.id, "number": shipment.number, "status": shipment.status,
             "journal_number": journal.number, "landed_cost_total": shipment.landed_cost_total}
+
+
+# ---------------------------------------------------------------- mobile PO receiving
+def _grn_number(db: Session, company_id: int, on: date) -> str:
+    count = db.scalar(select(func.count(GoodsReceipt.id)).where(
+        GoodsReceipt.company_id == company_id,
+        func.extract("year", GoodsReceipt.receipt_date) == on.year,
+    )) or 0
+    return f"GRN-{company_id}-{on.year}-{count + 1:05d}"
+
+
+def _barcode_matches(value: str, item: Item) -> bool:
+    normalized = value.strip().upper()
+    expected = str(item.code).strip().upper()
+    return normalized in {expected, f"ITEM:{expected}", f"CORVAX:ITEM:{expected}"}
+
+
+def _mobile_po(db: Session, company_id: int, po_id: int) -> PurchaseOrder:
+    row = db.scalar(
+        select(PurchaseOrder)
+        .where(PurchaseOrder.id == po_id, PurchaseOrder.company_id == company_id)
+        .options(selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.item))
+    )
+    if not row:
+        raise HTTPException(404, "Purchase order not found")
+    return row
+
+
+@router.get("/mobile-receipts/purchase-orders/{po_id}")
+def mobile_purchase_order(po_id: int, company_id: int,
+                          user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return a scan-ready PO contract; item code is the controlled QR/barcode key."""
+    ensure_permission(db, user, company_id, "inventory.read")
+    po = _mobile_po(db, company_id, po_id)
+    return {
+        "id": po.id, "number": po.number, "status": po.status,
+        "order_date": po.order_date, "expected_receipt_date": po.expected_receipt_date,
+        "supplier_id": po.supplier_id, "supplier": po.supplier.name_ar,
+        "warehouse_id": po.warehouse_id, "warehouse": po.warehouse.name_ar,
+        "lines": [{
+            "id": line.id, "item_id": line.item_id, "item_code": line.item.code,
+            "item_name_ar": line.item.name_ar, "item_name_en": line.item.name_en,
+            "barcode_expected": line.item.code, "ordered_quantity": line.quantity,
+            "received_quantity": line.received_quantity,
+            "remaining_quantity": quantity(Decimal(line.quantity) - Decimal(line.received_quantity)),
+            "unit_price": line.unit_price,
+        } for line in po.lines],
+    }
+
+
+@router.post("/mobile-receipts", status_code=201)
+def create_mobile_receipt(data: MobileReceiptIn, user: User = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    """Inspect a PO delivery on mobile and post accepted stock as the official GRN.
+
+    Rejected quantities are retained in immutable inspection evidence but never
+    raise stock, GRNI, PO received quantity, or supplier-invoice eligibility.
+    """
+    ensure_permission(db, user, data.company_id, "inventory.receive")
+    po = _mobile_po(db, data.company_id, data.purchase_order_id)
+    if po.status not in {"APPROVED", "PARTIALLY_RECEIVED"}:
+        raise HTTPException(409, "Purchase order is not available for receipt")
+    ensure_open_period(db, data.company_id, data.receipt_date)
+
+    by_id = {line.id: line for line in po.lines}
+    seen: set[int] = set()
+    validated = []
+    total = Decimal("0")
+    total_rejected = Decimal("0")
+    journal_lines = []
+    for source in data.lines:
+        if source.purchase_order_line_id in seen:
+            raise HTTPException(422, "A purchase-order line may appear only once per mobile receipt")
+        seen.add(source.purchase_order_line_id)
+        po_line = by_id.get(source.purchase_order_line_id)
+        if not po_line:
+            raise HTTPException(422, "Purchase order line does not belong to this order")
+        if not _barcode_matches(source.barcode_value, po_line.item):
+            raise HTTPException(422, f"Scanned barcode does not match item {po_line.item.code}")
+        accepted = quantity(source.accepted_quantity)
+        rejected = quantity(source.rejected_quantity)
+        inspected = quantity(accepted + rejected)
+        if inspected <= 0:
+            raise HTTPException(422, f"Accepted or rejected quantity is required for item {po_line.item.code}")
+        remaining = quantity(Decimal(po_line.quantity) - Decimal(po_line.received_quantity))
+        if inspected > remaining:
+            raise HTTPException(422, f"Inspected quantity exceeds PO remaining quantity for item {po_line.item.code}")
+        if rejected > 0 and not (source.rejection_reason or "").strip():
+            raise HTTPException(422, f"Rejection reason is required for item {po_line.item.code}")
+        if source.production_date and source.production_date > data.receipt_date:
+            raise HTTPException(422, f"Production date cannot follow receipt date for item {po_line.item.code}")
+        if source.expiry_date and source.expiry_date <= data.receipt_date:
+            raise HTTPException(422, f"Expired stock cannot be accepted for item {po_line.item.code}")
+        if source.production_date and source.expiry_date and source.production_date >= source.expiry_date:
+            raise HTTPException(422, f"Expiry date must follow production date for item {po_line.item.code}")
+
+        line_total = money(accepted * Decimal(po_line.unit_price))
+        total += line_total
+        total_rejected += rejected
+        if accepted > 0:
+            journal_lines.append({
+                "account_id": po_line.item.inventory_account_id, "debit": line_total, "credit": 0,
+                "description": f"{po_line.item.code} accepted via mobile inspection",
+            })
+        validated.append((source, po_line, accepted, rejected, line_total))
+
+    if total <= 0:
+        raise HTTPException(422, "At least one accepted quantity is required to create a GRN")
+    grni = get_account(db, data.company_id, "214010")
+    journal_lines.append({"account_id": grni.id, "debit": 0, "credit": money(total), "description": po.number})
+    journal = create_posted_journal(
+        db, company_id=data.company_id, user_id=user.id, posting_date=data.receipt_date,
+        reference=po.number, description=f"Mobile inspected goods receipt for {po.number}", lines=journal_lines,
+    )
+    grn = GoodsReceipt(
+        company_id=data.company_id, number=_grn_number(db, data.company_id, data.receipt_date),
+        receipt_date=data.receipt_date, purchase_order_id=po.id, warehouse_id=po.warehouse_id,
+        status="POSTED", total_cost=money(total), journal_id=journal.id, created_by=user.id,
+    )
+    db.add(grn)
+    db.flush()
+    for source, po_line, accepted, rejected, line_total in validated:
+        po_line.received_quantity = quantity(Decimal(po_line.received_quantity) + accepted)
+        grn_line = GoodsReceiptLine(
+            goods_receipt_id=grn.id, purchase_order_line_id=po_line.id, item_id=po_line.item_id,
+            quantity=accepted, unit_cost=po_line.unit_price, lot_number=source.lot_number,
+            expiry_date=source.expiry_date,
+        )
+        db.add(grn_line)
+        db.flush()
+        db.add(MobileReceiptInspection(
+            company_id=data.company_id, goods_receipt_id=grn.id, goods_receipt_line_id=grn_line.id,
+            purchase_order_line_id=po_line.id, item_id=po_line.item_id,
+            barcode_value=source.barcode_value.strip(), accepted_quantity=accepted,
+            rejected_quantity=rejected, rejection_reason=(source.rejection_reason or "").strip() or None,
+            lot_number=source.lot_number.strip(), production_date=source.production_date,
+            expiry_date=source.expiry_date, storage_location=source.storage_location.strip(),
+            evidence_metadata=json.dumps([e.model_dump() for e in source.evidence], default=str,
+                                        ensure_ascii=False, sort_keys=True),
+            quality_status="PARTIALLY_REJECTED" if rejected > 0 else "ACCEPTED",
+            inspected_by=user.id,
+        ))
+        if accepted > 0:
+            db.add(StockMovement(
+                company_id=data.company_id, warehouse_id=po.warehouse_id, item_id=po_line.item_id,
+                movement_date=data.receipt_date, movement_type="RECEIPT", quantity=accepted,
+                unit_cost=po_line.unit_price, total_cost=line_total, lot_number=source.lot_number,
+                expiry_date=source.expiry_date, reference_type="GOODS_RECEIPT", reference_id=grn.id,
+                journal_id=journal.id, created_by=user.id,
+            ))
+    po.status = "RECEIVED" if all(
+        quantity(line.received_quantity) >= quantity(line.quantity) for line in po.lines
+    ) else "PARTIALLY_RECEIVED"
+    write_audit(
+        db, action="MOBILE_GOODS_RECEIPT_POSTED", entity_type="GOODS_RECEIPT", entity_id=grn.id,
+        user_id=user.id, company_id=data.company_id,
+        after={"number": grn.number, "po": po.number, "accepted_value": str(money(total)),
+               "rejected_quantity": str(quantity(total_rejected)), "journal": journal.number},
+    )
+    db.commit()
+    return {
+        "id": grn.id, "number": grn.number, "status": grn.status, "po_status": po.status,
+        "accepted_value": money(total), "rejected_quantity": quantity(total_rejected),
+        "journal_number": journal.number,
+    }
+
+
+@router.get("/mobile-receipts/{grn_id}/inspection")
+def mobile_receipt_inspection(grn_id: int, company_id: int,
+                              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Read-only quality/audit trail for a posted mobile GRN."""
+    ensure_permission(db, user, company_id, "inventory.read")
+    grn = db.scalar(select(GoodsReceipt).where(
+        GoodsReceipt.id == grn_id, GoodsReceipt.company_id == company_id,
+    ))
+    if not grn:
+        raise HTTPException(404, "Goods receipt not found")
+    rows = db.scalars(select(MobileReceiptInspection).where(
+        MobileReceiptInspection.goods_receipt_id == grn_id,
+        MobileReceiptInspection.company_id == company_id,
+    ).order_by(MobileReceiptInspection.id)).all()
+    return {"goods_receipt_id": grn.id, "number": grn.number, "receipt_date": grn.receipt_date,
+            "journal_id": grn.journal_id, "lines": [{
+                "id": row.id, "goods_receipt_line_id": row.goods_receipt_line_id,
+                "purchase_order_line_id": row.purchase_order_line_id, "item_id": row.item_id,
+                "barcode_value": row.barcode_value, "accepted_quantity": row.accepted_quantity,
+                "rejected_quantity": row.rejected_quantity, "rejection_reason": row.rejection_reason,
+                "lot_number": row.lot_number, "production_date": row.production_date,
+                "expiry_date": row.expiry_date, "storage_location": row.storage_location,
+                "quality_status": row.quality_status, "evidence": json.loads(row.evidence_metadata or "[]"),
+                "inspected_by": row.inspected_by, "inspected_at": row.inspected_at,
+            } for row in rows]}
+
+
+# ---------------------------------------------------------------- inventory/procurement alerts
+@router.get("/alerts")
+def inventory_alerts(company_id: int, as_of: date | None = None,
+                     expiry_days: int = Query(default=30, ge=1, le=365),
+                     slow_days: int = Query(default=90, ge=1, le=730),
+                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ensure_permission(db, user, company_id, "inventory.read")
+    as_of = as_of or date.today()
+    alerts: list[dict] = []
+
+    delayed = db.scalars(select(PurchaseOrder).where(
+        PurchaseOrder.company_id == company_id,
+        PurchaseOrder.status.in_(["APPROVED", "PARTIALLY_RECEIVED"]),
+        PurchaseOrder.expected_receipt_date.is_not(None),
+        PurchaseOrder.expected_receipt_date < as_of,
+    ).order_by(PurchaseOrder.expected_receipt_date)).all()
+    for po in delayed:
+        days = (as_of - po.expected_receipt_date).days
+        alerts.append({"type": "PO_DELAY", "severity": "HIGH" if days > 7 else "MEDIUM",
+                       "entity_id": po.id, "reference": po.number, "days": days,
+                       "message_ar": f"أمر الشراء {po.number} متأخر {days} يومًا",
+                       "message_en": f"Purchase order {po.number} is {days} days overdue"})
+
+    over = db.execute(select(PurchaseOrderLine, PurchaseOrder).join(
+        PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.purchase_order_id
+    ).where(PurchaseOrder.company_id == company_id,
+            PurchaseOrderLine.received_quantity > PurchaseOrderLine.quantity)).all()
+    for line, po in over:
+        alerts.append({"type": "OVER_RECEIPT", "severity": "CRITICAL", "entity_id": line.id,
+                       "reference": po.number,
+                       "message_ar": f"تجاوز كمية الاستلام في {po.number} للصنف {line.item.code}",
+                       "message_en": f"Received quantity exceeds PO for {line.item.code} in {po.number}"})
+
+    balances = db.execute(select(
+        Item.id, Item.code, Item.name_ar, Item.reorder_level,
+        func.coalesce(func.sum(StockMovement.quantity), 0),
+    ).outerjoin(StockMovement, (StockMovement.item_id == Item.id) &
+                (StockMovement.company_id == company_id) & (StockMovement.movement_date <= as_of))
+     .where(Item.company_id == company_id, Item.active.is_(True))
+     .group_by(Item.id).having(func.coalesce(func.sum(StockMovement.quantity), 0) <= Item.reorder_level)).all()
+    for item_id, code, name_ar, reorder, balance in balances:
+        alerts.append({"type": "LOW_STOCK", "severity": "HIGH" if Decimal(balance) <= 0 else "MEDIUM",
+                       "entity_id": item_id, "reference": code, "quantity": quantity(balance),
+                       "threshold": quantity(reorder),
+                       "message_ar": f"{code} بلغ حد إعادة الطلب ({quantity(balance)} / {quantity(reorder)})",
+                       "message_en": f"{code} reached reorder level ({quantity(balance)} / {quantity(reorder)})"})
+
+    # Aggregate by lot in Python so an issue carrying the lot number (but no
+    # repeated expiry date) correctly reduces the expiring balance.
+    lot_rows = db.execute(select(
+        StockMovement.item_id, StockMovement.warehouse_id, StockMovement.lot_number,
+        StockMovement.expiry_date, StockMovement.quantity,
+    ).where(StockMovement.company_id == company_id,
+            StockMovement.movement_date <= as_of,
+            StockMovement.lot_number.is_not(None))).all()
+    lots: dict[tuple[int, int, str], dict] = {}
+    for item_id, warehouse_id, lot, expires, movement_qty in lot_rows:
+        bucket = lots.setdefault((item_id, warehouse_id, lot), {"expiry": None, "quantity": Decimal("0")})
+        bucket["quantity"] += Decimal(movement_qty)
+        if expires and (bucket["expiry"] is None or expires < bucket["expiry"]):
+            bucket["expiry"] = expires
+    expiring = [(item_id, warehouse_id, lot, values["expiry"], values["quantity"])
+                for (item_id, warehouse_id, lot), values in lots.items()
+                if values["quantity"] > 0 and values["expiry"] is not None
+                and as_of <= values["expiry"] <= as_of + timedelta(days=expiry_days)]
+    for item_id, warehouse_id, lot, expires, balance in expiring:
+        days = (expires - as_of).days
+        alerts.append({"type": "EXPIRY", "severity": "HIGH" if days <= 7 else "MEDIUM",
+                       "entity_id": item_id, "warehouse_id": warehouse_id, "reference": lot or "—",
+                       "days": days, "quantity": quantity(balance),
+                       "message_ar": f"التشغيلة {lot or '—'} تنتهي خلال {days} يومًا",
+                       "message_en": f"Lot {lot or '—'} expires in {days} days"})
+
+    slow = db.execute(select(
+        StockMovement.item_id, StockMovement.warehouse_id, func.max(StockMovement.movement_date),
+        func.sum(StockMovement.quantity),
+    ).where(StockMovement.company_id == company_id, StockMovement.movement_date <= as_of)
+     .group_by(StockMovement.item_id, StockMovement.warehouse_id)
+     .having(func.sum(StockMovement.quantity) > 0,
+             func.max(StockMovement.movement_date) <= as_of - timedelta(days=slow_days))).all()
+    for item_id, warehouse_id, last_date, balance in slow:
+        days = (as_of - last_date).days
+        alerts.append({"type": "SLOW_MOVING", "severity": "MEDIUM", "entity_id": item_id,
+                       "warehouse_id": warehouse_id, "reference": str(item_id), "days": days,
+                       "quantity": quantity(balance),
+                       "message_ar": f"صنف بلا حركة منذ {days} يومًا",
+                       "message_en": f"Item has not moved for {days} days"})
+
+    order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+    alerts.sort(key=lambda row: (order.get(row["severity"], 9), row["type"], row["reference"]))
+    summary = {key: sum(1 for row in alerts if row["type"] == key) for key in
+               ["PO_DELAY", "OVER_RECEIPT", "LOW_STOCK", "EXPIRY", "SLOW_MOVING"]}
+    return {"company_id": company_id, "as_of": as_of, "expiry_days": expiry_days,
+            "slow_days": slow_days, "total": len(alerts), "summary": summary, "alerts": alerts}
 
 
 @router.post("/items/classify")
