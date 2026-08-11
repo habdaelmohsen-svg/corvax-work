@@ -52,10 +52,6 @@ class BankStatement(Base):
     status = Column(String(20), nullable=False, default="DRAFT", index=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=utc_now)
-    matched_by = Column(Integer, ForeignKey("users.id"))
-    matched_at = Column(DateTime)
-    reconciled_by = Column(Integer, ForeignKey("users.id"))
-    reconciled_at = Column(DateTime)
     bank_account = relationship("BankAccount", lazy="joined")
     lines = relationship("BankStatementLine", back_populates="statement", cascade="all, delete-orphan", lazy="selectin")
 

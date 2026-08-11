@@ -15,12 +15,12 @@ from app.api.backups import router as backups_router
 from app.api.banking import router as banking_router
 from app.api.budgeting import router as budgeting_router
 from app.api.inventory import router as inventory_router
-from app.api.procurement import router as procurement_router
 from app.api.inventory_traceability import router as inventory_traceability_router  # H9
 from app.api.new_departments import router as new_departments_router  # H10
 from app.api.sales_commissions import router as sales_commissions_router  # H11
 from app.api.attachments import router as attachments_router  # H13
 from app.api.data_reset import router as data_reset_router
+from app.api.uat_reset import router as uat_reset_router
 from app.api.chart_of_accounts import router as chart_of_accounts_router
 from app.api.cip_projects import router as cip_projects_router  # H13
 from app.api.intercompany import router as intercompany_router
@@ -70,9 +70,6 @@ from app.api.excise_tax import router as excise_tax_router
 from app.api.zakat_income_tax import router as zakat_income_tax_router
 from app.api.internal_completion import router as internal_completion_router
 from app.api.ai_assistant import router as ai_assistant_router
-from app.api.system_reports import router as system_reports_router
-from app.api.opening_balances import router as opening_balances_router
-from app.api.r9_platform import router as r9_platform_router
 from app.core.config import settings
 from app.core.migration_head import expected_migration_head
 from app.core.middleware import RateLimitMiddleware, RequestContextMiddleware
@@ -143,12 +140,12 @@ app.include_router(modules_router, prefix="/api/v1")
 app.include_router(banking_router, prefix="/api/v1")
 app.include_router(budgeting_router, prefix="/api/v1")
 app.include_router(inventory_router, prefix="/api/v1")
-app.include_router(procurement_router, prefix="/api/v1")
 app.include_router(inventory_traceability_router, prefix="/api/v1")  # H9
 app.include_router(new_departments_router, prefix="/api/v1")  # H10
 app.include_router(sales_commissions_router, prefix="/api/v1")  # H11
 app.include_router(attachments_router, prefix="/api/v1")  # H13
 app.include_router(data_reset_router, prefix="/api/v1")
+app.include_router(uat_reset_router, prefix="/api/v1")
 app.include_router(chart_of_accounts_router, prefix="/api/v1")
 app.include_router(cip_projects_router, prefix="/api/v1")  # H13
 app.include_router(intercompany_router, prefix="/api/v1")
@@ -186,9 +183,6 @@ app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(operational_controls_router, prefix="/api/v1")
 app.include_router(internal_completion_router, prefix="/api/v1")
 app.include_router(ai_assistant_router, prefix="/api/v1")
-app.include_router(system_reports_router, prefix="/api/v1")
-app.include_router(opening_balances_router, prefix="/api/v1")
-app.include_router(r9_platform_router, prefix="/api/v1")
 
 
 @app.get("/health")

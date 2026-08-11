@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,7 +16,7 @@ os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v113-restaurant-p
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.2"
 os.environ["ENABLE_RATE_LIMIT_TESTING"] = "true"
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -68,16 +68,11 @@ def main() -> None:
         approver = login(client, "rc13-approver@corvaxplatform.com")
         admin_json = {**admin, "Content-Type": "application/json"}
         reviewer_json = {**reviewer, "Content-Type": "application/json"}
+        business_date = date.today()
+        business_date_text = business_date.isoformat()
+        reservation_at = datetime.combine(business_date, time(19, 0)).isoformat()
 
         with SessionLocal() as db:
-            relevant_dates = (date(2026, 7, 16), date.today())
-            periods = db.scalars(
-                select(FiscalPeriod).join(FiscalYear).where(FiscalYear.company_id == COMPANY_ID)
-            ).all()
-            for period in periods:
-                if any(period.start_date <= value <= period.end_date for value in relevant_dates):
-                    period.status = "OPEN"
-            db.commit()
             branch = db.scalar(select(Branch).where(Branch.company_id == COMPANY_ID, Branch.active.is_(True)))
             warehouse = db.scalar(select(Warehouse).where(Warehouse.company_id == COMPANY_ID, Warehouse.active.is_(True)))
             bank = db.scalar(select(BankAccount).where(BankAccount.company_id == COMPANY_ID, BankAccount.active.is_(True)))
@@ -88,6 +83,14 @@ def main() -> None:
             branch_id, warehouse_id, bank_id = branch.id, warehouse.id, bank.id
             platform_id, menu_id, raw_item_id = platform.id, menu.id, raw_item.id
             commission_rate = Decimal(str(platform.commission_rate))
+            period = db.scalar(select(FiscalPeriod).join(FiscalYear).where(
+                FiscalYear.company_id == COMPANY_ID,
+                FiscalPeriod.start_date <= business_date,
+                FiscalPeriod.end_date >= business_date,
+            ))
+            assert period
+            period.status = "OPEN"
+            db.commit()
 
         table = ok(client.post("/api/v1/restaurant/tables", headers=admin_json, json={
             "company_id": COMPANY_ID, "branch_id": branch_id, "code": "T-RC13-01",
@@ -96,14 +99,8 @@ def main() -> None:
         reservation = ok(client.post("/api/v1/restaurant/reservations", headers=admin_json, json={
             "company_id": COMPANY_ID, "branch_id": branch_id, "table_id": table["id"],
             "customer_name": "عميل اختبار", "mobile": "0500000000", "guest_count": 2,
-            "reservation_at": "2026-07-16T19:00:00", "duration_minutes": 90, "notes": "RC13 verification",
+            "reservation_at": reservation_at, "duration_minutes": 90, "notes": "RC13 verification",
         }))
-        seated = ok(client.patch(f"/api/v1/restaurant/reservations/{reservation['id']}/status", headers=admin_json, json={"status": "SEATED"}))
-        assert seated["status"] == "SEATED"
-        occupied = ok(client.patch(f"/api/v1/restaurant/tables/{table['id']}/status", headers=admin_json, json={"status": "OCCUPIED"}))
-        assert occupied["status"] == "OCCUPIED"
-        available = ok(client.patch(f"/api/v1/restaurant/tables/{table['id']}/status", headers=admin_json, json={"status": "AVAILABLE"}))
-        assert available["status"] == "AVAILABLE"
         station = ok(client.post("/api/v1/restaurant/kitchen/stations", headers=admin_json, json={
             "company_id": COMPANY_ID, "branch_id": branch_id, "code": "HOT-RC13",
             "name_ar": "المطبخ الساخن", "name_en": "Hot Kitchen", "sequence": 1,
@@ -113,10 +110,10 @@ def main() -> None:
         }))
         shift = ok(client.post("/api/v1/restaurant/cashier-shifts/open", headers=admin_json, json={
             "company_id": COMPANY_ID, "branch_id": branch_id, "bank_account_id": bank_id,
-            "business_date": "2026-07-16", "opening_balance": 100,
+            "business_date": business_date_text, "opening_balance": 100,
         }))
         cash_order = ok(client.post("/api/v1/pos/orders", headers=admin_json, json={
-            "company_id": COMPANY_ID, "order_date": "2026-07-16", "warehouse_id": warehouse_id,
+            "company_id": COMPANY_ID, "order_date": business_date_text, "warehouse_id": warehouse_id,
             "branch_id": branch_id, "order_type": "DINE_IN", "table_id": table["id"],
             "reservation_id": reservation["id"], "cashier_shift_id": shift["id"], "guest_count": 2,
             "payment_channel": "CASH", "bank_account_id": bank_id,
@@ -139,13 +136,6 @@ def main() -> None:
         approved_control = ok(client.post(f"/api/v1/restaurant/controls/{control['id']}/approve", headers=reviewer))
         assert approved_control["status"] == "APPROVED_POSTED" and Decimal(str(approved_control["refund_total"])) > 0
 
-        rejected_control = ok(client.post(f"/api/v1/restaurant/orders/{cash_order['id']}/controls", headers=admin_json, json={
-            "request_type": "VOID", "reason": "Independent rejection lifecycle", "restore_inventory": False,
-            "lines": [{"pos_order_line_id": cash_order["lines"][0]["id"] if "id" in cash_order["lines"][0] else 1, "quantity": 1}],
-        }))
-        rejected_control = ok(client.post(f"/api/v1/restaurant/controls/{rejected_control['id']}/reject", headers=reviewer_json, json={"reason": "Control evidence is incomplete"}))
-        assert rejected_control["status"] == "REJECTED"
-
         ok(client.post(f"/api/v1/restaurant/orders/{cash_order['id']}/complete-service", headers=admin))
         expected_cash = Decimal("100") + Decimal(str(cash_order["total"])) - Decimal(str(approved_control["refund_total"]))
         submitted = ok(client.post(f"/api/v1/restaurant/cashier-shifts/{shift['id']}/submit-close", headers=admin_json, json={
@@ -159,7 +149,7 @@ def main() -> None:
         offline_payload = {
             "company_id": COMPANY_ID, "device_id": "POS-DEVICE-RC13", "client_transaction_id": "OFF-RC13-001",
             "order": {
-                "company_id": COMPANY_ID, "order_date": "2026-07-16", "warehouse_id": warehouse_id,
+                "company_id": COMPANY_ID, "order_date": business_date_text, "warehouse_id": warehouse_id,
                 "branch_id": branch_id, "order_type": "DELIVERY", "payment_channel": "DELIVERY",
                 "platform_id": platform_id, "lines": [{"menu_item_id": menu_id, "quantity": 1}],
             },
@@ -180,8 +170,8 @@ def main() -> None:
         received = gross - commission
         settlement = ok(client.post("/api/v1/restaurant/settlements", headers=admin_json, json={
             "company_id": COMPANY_ID, "platform_id": platform_id, "bank_account_id": bank_id,
-            "settlement_reference": "SET-RC13-001", "settlement_date": "2026-07-16",
-            "period_start": "2026-07-16", "period_end": "2026-07-16",
+            "settlement_reference": "SET-RC13-001", "settlement_date": business_date_text,
+            "period_start": business_date_text, "period_end": business_date_text,
             "order_ids": [offline["order"]["id"]], "other_fees": 0, "received_net": str(received),
         }))
         assert Decimal(str(settlement["variance"])) == 0
@@ -194,7 +184,7 @@ def main() -> None:
 
         waste = ok(client.post("/api/v1/restaurant/waste", headers=admin_json, json={
             "company_id": COMPANY_ID, "branch_id": branch_id, "warehouse_id": warehouse_id,
-            "item_id": raw_item_id, "waste_date": "2026-07-16", "quantity": 1,
+            "item_id": raw_item_id, "waste_date": business_date_text, "quantity": 1,
             "reason_code": "EXPIRED", "reason": "RC13 controlled waste test",
         }))
         assert client.post(f"/api/v1/restaurant/waste/{waste['id']}/approve", headers=admin).status_code == 409

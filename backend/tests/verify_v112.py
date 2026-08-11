@@ -16,7 +16,7 @@ os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v112-hr-payroll"
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.2"
 os.environ["PAYROLL_STRICT_WORKFLOW"] = "true"
 os.environ["ENABLE_RATE_LIMIT_TESTING"] = "true"
 
@@ -27,7 +27,7 @@ from app.core.security import hash_password  # noqa: E402
 from app.db import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
-    BankAccount, Branch, CostCenter, Employee, LeaveType, Role, User, UserCompanyRole,
+    BankAccount, Branch, Employee, LeaveType, Role, User, UserCompanyRole,
 )
 
 PASSWORD = "Corvax@123"
@@ -77,11 +77,10 @@ def main() -> None:
 
         with SessionLocal() as db:
             branch = db.scalar(select(Branch).where(Branch.company_id == 1, Branch.active.is_(True)))
-            cost_center = db.scalar(select(CostCenter).where(CostCenter.company_id == 1, CostCenter.active.is_(True)))
             bank = db.scalar(select(BankAccount).where(BankAccount.company_id == 1, BankAccount.active.is_(True)))
             unpaid = db.scalar(select(LeaveType).where(LeaveType.company_id == 1, LeaveType.code == "UNPAID"))
-            assert branch and cost_center and bank and unpaid
-            branch_id, cost_center_id, bank_id, unpaid_id = branch.id, cost_center.id, bank.id, unpaid.id
+            assert branch and bank and unpaid
+            branch_id, bank_id, unpaid_id = branch.id, bank.id, unpaid.id
             lat, lon = str(branch.latitude), str(branch.longitude)
 
         employee = ok(client.post("/api/v1/payroll/employees", headers=admin_json, json={
@@ -89,8 +88,7 @@ def main() -> None:
             "nationality_group": "SAUDI", "national_id": "1000000001", "birth_date": "1990-01-01",
             "salary_bank_code": "RJHI", "iban": "SA0380000000608010167519", "hire_date": "2020-01-01",
             "basic_salary": 10000, "housing_allowance": 2500, "other_allowance": 500,
-            "employee_gosi_rate": 9.75, "employer_gosi_rate": 11.75,
-            "branch_id": branch_id, "cost_center_id": cost_center_id,
+            "employee_gosi_rate": 9.75, "employer_gosi_rate": 11.75, "branch_id": branch_id,
         }))
         employee_id = employee["id"]
 

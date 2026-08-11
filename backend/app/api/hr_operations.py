@@ -26,13 +26,13 @@ router = APIRouter(prefix="/hr", tags=["HR operations and Saudi compliance"])
 
 class ShiftIn(BaseModel):
     company_id: int
-    code: str = Field(min_length=1, max_length=30)
-    name_ar: str = Field(min_length=1, max_length=200)
-    name_en: str | None = Field(default=None, max_length=200)
+    code: str
+    name_ar: str
+    name_en: str
     start_time: time
     end_time: time
     grace_minutes: int = Field(default=10, ge=0, le=180)
-    working_days: str = "0,1,2,3,4"
+    working_days: str = "6,0,1,2,3"
 
 
 class AssignmentIn(BaseModel):
@@ -137,14 +137,9 @@ def _serialize_attendance(row: AttendanceRecord) -> dict:
 @router.post("/shifts", status_code=201)
 def create_shift(data: ShiftIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ensure_permission(db, user, data.company_id, "attendance.manage")
-    code = data.code.strip().upper()
-    if db.scalar(select(Shift).where(Shift.company_id == data.company_id, Shift.code == code)):
+    if db.scalar(select(Shift).where(Shift.company_id == data.company_id, Shift.code == data.code)):
         raise HTTPException(409, "Shift code already exists")
-    payload = data.model_dump()
-    payload["code"] = code
-    payload["name_ar"] = data.name_ar.strip()
-    payload["name_en"] = (data.name_en or data.name_ar).strip()
-    row = Shift(**payload, active=True)
+    row = Shift(**data.model_dump(), active=True)
     db.add(row); db.flush()
     write_audit(db, action="SHIFT_CREATED", entity_type="SHIFT", entity_id=row.id, user_id=user.id, company_id=data.company_id, after=data.model_dump(mode="json"))
     db.commit()

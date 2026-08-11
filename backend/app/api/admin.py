@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -74,14 +72,7 @@ class UserCreate(BaseModel):
     def _normalise_username(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        # Operators naturally type a person's short name with a space.  Treat
-        # whitespace as a dot so "Hussein Mahmoud" becomes the valid, predictable
-        # login "hussein.mahmoud" instead of returning two raw validation errors
-        # (one for the username and another for the generated local email).
-        cleaned = re.sub(r"\s+", ".", value.strip().lower())
-        cleaned = re.sub(r"[._-]{2,}", ".", cleaned).strip("._-")
-        if len(cleaned) < 3:
-            raise ValueError("username must contain at least 3 letters or digits")
+        cleaned = value.strip().lower()
         if not cleaned.replace("_", "").replace(".", "").replace("-", "").isalnum():
             raise ValueError("username may only contain letters, digits, dot, dash or underscore")
         return cleaned
@@ -195,10 +186,10 @@ def create_user(
         entity_type="USER",
         entity_id=user.id,
         user_id=current.id,
-        after={"email": user.email, "username": user.username, "companies": company_ids},
+        after={"email": user.email, "companies": company_ids},
     )
     db.commit()
-    return {"id": user.id, "email": user.email, "username": user.username, "status": "ACTIVE"}
+    return {"id": user.id, "email": user.email, "status": "ACTIVE"}
 
 
 class PasswordResetIn(BaseModel):

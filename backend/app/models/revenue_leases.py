@@ -70,7 +70,7 @@ class RevenueSchedule(Base):
     journal_id = Column(Integer, ForeignKey("journal_entries.id"))
     recognized_at = Column(DateTime)
     contract = relationship("MembershipContract", back_populates="schedules")
-    journal = relationship("JournalEntry", foreign_keys=[journal_id])
+    journal = relationship("JournalEntry")
 
 
 # -------------------- IFRS 16 leases --------------------
@@ -104,12 +104,7 @@ class LeaseSchedule(Base):
     id = Column(Integer, primary_key=True)
     lease_id = Column(Integer, ForeignKey("lease_contracts.id", ondelete="CASCADE"), nullable=False, index=True)
     period_number = Column(Integer, nullable=False)
-    # Accruals belong to the reporting period end.  Cash can fall on a
-    # different date for payments made in advance, so the two dates and their
-    # posting states must not be conflated.
     payment_date = Column(Date, nullable=False, index=True)
-    period_end_date = Column(Date, nullable=False, index=True)
-    cash_payment_date = Column(Date, index=True)
     opening_liability = Column(Numeric(18, 2), nullable=False)
     interest = Column(Numeric(18, 2), nullable=False)
     payment = Column(Numeric(18, 2), nullable=False)
@@ -118,12 +113,8 @@ class LeaseSchedule(Base):
     depreciation = Column(Numeric(18, 2), nullable=False)
     status = Column(String(20), nullable=False, default="PENDING", index=True)
     journal_id = Column(Integer, ForeignKey("journal_entries.id"))
-    accrual_status = Column(String(20), nullable=False, default="PENDING", index=True)
-    cash_status = Column(String(20), nullable=False, default="NOT_APPLICABLE", index=True)
-    accrual_journal_id = Column(Integer, ForeignKey("journal_entries.id"))
-    cash_journal_id = Column(Integer, ForeignKey("journal_entries.id"))
     lease = relationship("LeaseContract", back_populates="schedules")
-    journal = relationship("JournalEntry", foreign_keys=[journal_id])
+    journal = relationship("JournalEntry")
 
 
 # -------------------- Manufacturing and quality --------------------

@@ -3,13 +3,10 @@ import {Building2, FileSignature, ClipboardCheck, Wallet, Receipt, ArrowRightLef
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel, fmt} from './ui';
 
-type Project={id:number;code:string;name_ar:string;name_en:string;budget_amount:number;capitalized_cost:number;expensed_cost:number;committed_contracts:number;start_date?:string;expected_completion_date?:string;ready_for_use_date?:string;branch_id?:number;cost_center_id?:number;status:string;fixed_asset_id?:number};
+type Project={id:number;code:string;name_ar:string;name_en:string;budget_amount:number;capitalized_cost:number;expensed_cost:number;committed_contracts:number;start_date?:string;ready_for_use_date?:string;status:string;fixed_asset_id?:number};
 type Contract={id:number;number:string;project_id:number;party_name_ar?:string;title_ar:string;title_en:string;contract_type:string;contract_value:number;certified_value:number;remaining_value:number;vat_rate:number;retention_rate:number;status:string};
-type Certificate={id:number;number:string;contract_id:number;contract_number?:string;certificate_date:string;work_value:number;vat_amount:number;retention_amount:number;net_payable:number;paid_amount:number;status:string;created_by:number;approved_by?:number};
 type Party={id:number;name_ar:string;name_en:string;party_type:string};
 type Bank={id:number;bank_name_ar?:string;name_ar?:string};
-type Named={id:number;code:string;name_ar:string;name_en:string};
-type AssetCategory=Named&{useful_life_months:number};
 type Statement=any;
 
 async function json(url:string,init?:RequestInit){
@@ -29,22 +26,16 @@ const CAP_CATS:[string,string,string][]=[['MATERIALS','مواد','Materials'],['
 const EXP_CATS:[string,string,string][]=[['FORMATION_COSTS','مصاريف تأسيس','Formation costs'],['TRAINING','تدريب','Training'],['ADMIN_OVERHEAD','مصاريف إدارية','Admin overhead'],['MARKETING','تسويق وافتتاح','Marketing'],['ABNORMAL_WASTE','هدر غير طبيعي','Abnormal waste'],['IDLE_TIME','توقف غير مخطط','Idle time'],['PRE_OPENING_LOSSES','خسائر تشغيل تجريبي','Pre-opening losses']];
 
 export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
-  const [tab,setTab]=useState<'projects'|'contracts'|'certificates'|'costs'|'statement'|'capitalization'>('projects');
+  const [tab,setTab]=useState<'projects'|'contracts'|'certificates'|'costs'|'statement'>('projects');
   const [projects,setProjects]=useState<Project[]>([]);
   const [contracts,setContracts]=useState<Contract[]>([]);
-  const [certificates,setCertificates]=useState<Certificate[]>([]);
   const [parties,setParties]=useState<Party[]>([]);
   const [banks,setBanks]=useState<Bank[]>([]);
-  const [branches,setBranches]=useState<Named[]>([]);
-  const [centers,setCenters]=useState<Named[]>([]);
-  const [assetCategories,setAssetCategories]=useState<AssetCategory[]>([]);
   const [costs,setCosts]=useState<any[]>([]);
   const [statement,setStatement]=useState<Statement|null>(null);
   const [message,setMessage]=useState(''); const [busy,setBusy]=useState(false);
   // project form
-  const [pCode,setPCode]=useState(''); const [pNameAr,setPNameAr]=useState(''); const [pNameEn,setPNameEn]=useState('');
-  const [pBudget,setPBudget]=useState('0'); const [pStart,setPStart]=useState(iso()); const [pExpected,setPExpected]=useState('');
-  const [pDescription,setPDescription]=useState(''); const [pBranch,setPBranch]=useState(''); const [pCenter,setPCenter]=useState('');
+  const [pCode,setPCode]=useState(''); const [pNameAr,setPNameAr]=useState(''); const [pNameEn,setPNameEn]=useState(''); const [pBudget,setPBudget]=useState('0'); const [pStart,setPStart]=useState(iso());
   // contract form
   const [cProject,setCProject]=useState(''); const [cParty,setCParty]=useState(''); const [cTitleAr,setCTitleAr]=useState(''); const [cTitleEn,setCTitleEn]=useState(''); const [cValue,setCValue]=useState(''); const [cVat,setCVat]=useState('15'); const [cRetention,setCRetention]=useState('5'); const [cType,setCType]=useState('CONTRACTOR');
   // certificate form
@@ -52,28 +43,19 @@ export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
   // cost form
   const [csProject,setCsProject]=useState(''); const [csCat,setCsCat]=useState('MATERIALS'); const [csTreat,setCsTreat]=useState('CAPITALIZE'); const [csDesc,setCsDesc]=useState(''); const [csAmount,setCsAmount]=useState(''); const [csVat,setCsVat]=useState('0'); const [csAck,setCsAck]=useState(false);
   // payment form
-  const [pyContract,setPyContract]=useState(''); const [pyCertificate,setPyCertificate]=useState('');
-  const [pyAmount,setPyAmount]=useState(''); const [pyBank,setPyBank]=useState(''); const [pyKind,setPyKind]=useState('CERTIFICATE');
+  const [pyContract,setPyContract]=useState(''); const [pyAmount,setPyAmount]=useState(''); const [pyBank,setPyBank]=useState(''); const [pyKind,setPyKind]=useState('CERTIFICATE');
   // statement
   const [stContract,setStContract]=useState('');
-  // capitalization
-  const [capProject,setCapProject]=useState(''); const [capCategory,setCapCategory]=useState('');
-  const [capDate,setCapDate]=useState(iso()); const [capLife,setCapLife]=useState('60'); const [capBank,setCapBank]=useState('');
 
   const load=async()=>{
     try{
-      const [pr,ct,pc,pt,bk,br,cc,ac]=await Promise.all([
+      const [pr,ct,pt,bk]=await Promise.all([
         json(`/api/v1/cip/projects?company_id=${companyId}`),
         json(`/api/v1/cip/contracts?company_id=${companyId}`),
-        json(`/api/v1/cip/certificates?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/subledgers/parties?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/subledgers/bank-accounts?company_id=${companyId}`).catch(()=>[]),
-        json(`/api/v1/enterprise/companies/${companyId}/branches`).catch(()=>[]),
-        json(`/api/v1/enterprise/companies/${companyId}/cost-centers`).catch(()=>[]),
-        json(`/api/v1/assets/categories?company_id=${companyId}`).catch(()=>[]),
       ]);
-      setProjects(pr||[]); setContracts(ct||[]); setCertificates(pc||[]);setParties(pt||[]); setBanks(bk||[]);
-      setBranches(br||[]);setCenters(cc||[]);setAssetCategories(ac||[]);
+      setProjects(pr||[]); setContracts(ct||[]); setParties(pt||[]); setBanks(bk||[]);
       if(!cProject&&pr?.length)setCProject(String(pr[0].id));
       if(!csProject&&pr?.length)setCsProject(String(pr[0].id));
       const sup=(pt||[]).filter((x:Party)=>x.party_type==='SUPPLIER');
@@ -82,21 +64,15 @@ export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
       if(!pyContract&&ct?.length)setPyContract(String(ct[0].id));
       if(!stContract&&ct?.length)setStContract(String(ct[0].id));
       if(!pyBank&&bk?.length)setPyBank(String(bk[0].id));
-      if(!pBranch&&br?.length)setPBranch(String(br[0].id));
-      if(!pCenter&&cc?.length)setPCenter(String(cc[0].id));
-      const open=(pr||[]).find((x:Project)=>x.status!=='CAPITALIZED'&&Number(x.capitalized_cost)>0);
-      if(!capProject&&open)setCapProject(String(open.id));
-      if(!capCategory&&ac?.length){setCapCategory(String(ac[0].id));setCapLife(String(ac[0].useful_life_months||60));}
-      if(!capBank&&bk?.length)setCapBank(String(bk[0].id));
     }catch(e:any){setMessage(String(e.message||e));}
   };
   useEffect(()=>{load()},[companyId]);
 
   const createProject=async()=>{
-    if(!pCode.trim()||!pNameAr.trim()){setMessage(ar?'كود المشروع والاسم العربي إلزاميان':'Project code and Arabic name are required');return;}
+    if(!pCode||!pNameAr||!pNameEn){setMessage(ar?'الكود والاسمان إلزامية':'Code and names required');return;}
     setBusy(true);setMessage('');
-    try{const created=await json('/api/v1/cip/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_id:companyId,code:pCode,name_ar:pNameAr,name_en:pNameEn||pNameAr,description:pDescription||null,budget_amount:Number(pBudget),start_date:pStart||null,expected_completion_date:pExpected||null,branch_id:pBranch?Number(pBranch):null,cost_center_id:pCenter?Number(pCenter):null})});
-      setMessage(ar?`تم إنشاء المشروع ${created.code} بنجاح وأصبح جاهزًا لإضافة عقد أو تكلفة`:`Project ${created.code} created and ready for contracts or costs`);setPCode('');setPNameAr('');setPNameEn('');setPDescription('');await load();
+    try{await json('/api/v1/cip/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_id:companyId,code:pCode,name_ar:pNameAr,name_en:pNameEn,budget_amount:Number(pBudget),start_date:pStart})});
+      setMessage(ar?'تم إنشاء المشروع':'Project created');setPCode('');setPNameAr('');setPNameEn('');await load();
     }catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
   };
   const createContract=async()=>{
@@ -131,7 +107,7 @@ export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
   const createPayment=async()=>{
     if(!pyContract||!pyAmount||!pyBank){setMessage(ar?'أكمل بيانات الدفعة':'Complete payment fields');return;}
     setBusy(true);setMessage('');
-    try{const r=await json('/api/v1/cip/payments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_id:companyId,contract_id:Number(pyContract),certificate_id:pyKind==='CERTIFICATE'&&pyCertificate?Number(pyCertificate):null,payment_date:iso(),amount:Number(pyAmount),payment_kind:pyKind,bank_account_id:Number(pyBank)})});
+    try{const r=await json('/api/v1/cip/payments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({company_id:companyId,contract_id:Number(pyContract),payment_date:iso(),amount:Number(pyAmount),payment_kind:pyKind,bank_account_id:Number(pyBank)})});
       setMessage(ar?`تم الصرف ${r.number} (${r.journal_number})`:`Paid ${r.number} (${r.journal_number})`);setPyAmount('');await load();
     }catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
   };
@@ -146,18 +122,6 @@ export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
   };
   useEffect(()=>{if(tab==='costs')loadCosts(csProject);},[tab,csProject]);
   useEffect(()=>{if(tab==='statement')loadStatement();},[tab]);
-
-  const capitalize=async()=>{
-    if(!capProject||!capCategory||!capBank){setMessage(ar?'اختر المشروع وفئة الأصل والبنك':'Select project, asset category and bank');return;}
-    setBusy(true);setMessage('');
-    try{
-      const r=await json(`/api/v1/cip/projects/${capProject}/capitalize`,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({company_id:companyId,ready_for_use_date:capDate,asset_category_id:Number(capCategory),
-          useful_life_months:Number(capLife),residual_value:0,depreciation_method:'STRAIGHT_LINE',bank_account_id:Number(capBank)})});
-      setMessage(ar?`تمت رسملة المشروع في الأصل ${r.asset_number} وترحيل القيد ${r.journal_number}`:`Project capitalized into ${r.asset_number}; journal ${r.journal_number}`);
-      setCapProject('');await load();
-    }catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
-  };
 
   const suppliers=parties.filter(p=>p.party_type==='SUPPLIER');
   const totalCip=projects.reduce((s,p)=>s+Number(p.capitalized_cost||0),0);
@@ -174,7 +138,7 @@ export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
     </div>
 
     <div style={{display:'flex',gap:8,margin:'14px 0',flexWrap:'wrap'}}>
-      {([['projects',ar?'المشروعات':'Projects'],['contracts',ar?'العقود':'Contracts'],['certificates',ar?'المستخلصات والدفعات':'Certificates & Payments'],['costs',ar?'التكاليف':'Costs'],['statement',ar?'كشف حساب المقاول':'Contractor Statement'],['capitalization',ar?'الرسملة إلى أصل':'Capitalize to Asset']] as [typeof tab,string][]).map(([k,l])=>
+      {([['projects',ar?'المشروعات':'Projects'],['contracts',ar?'العقود':'Contracts'],['certificates',ar?'المستخلصات والدفعات':'Certificates & Payments'],['costs',ar?'التكاليف':'Costs'],['statement',ar?'كشف حساب المقاول':'Contractor Statement']] as [typeof tab,string][]).map(([k,l])=>
         <button key={k} onClick={()=>setTab(k)} style={{...btn,background:tab===k?'var(--accent, #1e40af)':'transparent',color:tab===k?'#fff':'var(--text)',border:'1px solid var(--border)'}}>{l}</button>)}
     </div>
     {message&&<div style={{padding:10,marginBottom:12,borderRadius:9,background:'var(--panel-2, #f1f5f9)',fontSize:14,lineHeight:1.7}}>{message}</div>}
@@ -184,13 +148,9 @@ export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,padding:12}}>
           <label>{ar?'كود المشروع':'Code'}<input style={field} value={pCode} onChange={e=>setPCode(e.target.value)} placeholder="PRJ-001"/></label>
           <label>{ar?'الاسم (عربي)':'Name (Arabic)'}<input style={field} value={pNameAr} onChange={e=>setPNameAr(e.target.value)} placeholder={ar?'إنشاء هنجر':''}/></label>
-          <label>{ar?'الاسم (إنجليزي - اختياري)':'Name (English - optional)'}<input style={field} value={pNameEn} onChange={e=>setPNameEn(e.target.value)}/></label>
+          <label>{ar?'الاسم (إنجليزي)':'Name (English)'}<input style={field} value={pNameEn} onChange={e=>setPNameEn(e.target.value)}/></label>
           <label>{ar?'الميزانية المعتمدة':'Budget'}<input type="number" style={field} value={pBudget} onChange={e=>setPBudget(e.target.value)}/></label>
           <label>{ar?'تاريخ البدء':'Start date'}<input type="date" style={field} value={pStart} onChange={e=>setPStart(e.target.value)}/></label>
-          <label>{ar?'تاريخ الإنجاز المتوقع':'Expected completion'}<input type="date" style={field} value={pExpected} onChange={e=>setPExpected(e.target.value)}/></label>
-          <label>{ar?'الفرع':'Branch'}<select style={field} value={pBranch} onChange={e=>setPBranch(e.target.value)}><option value="">{ar?'بدون':'None'}</option>{branches.map(x=><option key={x.id} value={x.id}>{x.code} — {ar?x.name_ar:x.name_en}</option>)}</select></label>
-          <label>{ar?'مركز التكلفة':'Cost center'}<select style={field} value={pCenter} onChange={e=>setPCenter(e.target.value)}><option value="">{ar?'بدون':'None'}</option>{centers.map(x=><option key={x.id} value={x.id}>{x.code} — {ar?x.name_ar:x.name_en}</option>)}</select></label>
-          <label>{ar?'وصف المشروع':'Description'}<input style={field} value={pDescription} onChange={e=>setPDescription(e.target.value)}/></label>
         </div>
         <div style={{padding:12}}><button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={createProject}>{ar?'إنشاء المشروع':'Create project'}</button></div>
       </Panel>
@@ -236,16 +196,10 @@ export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,padding:12}}>
           <label>{ar?'العقد':'Contract'}<select style={field} value={pyContract} onChange={e=>setPyContract(e.target.value)}>{contracts.map(c=><option key={c.id} value={c.id}>{c.number} — {c.party_name_ar}</option>)}</select></label>
           <label>{ar?'نوع الدفعة':'Kind'}<select style={field} value={pyKind} onChange={e=>setPyKind(e.target.value)}><option value="CERTIFICATE">{ar?'سداد مستخلص':'Certificate payment'}</option><option value="RETENTION_RELEASE">{ar?'رد محتجز':'Retention release'}</option></select></label>
-          {pyKind==='CERTIFICATE'&&<label>{ar?'المستخلص (اختياري)':'Certificate (optional)'}<select style={field} value={pyCertificate} onChange={e=>setPyCertificate(e.target.value)}><option value="">{ar?'سداد عام على العقد':'General contract payment'}</option>{certificates.filter(c=>c.contract_id===Number(pyContract)&&['APPROVED','PAID'].includes(c.status)).map(c=><option key={c.id} value={c.id}>{c.number} — {fmt(Number(c.net_payable)-Number(c.paid_amount))}</option>)}</select></label>}
           <label>{ar?'المبلغ':'Amount'}<input type="number" style={field} value={pyAmount} onChange={e=>setPyAmount(e.target.value)}/></label>
           <label>{ar?'البنك':'Bank'}<select style={field} value={pyBank} onChange={e=>setPyBank(e.target.value)}>{banks.map(b=><option key={b.id} value={b.id}>{b.bank_name_ar||b.name_ar}</option>)}</select></label>
         </div>
         <div style={{padding:12}}><button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={createPayment}>{ar?'صرف':'Pay'}</button></div>
-      </Panel>
-      <Panel title={ar?'المستخلصات ودورة الاعتماد':'Certificates and approval flow'} icon={<ClipboardCheck size={18}/>}>
-        <DataTable headers={[ar?'الرقم':'No.',ar?'العقد':'Contract',ar?'التاريخ':'Date',ar?'الأعمال':'Work',ar?'الضريبة':'VAT',ar?'الصافي':'Net',ar?'الحالة':'Status',ar?'الإجراء':'Action']}
-          rows={certificates.map(c=>[c.number,c.contract_number||`#${c.contract_id}`,c.certificate_date,fmt(Number(c.work_value)),fmt(Number(c.vat_amount)),fmt(Number(c.net_payable)),c.status,
-            c.status==='DRAFT'?<button key={c.id} style={smallBtn} disabled={busy} onClick={()=>approveCertificate(c.id)}>{ar?'اعتماد وترحيل (مستخدم آخر)':'Approve & post (other user)'}</button>:'✓'])}/>
       </Panel>
     </>}
 
@@ -328,22 +282,6 @@ export function CipProjectsPage({ar,companyId}:{ar:boolean;companyId:number}){
             rows={(statement.payments||[]).map((p:any)=>[p.number,p.date,fmt(Number(p.amount)),p.kind==='RETENTION_RELEASE'?(ar?'رد محتجز':'Retention'):(ar?'سداد':'Payment'),p.reference||'—'])}/>
         </Panel>
       </>}
-    </>}
-
-    {tab==='capitalization'&&<>
-      <Panel title={ar?'تحويل مشروع مكتمل إلى أصل ثابت':'Transfer completed project to a fixed asset'} icon={<ArrowRightLeft size={18}/>}>
-        <div style={{padding:'8px 12px 0',fontSize:13,opacity:.82,lineHeight:1.8}}>
-          {ar?'لا تتم الرسملة إلا عند جاهزية الأصل للاستخدام. ينقل النظام رصيد 155010 إلى الأصل ويبدأ الإهلاك من تاريخ الجاهزية، ويمنع أي تكلفة أو مستخلص جديد بعد الرسملة.':'Capitalize only when ready for use. The system clears 155010 into the asset, starts depreciation at the ready date, and blocks later project costs or certificates.'}
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:12,padding:12}}>
-          <label>{ar?'المشروع':'Project'}<select style={field} value={capProject} onChange={e=>setCapProject(e.target.value)}><option value="">{ar?'اختر':'Select'}</option>{projects.filter(p=>p.status!=='CAPITALIZED'&&Number(p.capitalized_cost)>0).map(p=><option key={p.id} value={p.id}>{p.code} — {ar?p.name_ar:p.name_en} ({fmt(Number(p.capitalized_cost))})</option>)}</select></label>
-          <label>{ar?'فئة الأصل':'Asset category'}<select style={field} value={capCategory} onChange={e=>{setCapCategory(e.target.value);const c=assetCategories.find(x=>String(x.id)===e.target.value);if(c)setCapLife(String(c.useful_life_months))}}><option value="">{ar?'اختر':'Select'}</option>{assetCategories.map(c=><option key={c.id} value={c.id}>{c.code} — {ar?c.name_ar:c.name_en}</option>)}</select></label>
-          <label>{ar?'تاريخ الجاهزية للاستخدام':'Ready-for-use date'}<input type="date" style={field} value={capDate} onChange={e=>setCapDate(e.target.value)}/></label>
-          <label>{ar?'العمر الإنتاجي بالشهور':'Useful life (months)'}<input type="number" min="1" style={field} value={capLife} onChange={e=>setCapLife(e.target.value)}/></label>
-          <label>{ar?'حساب البنك المرجعي':'Reference bank'}<select style={field} value={capBank} onChange={e=>setCapBank(e.target.value)}>{banks.map(b=><option key={b.id} value={b.id}>{b.bank_name_ar||b.name_ar||`#${b.id}`}</option>)}</select></label>
-        </div>
-        <div style={{padding:'0 12px 14px'}}><button style={btn} disabled={busy} onClick={capitalize}>{ar?'اعتماد الرسملة وإنشاء الأصل':'Capitalize and create asset'}</button></div>
-      </Panel>
     </>}
   </>;
 }

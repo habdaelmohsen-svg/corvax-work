@@ -3,7 +3,6 @@ import type {ReactNode} from 'react';
 import type {CompanyScope, View} from './types';
 
 const FinalCompletionPage = lazy(() => import('./finalCompletionPage').then((module) => ({default: module.FinalCompletionPage})));
-const R9PlatformPage = lazy(() => import('./r9PlatformPage').then((module) => ({default: module.R9PlatformPage})));
 const WorkspacePage = lazy(() => import('./workspacePage').then((module) => ({default: module.WorkspacePage})));
 const ExecutivePage = lazy(() => import('./executive').then((module) => ({default: module.ExecutivePage})));
 const CorePage = lazy(() => import('./financePages').then((module) => ({default: module.CorePage})));
@@ -40,32 +39,23 @@ const DataResetPage = lazy(() => import('./dataResetPage').then((module) => ({de
 const ItemsPage = lazy(() => import('./itemsPage').then((module) => ({default: module.ItemsPage})));
 const UsersPage = lazy(() => import('./usersPage').then((module) => ({default: module.UsersPage})));
 const ReportsCenterPage = lazy(() => import('./reportsCenterPage').then((module) => ({default: module.ReportsCenterPage})));
-const OpeningBalancesPage = lazy(() => import('./openingBalancesPage').then((module) => ({default: module.OpeningBalancesPage})));
-const VatReturnPage = lazy(() => import('./vatReturnPage').then((module) => ({default: module.VatReturnPage})));
 const GymPage = lazy(() => import('./gymRealPage').then((module) => ({default: module.GymPage})));
 const RestaurantPage = lazy(() => import('./restaurantRealPage').then((module) => ({default: module.RestaurantPage})));
 const ManufacturingPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.ManufacturingPage})));
 const QualityPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.QualityPage})));
 const FoodSafetyPage = lazy(() => import('./foodSafetyRealPage').then((module) => ({default: module.FoodSafetyPage})));
 const HrPage = lazy(() => import('./hrRealPage').then((module) => ({default: module.HrPage})));
-const CrmPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.CrmEmployeePage})));
+const CrmPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.CrmPage})));
 const AuditPage = lazy(() => import('./governanceRealPage').then((module) => ({default: module.AuditPage})));
-const ItPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.ItEmployeePage})));
+const ItPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.ItPage})));
 const AccessGovernancePage = lazy(() => import('./accessGovernanceRealPage').then((module) => ({default: module.AccessGovernancePage})));
 
 export function DashboardRoutes({ar, companyId, scope, view, onNavigate}: {ar: boolean; companyId: number; scope: CompanyScope; view: View; onNavigate: (view: View) => void}) {
   const pages: Partial<Record<View, ReactNode>> = {
-    workbench:<WorkspacePage ar={ar} companyId={companyId} onNavigate={onNavigate}/>, finalCompletion:<FinalCompletionPage ar={ar} companyId={companyId}/>,
-    platformAssurance:<R9PlatformPage ar={ar} companyId={companyId}/>,
+    workbench:<WorkspacePage ar={ar} companyId={companyId}/>, finalCompletion:<FinalCompletionPage ar={ar} companyId={companyId}/>,
     executive:<ExecutivePage ar={ar} companyId={scope} apiCompanyId={companyId} onNavigate={onNavigate}/>, core:<CorePage ar={ar} companyId={companyId}/>,
-    finance:<ReportsCenterPage ar={ar} companyId={companyId} initialCategory="FINANCIAL"/>,
-    aging:<ReportsCenterPage ar={ar} companyId={companyId} initialCategory="SALES"/>,
-    returns:<CreditNotesPage ar={ar} companyId={companyId}/>,
-    salesReturns:<CreditNotesPage ar={ar} companyId={companyId} fixedType="SALES"/>,
-    purchaseReturns:<CreditNotesPage ar={ar} companyId={companyId} fixedType="PURCHASE"/>,
-    openingBalances:<OpeningBalancesPage ar={ar} companyId={companyId}/>,
-    vatReturn:<VatReturnPage ar={ar} companyId={companyId}/>,
-    withholdingTax:<WithholdingTaxPage ar={ar} companyId={companyId}/>,
+    finance:<FinancePage ar={ar} companyId={companyId}/>, aging:<AgingPage ar={ar} companyId={companyId}/>,
+    returns:<CreditNotesPage ar={ar} companyId={companyId}/>, withholdingTax:<WithholdingTaxPage ar={ar} companyId={companyId}/>,
     exciseTax:<ExciseTaxPage ar={ar} companyId={companyId}/>, zakatIncomeTax:<ZakatIncomeTaxPage ar={ar} companyId={companyId}/>,
     budget:<BudgetPage ar={ar} companyId={companyId}/>, transactions:<TransactionsPage ar={ar} companyId={companyId}/>,
     inventory:<InventoryPage ar={ar} companyId={companyId}/>, inventoryTraceability:<InventoryTraceabilityPage ar={ar} companyId={companyId}/>,

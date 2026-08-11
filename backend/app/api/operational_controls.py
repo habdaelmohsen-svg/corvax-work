@@ -321,25 +321,10 @@ def create_landed_cost(data: LandedCostIn, user: User = Depends(get_current_user
 
 def _serialize_landed(row: LandedCostDocument) -> dict:
     return {"id": row.id, "number": row.number, "document_date": row.document_date, "goods_receipt_id": row.goods_receipt_id,
-        "goods_receipt_number": row.goods_receipt.number if row.goods_receipt else None,
-        "allocation_method": row.allocation_method, "status": row.status,
-        "total_amount": money(Decimal(row.total_capitalizable_cost) + Decimal(row.total_noncapitalizable_cost)),
-        "total_capitalizable_cost": row.total_capitalizable_cost,
+        "allocation_method": row.allocation_method, "status": row.status, "total_capitalizable_cost": row.total_capitalizable_cost,
         "total_noncapitalizable_cost": row.total_noncapitalizable_cost, "journal_id": row.journal_id,
         "charges": [{"id": c.id, "type": c.charge_type, "amount": c.amount, "capitalizable": c.capitalizable, "tax_code": c.tax_code.code if c.tax_code else None, "purchase_invoice_id": c.purchase_invoice_id} for c in row.charges],
         "allocations": [{"item_id": a.item_id, "allocated_amount": a.allocated_amount, "unit_cost_increment": a.unit_cost_increment} for a in row.allocations]}
-
-
-@router.get("/landed-costs")
-def list_landed_costs(company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    ensure_permission(db, user, company_id, "inventory.read")
-    rows = db.scalars(select(LandedCostDocument).where(
-        LandedCostDocument.company_id == company_id,
-    ).options(
-        selectinload(LandedCostDocument.charges).selectinload(LandedCostCharge.tax_code),
-        selectinload(LandedCostDocument.allocations),
-    ).order_by(LandedCostDocument.document_date.desc(), LandedCostDocument.id.desc())).all()
-    return [_serialize_landed(row) | {"created_by": row.created_by, "submitted_by": row.submitted_by, "approved_by": row.approved_by, "posted_by": row.posted_by} for row in rows]
 
 
 @router.post("/landed-costs/{row_id}/submit")
@@ -541,10 +526,7 @@ def _serialize_rollup(row: CostRollupSnapshot) -> dict:
 
 @router.get("/cost-rollups")
 def list_cost_rollups(company_id: int, limit: int = 30, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Reviewers and approvers must be able to reopen the prepared snapshot.
-    # Requiring the maker-only permission here made the maker/checker buttons
-    # unusable after a role switch.
-    ensure_permission(db, user, company_id, "manufacturing.read")
+    ensure_permission(db, user, company_id, "manufacturing.cost.prepare")
     safe_limit = min(max(limit, 1), 100)
     rows = db.scalars(
         select(CostRollupSnapshot)
@@ -586,7 +568,7 @@ def approve_rollup(row_id: int, user: User = Depends(get_current_user), db: Sess
 def export_rollup(row_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     row = db.scalar(select(CostRollupSnapshot).where(CostRollupSnapshot.id == row_id).options(selectinload(CostRollupSnapshot.lines)))
     if not row: raise HTTPException(404, "Cost roll-up not found")
-    ensure_permission(db, user, row.company_id, "manufacturing.read")
+    ensure_permission(db, user, row.company_id, "manufacturing.cost.prepare")
     return _csv_response(f"cost_rollup_{row.number}.csv", ["Level", "Path", "Type", "Description", "Quantity", "Unit cost", "Total cost"],
         [[x.level, x.path, x.line_type, x.description_en, x.quantity, x.unit_cost, x.total_cost] for x in row.lines])
 
@@ -625,20 +607,9 @@ def create_inventory_count(data: InventoryCountIn, user: User = Depends(get_curr
 
 
 def _serialize_count(row: InventoryCount) -> dict:
-    return {"id": row.id, "number": row.number, "warehouse_id": row.warehouse_id,
-        "warehouse_code": row.warehouse.code if row.warehouse else None,
-        "count_date": row.count_date, "count_type": row.count_type, "status": row.status,
-        "lines": [{"id": x.id, "item_id": x.item_id, "item_code": x.item.code if x.item else None, "lot_number": x.lot_number, "book_quantity": x.book_quantity,
+    return {"id": row.id, "number": row.number, "warehouse_id": row.warehouse_id, "count_date": row.count_date, "status": row.status,
+        "lines": [{"id": x.id, "item_id": x.item_id, "lot_number": x.lot_number, "book_quantity": x.book_quantity,
                    "counted_quantity": x.counted_quantity, "variance_quantity": x.variance_quantity, "unit_cost": x.unit_cost, "variance_value": x.variance_value, "reason": x.reason} for x in row.lines]}
-
-
-@router.get("/inventory-counts")
-def list_inventory_counts(company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    ensure_permission(db, user, company_id, "inventory.read")
-    rows = db.scalars(select(InventoryCount).where(
-        InventoryCount.company_id == company_id,
-    ).options(selectinload(InventoryCount.lines)).order_by(InventoryCount.count_date.desc(), InventoryCount.id.desc())).all()
-    return [_serialize_count(row) | {"created_by": row.created_by, "submitted_by": row.submitted_by, "approved_by": row.approved_by, "journal_id": row.journal_id} for row in rows]
 
 
 @router.patch("/inventory-counts/{count_id}/lines/{line_id}")

@@ -1,140 +1,131 @@
 import {useEffect, useState} from 'react';
-import {Trash2, ShieldAlert, Eye, CheckCircle2, Lock, DatabaseZap} from 'lucide-react';
+import {AlertTriangle, CheckCircle2, Database, Eye, Lock, Trash2} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel} from './ui';
 
-// System-wide UAT preparation.  The destructive path is deliberately gated:
-// preview -> exact phrase -> dry run -> short-lived authorization -> execute.
-
 async function json(url:string,init?:RequestInit){
-  const response=await apiFetch(url,init); const payload=await response.json().catch(()=>({}));
+  const response=await apiFetch(url,init);
+  const payload=await response.json().catch(()=>({}));
   if(!response.ok){
     const detail=payload.detail;
-    const message=typeof detail==='string' ? detail
-      : (detail&&(detail.message_ar||detail.message_en)) ? detail.message_ar||detail.message_en
-      : Array.isArray(detail) ? detail.map((item:any)=>item.msg||JSON.stringify(item)).join(' | ')
-      : JSON.stringify(detail||payload);
+    const message=typeof detail==='string'?detail:detail?.message_ar||detail?.message_en||JSON.stringify(detail||payload);
     throw new Error(message);
   }
   return payload;
 }
 
-const field={display:'block',width:'100%',marginTop:5,padding:9,border:'1px solid var(--border)',borderRadius:9} as const;
-const btn={padding:'9px 16px',borderRadius:9,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:600} as const;
-const danger={...btn,background:'#b91c1c'} as const;
+const field={display:'block',width:'100%',marginTop:7,padding:10,border:'1px solid var(--border)',borderRadius:9} as const;
+const primary={padding:'10px 17px',borderRadius:9,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:700} as const;
+const danger={...primary,background:'#b91c1c'} as const;
 
-export function DataResetPage({ar,companyId:_companyId}:{ar:boolean;companyId:number}){
+export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [preview,setPreview]=useState<any>(null);
   const [confirmation,setConfirmation]=useState('');
+  const [backupAcknowledged,setBackupAcknowledged]=useState(false);
+  const [authorizationToken,setAuthorizationToken]=useState('');
   const [message,setMessage]=useState('');
   const [error,setError]=useState(false);
   const [busy,setBusy]=useState(false);
-  const [dryDone,setDryDone]=useState(false);
-  const [authorizationToken,setAuthorizationToken]=useState('');
 
-  const load=async(clearStatus=true)=>{
-    if(clearStatus){setMessage(''); setError(false)}
+  const load=async(preserveMessage=false)=>{
+    if(!preserveMessage){setMessage('');setError(false)}
     try{
-      const result=await json('/api/v1/data-reset/uat-preview');
-      setPreview(result); setDryDone(false); setAuthorizationToken(''); setConfirmation('');
-    }catch(caught:any){setMessage(String(caught.message||caught));setError(true)}
+      const result=await json(`/api/v1/uat-reset/preview?company_id=${companyId}`);
+      setPreview(result);
+      setAuthorizationToken('');
+    }catch(e:any){setMessage(String(e.message||e));setError(true)}
   };
-  useEffect(()=>{void load()},[]);
+  useEffect(()=>{load()},[companyId]);
 
-  const run=async(dry:boolean)=>{
-    setBusy(true); setMessage(''); setError(false);
+  const run=async(dryRun:boolean)=>{
+    setBusy(true);setMessage('');setError(false);
     try{
-      const result=await json('/api/v1/data-reset/uat-execute',{
+      const result=await json('/api/v1/uat-reset/execute',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({confirmation,dry_run:dry,authorization_token:dry?undefined:authorizationToken}),
+        body:JSON.stringify({
+          company_id:companyId,
+          confirmation,
+          backup_acknowledged:backupAcknowledged,
+          dry_run:dryRun,
+          authorization_token:dryRun?undefined:authorizationToken,
+        }),
       });
-      const successMessage=ar?result.message_ar:result.message_en;
-      setMessage(successMessage);
-      if(dry){setAuthorizationToken(result.authorization_token||'');setDryDone(Boolean(result.authorization_token))}
-      else {
-        setDryDone(false);setAuthorizationToken('');
-        await load(false);
+      setMessage(ar?result.message_ar:result.message_en);
+      if(dryRun)setAuthorizationToken(result.authorization_token||'');
+      else{
+        setConfirmation('');setBackupAcknowledged(false);setAuthorizationToken('');
+        await load(true);
       }
-    }catch(caught:any){setMessage(String(caught.message||caught));setError(true)}
-    finally{setBusy(false)}
+    }catch(e:any){setMessage(String(e.message||e));setError(true)}finally{setBusy(false)}
   };
 
   const phrase=preview?.confirmation_phrase||'';
-  const matches=confirmation === phrase && phrase.length>0;
+  const matches=confirmation===phrase&&phrase.length>0;
   const enabled=Boolean(preview?.enabled);
   const rows=Object.entries(preview?.tables||{}) as [string,number][];
-  const preserved=preview?.preserved||{};
+  const canPreview=enabled&&matches&&backupAcknowledged&&!busy;
+  const canDelete=canPreview&&Boolean(authorizationToken);
 
   return <>
+    <Panel title={ar?'مسح بيانات UAT وبدء الإدخال':'Clear UAT data and start entry'} icon={<Trash2 size={20}/>}>
+      <div style={{padding:16,background:'#fff7ed',color:'#9a3412',lineHeight:1.9,fontWeight:600}}>
+        <AlertTriangle size={18} style={{verticalAlign:'middle',marginInlineEnd:7}}/>
+        {ar
+          ? 'هذا الإجراء يحذف جميع بيانات الأعمال المضافة في الشركات الأربع، وليس بيانات Demo فقط. استخدمه مرة واحدة قبل إدخال البيانات شبه الحقيقية.'
+          : 'This removes all added business data across all four companies, not only seeded Demo rows. Use it once before semi-real UAT entry.'}
+      </div>
+    </Panel>
+
     <div className="kpis">
-      <Kpi title={ar?'صفوف ستُحذف':'Rows to remove'} value={String(preview?.total_rows??'—')} trend={ar?'جميع الشركات':'all companies'} good={(preview?.total_rows||0)===0} icon={<Trash2 size={22}/>} tone="amber"/>
-      <Kpi title={ar?'جداول بها بيانات':'Non-empty tables'} value={String(preview?.tables_affected??'—')} trend={`${preview?.target_table_count??'—'} ${ar?'جدولًا مفحوصًا':'checked'}`} good icon={<Eye size={22}/>} tone="blue"/>
-      <Kpi title={ar?'الشركات المحفوظة':'Companies retained'} value={String(preserved.companies??'—')} trend={ar?'لن تُحذف':'kept'} good icon={<CheckCircle2 size={22}/>} tone="green"/>
-      <Kpi title={ar?'حسابات الدخول المحفوظة':'Users retained'} value={String(preserved.users??'—')} trend={enabled?(ar?'UAT مفعّل':'UAT enabled'):(ar?'الأداة مقفلة':'locked')} good={enabled} icon={<Lock size={22}/>} tone="violet"/>
+      <Kpi title={ar?'صفوف ستُحذف':'Rows to delete'} value={String(preview?.total_rows??'—')} trend={ar?'كل الشركات':'all companies'} good={(preview?.total_rows||0)===0} icon={<Trash2 size={22}/>} tone="amber"/>
+      <Kpi title={ar?'جداول بها بيانات':'Populated tables'} value={String(rows.length)} trend={ar?'بيانات أعمال':'business data'} good icon={<Database size={22}/>} tone="blue"/>
+      <Kpi title={ar?'جداول النظام المحفوظة':'Protected foundation'} value={String((preview?.protected||[]).length)} trend={ar?'لا تُمس':'untouched'} good icon={<CheckCircle2 size={22}/>} tone="green"/>
+      <Kpi title={ar?'حالة الحذف':'Reset status'} value={enabled?(ar?'جاهز':'Ready'):(ar?'مقفول':'Locked')} trend="UAT only" good={enabled} icon={<Lock size={22}/>} tone="violet"/>
     </div>
 
-    {message&&<div style={{padding:11,margin:'12px 0',borderRadius:9,fontSize:14,lineHeight:1.8,
+    {message&&<div role="alert" style={{padding:12,margin:'12px 0',borderRadius:9,lineHeight:1.8,
       background:error?'#fee2e2':'#dcfce7',color:error?'#991b1b':'#166534'}}>{message}</div>}
 
-    <Panel title={ar?'تهيئة UAT الشاملة — ما الذي سيُحذف وما الذي سيبقى':'Full UAT preparation — removed vs retained'} icon={<DatabaseZap size={18}/> }>
-      <div style={{padding:'10px 14px',display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:14}}>
-        <div style={{padding:13,borderRadius:10,background:'#fef2f2',color:'#7f1d1d',lineHeight:1.9,fontSize:13}}>
-          <b>{ar?'يُحذف — كل بيانات التشغيل والتجربة':'Removed — all operational and test data'}</b><br/>
-          {ar
-            ? 'الحركات والقيود والمخزون والعملاء والموردون والأصناف والموظفون والرواتب والمشتريات والمبيعات والتصنيع والنادي والمطاعم والضرائب، في جميع الشركات.'
-            : 'Transactions, journals, inventory, parties, items, employees, payroll, purchasing, sales, manufacturing, gym, restaurant and tax data across every company.'}
+    <Panel title={ar?'ما الذي يُحذف وما الذي يبقى':'Deletion boundary'} icon={<Eye size={18}/>}>
+      <div style={{padding:14,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:12,lineHeight:1.9}}>
+        <div style={{padding:13,borderRadius:10,background:'#fef2f2',color:'#7f1d1d'}}>
+          <b>{ar?'يُحذف':'Deleted'}</b><br/>
+          {ar?'العملاء والموردون، الأصناف والمستودعات، الموظفون، الأصول والبنوك، الفواتير والقيود والمخزون والرواتب والتصنيع والمطاعم والنادي والضرائب وجميع حركات UAT.':'Customers, suppliers, items, warehouses, employees, assets, bank data, invoices, journals, inventory, payroll, manufacturing, restaurants, gym, tax and all UAT activity.'}
         </div>
-        <div style={{padding:13,borderRadius:10,background:'#f0fdf4',color:'#14532d',lineHeight:1.9,fontSize:13}}>
-          <b>{ar?'يبقى — أساس النظام والوصول':'Retained — system and access foundation'}</b><br/>
-          {ar
-            ? 'الشركات والفروع ودليل الحسابات ومراكز التكلفة والفترات المالية والمستخدمون والأدوار والصلاحيات وكلمات المرور وسجل التدقيق وسجل النسخ الاحتياطية.'
-            : 'Companies, branches, chart of accounts, cost centers, fiscal periods, users, roles, permissions, password history, audit history and backup history.'}
+        <div style={{padding:13,borderRadius:10,background:'#f0fdf4',color:'#14532d'}}>
+          <b>{ar?'يبقى':'Preserved'}</b><br/>
+          {ar?'الشركات والفروع، شجرة الحسابات والفترات، المستخدمون وكلمات المرور والأدوار والصلاحيات، الجلسة الحالية، سجل التدقيق، النسخ الاحتياطية والمراجع النظامية.':'Companies, branches, chart of accounts, periods, users, passwords, roles, permissions, current session, audit trail, backups and system references.'}
         </div>
       </div>
     </Panel>
 
-    {!enabled&&<Panel title={ar?'الأداة مقفلة':'The tool is locked'} icon={<Lock size={18}/> }>
-      <div style={{padding:14,fontSize:14,lineHeight:2}}>
-        {preview?.production_blocked
-          ? (ar?'تهيئة UAT الشاملة محظورة في Production. يجب نشر خدمة الاختبار ببيئة UAT صريحة.':'Full UAT reset is blocked in Production. The test service must explicitly run as UAT.')
-          : (ar?'الأداة تحتاج ENVIRONMENT=uat وALLOW_DATA_RESET=true، ولا تعمل لحساب غير مدير النظام.':'The tool requires ENVIRONMENT=uat and ALLOW_DATA_RESET=true, and only a system administrator may use it.')}
+    {!enabled&&<Panel title={ar?'الزر موجود لكن التنفيذ مقفول':'The button is visible but execution is locked'} icon={<Lock size={18}/> }>
+      <div style={{padding:14,lineHeight:2}}>
+        {ar?'فعّل في خدمة UAT فقط: ENVIRONMENT=uat و ALLOW_DATA_RESET=true. الإنتاج يرفض الحذف حتى لو ضُبط المتغير بالخطأ.':'Enable only in UAT with ENVIRONMENT=uat and ALLOW_DATA_RESET=true. Production always refuses this operation.'}
       </div>
     </Panel>}
 
-    <Panel title={ar?'تفاصيل البيانات التي ستُمسح':'Operational data to be removed'} icon={<Eye size={18}/> }>
-      {rows.length===0
-        ? <div style={{padding:16,fontSize:14,opacity:0.8}}>{ar?'لا توجد بيانات تشغيل أو تجربة متبقية. النظام جاهز لإدخال بيانات UAT.':'No operational/test data remains. The system is ready for UAT data entry.'}</div>
-        : <DataTable headers={[ar?'الجدول':'Table',ar?'عدد الصفوف':'Rows']} rows={rows.map(([table,count])=>[table,String(count)])}/>} 
+    <Panel title={ar?'معاينة البيانات التي ستُحذف':'Preview rows to delete'} icon={<Database size={18}/> }>
+      {rows.length===0?<div style={{padding:16}}>{ar?'لا توجد بيانات أعمال مضافة؛ النظام جاهز.':'No added business data remains; the system is ready.'}</div>:
+        <DataTable headers={[ar?'الجدول':'Table',ar?'الصفوف':'Rows']} rows={rows.map(([table,count])=>[table,String(count)])}/>} 
     </Panel>
 
-    {enabled&&rows.length>0&&<Panel title={ar?'التنفيذ المحمي':'Protected execution'} icon={<ShieldAlert size={18}/> }>
-      <div style={{padding:'8px 14px',fontSize:14,lineHeight:2,color:'#991b1b',background:'#fff7ed'}}>
-        <b>{ar?'تنبيه مهم:':'Important:'}</b>{' '}
-        {ar?'هذه العملية شاملة لكل الشركات ولا يمكن التراجع عنها من داخل النظام. تأكد أنك تعمل على corvax-test وليس النظام الإنتاجي.':'This affects every company and cannot be undone in-app. Confirm that this is corvax-test, not production.'}
-      </div>
-      <div style={{padding:'10px 14px',fontSize:14,lineHeight:2,borderTop:'1px solid var(--border)'}}>
-        <b>{ar?'الخطوة ١ — اكتب العبارة كاملة:':'Step 1 — type the full phrase:'}</b>
-        <div style={{marginTop:8,padding:'8px 12px',borderRadius:8,background:'var(--panel-2, #f1f5f9)',fontWeight:700,display:'inline-block'}}>{phrase}</div>
-      </div>
-      <div style={{padding:'0 14px 12px',maxWidth:520}}>
-        <input style={field} value={confirmation} onChange={(event)=>{setConfirmation(event.target.value);setDryDone(false);setAuthorizationToken('')}} placeholder={ar?'اكتب عبارة التأكيد هنا':'Type the confirmation phrase'}/>
-        {confirmation&&!matches&&<small style={{color:'#b91c1c'}}>{ar?'غير مطابق':'Does not match'}</small>}
-        {matches&&<small style={{color:'#166534'}}>{ar?'✓ مطابق':'✓ matches'}</small>}
-      </div>
-
-      <div style={{padding:'12px 14px',fontSize:14,lineHeight:2,borderTop:'1px solid var(--border)'}}>
-        <b>{ar?'الخطوة ٢ — معاينة آمنة بلا حذف':'Step 2 — safe dry run'}</b><br/>
-        {ar?'يثبت عدد الصفوف والجداول ويصدر تفويضًا مدته 10 دقائق مرتبطًا بحسابك.':'Locks the row/table snapshot and issues a 10-minute authorization bound to your account.'}
-      </div>
-      <div style={{padding:'0 14px 12px'}}><button style={{...btn,opacity:(busy||!matches)?0.6:1}} disabled={busy||!matches} onClick={()=>void run(true)}>{ar?'تشغيل المعاينة الآمنة':'Run safe dry run'}</button></div>
-
-      <div style={{padding:'10px 14px 16px',borderTop:'1px solid var(--border)'}}>
-        <b style={{fontSize:14}}>{ar?'الخطوة ٣ — المسح النهائي':'Step 3 — final reset'}</b><br/>
-        <button style={{...danger,marginTop:10,opacity:(busy||!matches||!dryDone||!authorizationToken)?0.5:1}}
-          disabled={busy||!matches||!dryDone||!authorizationToken} onClick={()=>void run(false)}>
-          {ar?'مسح بيانات التشغيل وبدء UAT':'Clear operational data and start UAT'}
+    {rows.length>0&&<Panel title={ar?'تنفيذ المسح':'Run clean-slate reset'} icon={<Trash2 size={18}/> }>
+      <div style={{padding:14,lineHeight:2,maxWidth:720}}>
+        <b>{ar?'1. اكتب عبارة التأكيد حرفيًا:':'1. Type the exact confirmation phrase:'}</b>
+        <div style={{margin:'8px 0',padding:'8px 12px',borderRadius:8,background:'var(--panel-2, #f1f5f9)',fontWeight:800}}>{phrase}</div>
+        <input style={field} value={confirmation} onChange={e=>{setConfirmation(e.target.value);setAuthorizationToken('')}} placeholder={ar?'اكتب العبارة هنا':'Type the phrase here'}/>
+        <label style={{display:'flex',gap:9,alignItems:'flex-start',margin:'14px 0'}}>
+          <input type="checkbox" checked={backupAcknowledged} onChange={e=>{setBackupAcknowledged(e.target.checked);setAuthorizationToken('')}} style={{marginTop:6}}/>
+          <span>{ar?'أفهم أن الحذف غير قابل للتراجع من الشاشة، وقد أخذت نسخة احتياطية أو أقبل بدء UAT من جديد.':'I understand this cannot be undone from the UI and I have a backup or accept a fresh UAT start.'}</span>
+        </label>
+        <button style={{...primary,opacity:canPreview?1:.5}} disabled={!canPreview} onClick={()=>run(true)}>
+          {ar?'2. معاينة آمنة وتفعيل زر الحذف':'2. Safe preview and unlock delete'}
         </button>
-        {!dryDone&&<div style={{marginTop:8,fontSize:13,opacity:0.75}}>{ar?'نفّذ المعاينة الآمنة أولًا لتفعيل الزر.':'Run the safe dry run first to enable this button.'}</div>}
+        <button style={{...danger,opacity:canDelete?1:.5,marginInlineStart:10}} disabled={!canDelete} onClick={()=>run(false)}>
+          {ar?'3. حذف جميع البيانات المضافة الآن':'3. Delete all added data now'}
+        </button>
+        {!authorizationToken&&<div style={{marginTop:9,fontSize:13,opacity:.75}}>{ar?'زر الحذف النهائي يظهر هنا ويُفعّل بعد نجاح المعاينة الآمنة.':'The final delete button is here and unlocks after a successful safe preview.'}</div>}
       </div>
     </Panel>}
   </>;

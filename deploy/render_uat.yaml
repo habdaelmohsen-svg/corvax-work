@@ -1,0 +1,38 @@
+databases:
+  - name: corvax-test-db
+    plan: starter
+    databaseName: corvax_test
+    user: corvax_test
+
+services:
+  - type: web
+    name: corvax-test
+    runtime: docker
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /health/ready
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: corvax-test-db
+          property: connectionString
+      - key: APP_VERSION
+        value: 1.0.0-agreement-completion-rc27.4-r9.2
+      - key: ENVIRONMENT
+        value: uat
+      - key: SEED_DEMO_DATA
+        value: false
+      - key: ALLOW_DATA_RESET
+        value: true
+      - key: AUTO_CREATE_SCHEMA
+        value: false
+      - key: FORCE_HTTPS
+        value: true
+      - key: DOCS_ENABLED
+        value: false
+      - key: SECRET_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: TRUSTED_HOSTS
+        sync: false

@@ -1,7 +1,7 @@
 import {useEffect, useMemo, useState} from 'react';
-import {Network, Plus, ChevronDown, ChevronLeft, Search, Power, Trash2, Info, Download, Upload, FileCheck2} from 'lucide-react';
+import {Network, Plus, ChevronDown, ChevronLeft, Search, Power, Trash2, Info} from 'lucide-react';
 import {apiFetch} from '../api/client';
-import {DataTable, Kpi, Panel} from './ui';
+import {Kpi, Panel} from './ui';
 
 // Chart of accounts management. The backend allows any depth; this screen shows
 // the hierarchy, marks which accounts still accept entries, and enforces the
@@ -41,8 +41,6 @@ export function ChartOfAccountsPage({ar,companyId}:{ar:boolean;companyId:number}
   const [parentCode,setParentCode]=useState('');
   const [code,setCode]=useState(''); const [nameAr,setNameAr]=useState(''); const [nameEn,setNameEn]=useState('');
   const [isCash,setIsCash]=useState(false);
-  const [importFile,setImportFile]=useState<File|null>(null);
-  const [importResult,setImportResult]=useState<any>(null);
 
   const load=async()=>{
     try{
@@ -75,41 +73,6 @@ export function ChartOfAccountsPage({ar,companyId}:{ar:boolean;companyId:number}
       setMsg(ar?r.message_ar:r.message_en); setErr(false);
       setCode('');setNameAr('');setNameEn('');setIsCash(false);
       await load();
-    }catch(e:any){setMsg(String(e.message||e));setErr(true);}finally{setBusy(false);}
-  };
-
-  const exportExcel=async()=>{
-    setBusy(true);setMsg('');setErr(false);
-    try{
-      const response=await apiFetch(`/api/v1/chart-of-accounts/export.xlsx?company_id=${companyId}`);
-      if(!response.ok)throw new Error(ar?'فشل تصدير شجرة الحسابات':'Chart export failed');
-      const blob=await response.blob();const anchor=document.createElement('a');
-      anchor.href=URL.createObjectURL(blob);anchor.download=`CORVAX_COA_${companyId}.xlsx`;anchor.click();
-      URL.revokeObjectURL(anchor.href);
-      setMsg(ar?'تم تصدير شجرة الحسابات إلى Excel':'Chart exported to Excel');
-    }catch(e:any){setMsg(String(e.message||e));setErr(true);}finally{setBusy(false);}
-  };
-  const importForm=()=>{
-    if(!importFile)throw new Error(ar?'اختر ملف Excel أولًا':'Choose an Excel file first');
-    const form=new FormData();form.append('file',importFile);return form;
-  };
-  const validateImport=async()=>{
-    setBusy(true);setMsg('');setErr(false);setImportResult(null);
-    try{
-      const result=await json(`/api/v1/chart-of-accounts/import/validate?company_id=${companyId}`,{method:'POST',body:importForm()});
-      setImportResult(result);setErr(!result.valid);
-      setMsg(result.valid
-        ?(ar?`نجحت المطابقة: ${result.summary.create} حساب جديد و${result.summary.update} تحديث.`:`Matched: ${result.summary.create} creates and ${result.summary.update} updates.`)
-        :(ar?`فشل الفحص: ${result.summary.errors} خطأ. لن يتم تعديل النظام.`:`Validation failed with ${result.summary.errors} errors. Nothing was changed.`));
-    }catch(e:any){setMsg(String(e.message||e));setErr(true);}finally{setBusy(false);}
-  };
-  const applyImport=async()=>{
-    if(!importResult?.valid)return;
-    setBusy(true);setMsg('');setErr(false);
-    try{
-      const result=await json(`/api/v1/chart-of-accounts/import/apply?company_id=${companyId}`,{method:'POST',body:importForm()});
-      setMsg(ar?`تم تطبيق الملف: ${result.summary.create} إضافة و${result.summary.update} تحديث.`:'Chart import applied.');
-      setImportResult(null);setImportFile(null);await load();
     }catch(e:any){setMsg(String(e.message||e));setErr(true);}finally{setBusy(false);}
   };
 
@@ -213,27 +176,6 @@ export function ChartOfAccountsPage({ar,companyId}:{ar:boolean;companyId:number}
       <div style={{padding:'0 12px 14px'}}>
         <button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={create}>{ar?'إنشاء الحساب':'Create account'}</button>
       </div>
-    </Panel>
-
-    <Panel title={ar?'تصدير وتعديل ومطابقة شجرة الحسابات':'Export, edit and reconcile the chart'} icon={<FileCheck2 size={18}/>}>
-      <div style={{padding:'8px 12px 0',fontSize:13,opacity:0.85,lineHeight:1.9}}>
-        {ar
-          ? 'صدّر الملف، عدّل الأسماء أو أضف حسابات جديدة داخله، ثم ارفعه للفحص. النظام يراجع الأكواد والأب والنوع والمستوى والحركات السابقة أولًا؛ ولا يطبق أي تغيير إذا وُجد خطأ واحد.'
-          : 'Export, edit names or add accounts, then upload for validation. Codes, parents, types, levels and posted history are checked before any change is applied.'}
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12,padding:12,alignItems:'end'}}>
-        <button style={{...btn,display:'inline-flex',alignItems:'center',justifyContent:'center',gap:7}} disabled={busy} onClick={exportExcel}><Download size={16}/>{ar?'تصدير Excel':'Export Excel'}</button>
-        <label>{ar?'ملف شجرة الحسابات المعدّل':'Edited chart workbook'}<input type="file" accept=".xlsx" style={field}
-          onChange={e=>{setImportFile(e.target.files?.[0]||null);setImportResult(null);}}/></label>
-        <button style={{...btn,display:'inline-flex',alignItems:'center',justifyContent:'center',gap:7,opacity:importFile?1:.5}} disabled={busy||!importFile} onClick={validateImport}><FileCheck2 size={16}/>{ar?'مراجعة ومطابقة':'Validate & match'}</button>
-        <button style={{...btn,display:'inline-flex',alignItems:'center',justifyContent:'center',gap:7,background:'#059669',opacity:importResult?.valid?1:.5}} disabled={busy||!importResult?.valid} onClick={applyImport}><Upload size={16}/>{ar?'اعتماد التعديلات':'Apply changes'}</button>
-      </div>
-      {importResult&&<DataTable
-        headers={[ar?'سطر Excel':'Excel row',ar?'الحساب':'Account',ar?'الإجراء':'Action',ar?'النتيجة':'Result']}
-        rows={importResult.rows.map((row:any)=>[
-          String(row.excel_row),row.account_code,row.action,
-          row.errors?.length?<span style={{color:'#b91c1c'}}>{row.errors.join(' | ')}</span>:<span style={{color:'#047857'}}>✓</span>,
-        ])}/>}
     </Panel>
 
     <Panel title={ar?'شجرة الحسابات':'Chart of accounts'} icon={<Network size={18}/>}>

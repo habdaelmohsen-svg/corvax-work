@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import csv
-import io
 from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.time import utc_now
 from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user
 from app.models import (
@@ -40,37 +36,9 @@ class StatementIn(BaseModel):
     lines: list[StatementLineIn] = Field(min_length=1)
 
 
-def _statement_users(db: Session, rows: list[BankStatement]) -> dict[int, User]:
-    user_ids = {
-        user_id
-        for row in rows
-        for user_id in (row.created_by, row.matched_by, row.reconciled_by)
-        if user_id is not None
-    }
-    if not user_ids:
-        return {}
-    return {user.id: user for user in db.scalars(select(User).where(User.id.in_(user_ids))).all()}
-
-
-def _user_out(row: User | None) -> dict | None:
-    if not row:
-        return None
+def _statement_out(row: BankStatement) -> dict:
     return {
         "id": row.id,
-        "name_ar": row.name_ar,
-        "name_en": row.name_en,
-        "username": row.username,
-    }
-
-
-def _statement_number(row: BankStatement) -> str:
-    return f"BANK-STMT-{row.company_id}-{row.id:06d}"
-
-
-def _statement_out(row: BankStatement, users: dict[int, User]) -> dict:
-    return {
-        "id": row.id,
-        "number": _statement_number(row),
         "company_id": row.company_id,
         "bank_account_id": row.bank_account_id,
         "bank_name": row.bank_account.bank_name_en,
@@ -78,14 +46,6 @@ def _statement_out(row: BankStatement, users: dict[int, User]) -> dict:
         "opening_balance": row.opening_balance,
         "closing_balance": row.closing_balance,
         "status": row.status,
-        "created_by": row.created_by,
-        "created_by_user": _user_out(users.get(row.created_by)),
-        "matched_by": row.matched_by,
-        "matched_by_user": _user_out(users.get(row.matched_by)) if row.matched_by else None,
-        "matched_at": row.matched_at,
-        "reconciled_by": row.reconciled_by,
-        "reconciled_by_user": _user_out(users.get(row.reconciled_by)) if row.reconciled_by else None,
-        "reconciled_at": row.reconciled_at,
         "lines": [
             {
                 "id": line.id,
@@ -121,7 +81,7 @@ def list_bank_accounts(company_id: int, user: User = Depends(get_current_user), 
 
 @router.post("/statements", status_code=201)
 def create_statement(data: StatementIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    ensure_permission(db, user, data.company_id, "bank.statement.prepare")
+    ensure_permission(db, user, data.company_id, "bank.reconcile")
     bank = db.scalar(select(BankAccount).where(BankAccount.id == data.bank_account_id, BankAccount.company_id == data.company_id))
     if not bank:
         raise HTTPException(404, "Bank account not found")
@@ -168,7 +128,7 @@ def create_statement(data: StatementIn, user: User = Depends(get_current_user), 
     )
     db.commit()
     db.refresh(statement)
-    return _statement_out(statement, _statement_users(db, [statement]))
+    return _statement_out(statement)
 
 
 @router.get("/statements")
@@ -180,48 +140,7 @@ def list_statements(company_id: int, user: User = Depends(get_current_user), db:
         .options(selectinload(BankStatement.lines))
         .order_by(BankStatement.statement_date.desc(), BankStatement.id.desc())
     ).all()
-    users = _statement_users(db, rows)
-    return [_statement_out(row, users) for row in rows]
-
-
-@router.get("/statements/export.csv")
-def export_statements(company_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    ensure_permission(db, user, company_id, "finance.read")
-    rows = db.scalars(
-        select(BankStatement)
-        .where(BankStatement.company_id == company_id)
-        .options(selectinload(BankStatement.lines))
-        .order_by(BankStatement.statement_date, BankStatement.id)
-    ).all()
-    users = _statement_users(db, rows)
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "Statement number", "Bank code", "Bank name AR", "Bank name EN",
-        "Statement date", "Opening balance", "Closing balance", "Line count", "Matched line count", "Status",
-        "Created at", "Created by ID", "Created by name AR", "Created by name EN", "Created by username",
-        "Matched at", "Matched by ID", "Matched by name AR", "Matched by name EN", "Matched by username",
-        "Reconciled at", "Reconciled by ID", "Reconciled by name AR", "Reconciled by name EN", "Reconciled by username",
-    ])
-    for row in rows:
-        creator = users.get(row.created_by)
-        matcher = users.get(row.matched_by) if row.matched_by else None
-        reconciler = users.get(row.reconciled_by) if row.reconciled_by else None
-        writer.writerow([
-            _statement_number(row), row.bank_account.code, row.bank_account.bank_name_ar, row.bank_account.bank_name_en,
-            row.statement_date, row.opening_balance, row.closing_balance, len(row.lines),
-            sum(1 for line in row.lines if line.status == "MATCHED"), row.status,
-            row.created_at, row.created_by, creator.name_ar if creator else "", creator.name_en if creator else "", creator.username if creator else "",
-            row.matched_at or "", row.matched_by or "", matcher.name_ar if matcher else "", matcher.name_en if matcher else "", matcher.username if matcher else "",
-            row.reconciled_at or "", row.reconciled_by or "", reconciler.name_ar if reconciler else "", reconciler.name_en if reconciler else "", reconciler.username if reconciler else "",
-        ])
-    content = "\ufeff" + output.getvalue()
-    filename = f"bank_statements_{company_id}.csv"
-    return StreamingResponse(
-        iter([content.encode("utf-8")]),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return [_statement_out(row) for row in rows]
 
 
 @router.post("/statements/{statement_id}/auto-match")
@@ -233,9 +152,7 @@ def auto_match(statement_id: int, user: User = Depends(get_current_user), db: Se
     )
     if not statement:
         raise HTTPException(404, "Statement not found")
-    permissions = ensure_permission(db, user, statement.company_id, "bank.statement.prepare")
-    if statement.created_by == user.id and "*" not in permissions:
-        raise HTTPException(409, "Maker-checker control: statement creator cannot complete reconciliation")
+    ensure_permission(db, user, statement.company_id, "bank.reconcile")
     if statement.status == "RECONCILED":
         raise HTTPException(409, "Statement is already reconciled")
     matched_ids = set(
@@ -271,9 +188,6 @@ def auto_match(statement_id: int, user: User = Depends(get_current_user), db: Se
             matched_ids.add(candidate.id)
             matched += 1
     statement.status = "MATCHED" if all(line.status == "MATCHED" for line in statement.lines) else "PARTIAL"
-    if matched:
-        statement.matched_by = user.id
-        statement.matched_at = utc_now()
     write_audit(
         db,
         action="BANK_STATEMENT_AUTO_MATCHED",
@@ -296,13 +210,7 @@ def reconcile(statement_id: int, user: User = Depends(get_current_user), db: Ses
     )
     if not statement:
         raise HTTPException(404, "Statement not found")
-    permissions = ensure_permission(db, user, statement.company_id, "bank.reconcile")
-    if statement.created_by == user.id and "*" not in permissions:
-        raise HTTPException(409, "Maker-checker control: statement creator cannot complete reconciliation")
-    if statement.matched_by == user.id and "*" not in permissions:
-        raise HTTPException(409, "Maker-checker control: statement matcher cannot complete reconciliation")
-    if statement.status == "RECONCILED":
-        raise HTTPException(409, "Statement is already reconciled")
+    ensure_permission(db, user, statement.company_id, "bank.reconcile")
     if any(line.status != "MATCHED" for line in statement.lines):
         raise HTTPException(409, "All statement lines must be matched before reconciliation")
     debit, credit = db.execute(
@@ -320,8 +228,6 @@ def reconcile(statement_id: int, user: User = Depends(get_current_user), db: Ses
     if difference != 0:
         raise HTTPException(409, f"GL and statement do not agree. Difference: {difference}")
     statement.status = "RECONCILED"
-    statement.reconciled_by = user.id
-    statement.reconciled_at = utc_now()
     write_audit(
         db,
         action="BANK_STATEMENT_RECONCILED",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -124,16 +123,6 @@ class PaymentIn(BaseModel):
     allocations: list[AllocationLineIn] = Field(default_factory=list)
 
 
-class PartyIn(BaseModel):
-    company_id: int
-    code: str = Field(min_length=2, max_length=30)
-    name_ar: str = Field(min_length=2, max_length=250)
-    name_en: str = Field(min_length=2, max_length=250)
-    party_type: str = Field(pattern="^(CUSTOMER|SUPPLIER|BOTH)$")
-    vat_number: str | None = Field(default=None, max_length=30)
-    credit_limit: Decimal = Field(default=Decimal("0"), ge=0)
-
-
 @router.get("/parties")
 def list_parties(
     company_id: int,
@@ -141,7 +130,7 @@ def list_parties(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    ensure_permission(db, user, company_id, "masterdata.read")
+    ensure_permission(db, user, company_id, "finance.read")
     query = select(Party).where(Party.company_id == company_id, Party.active.is_(True)).order_by(Party.code)
     if party_type:
         query = query.where(Party.party_type.in_([party_type, "BOTH"]))
@@ -157,59 +146,6 @@ def list_parties(
         }
         for row in db.scalars(query).all()
     ]
-
-
-@router.post("/parties", status_code=201)
-def create_party(
-    data: PartyIn,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    ensure_permission(db, user, data.company_id, "masterdata.manage")
-    code = data.code.strip().upper()
-    duplicate = db.scalar(
-        select(Party.id).where(
-            Party.company_id == data.company_id,
-            func.lower(Party.code) == code.lower(),
-        )
-    )
-    if duplicate:
-        raise HTTPException(409, "Party code already exists")
-    vat_number = data.vat_number.strip() if data.vat_number else None
-    if vat_number and (not vat_number.isdigit() or len(vat_number) != 15):
-        raise HTTPException(422, "VAT number must contain exactly 15 digits")
-    row = Party(
-        company_id=data.company_id,
-        code=code,
-        name_ar=data.name_ar.strip(),
-        name_en=data.name_en.strip(),
-        party_type=data.party_type,
-        vat_number=vat_number,
-        credit_limit=money(data.credit_limit),
-        active=True,
-    )
-    db.add(row)
-    db.flush()
-    payload = {
-        "id": row.id,
-        "code": row.code,
-        "name_ar": row.name_ar,
-        "name_en": row.name_en,
-        "party_type": row.party_type,
-        "vat_number": row.vat_number,
-        "credit_limit": row.credit_limit,
-    }
-    write_audit(
-        db,
-        action="PARTY_CREATED",
-        entity_type="PARTY",
-        entity_id=row.id,
-        user_id=user.id,
-        company_id=data.company_id,
-        after={"code": row.code, "party_type": row.party_type, "credit_limit": str(row.credit_limit)},
-    )
-    db.commit()
-    return payload
 
 
 @router.get("/bank-accounts")
@@ -325,29 +261,6 @@ def create_purchase_invoice(
         raise HTTPException(422, "Due date cannot be before invoice date")
     ensure_open_period(db, data.company_id, data.invoice_date)
     supplier = get_party(db, data.company_id, data.supplier_id, {"SUPPLIER"})
-    supplier_invoice_number = data.supplier_invoice_number.strip()
-    normalized_supplier_number = supplier_invoice_number.lower()
-    # R9 AP control: serialize the duplicate check for the same supplier invoice
-    # identity on PostgreSQL. A UI-only check is bypassable and two concurrent
-    # requests could otherwise both pass a normal SELECT-before-INSERT check.
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        lock_key = int.from_bytes(
-            hashlib.sha256(
-                f"{data.company_id}:{supplier.id}:{normalized_supplier_number}".encode("utf-8")
-            ).digest()[:4],
-            byteorder="big",
-            signed=True,
-        )
-        db.execute(
-            select(func.pg_advisory_xact_lock(947_205, lock_key))
-        )
-    duplicate = db.scalar(select(PurchaseInvoice.id).where(
-        PurchaseInvoice.company_id == data.company_id,
-        PurchaseInvoice.supplier_id == supplier.id,
-        func.lower(func.trim(PurchaseInvoice.supplier_invoice_number)) == normalized_supplier_number,
-    ).limit(1))
-    if duplicate is not None:
-        raise HTTPException(409, "Duplicate supplier invoice number for this supplier")
     accounts = {line.account_code: get_account(db, data.company_id, line.account_code) for line in data.lines}
     invoice = PurchaseInvoice(
         company_id=data.company_id,
@@ -355,7 +268,7 @@ def create_purchase_invoice(
         invoice_date=data.invoice_date,
         due_date=data.due_date,
         supplier_id=supplier.id,
-        supplier_invoice_number=supplier_invoice_number,
+        supplier_invoice_number=data.supplier_invoice_number,
         status="DRAFT",
         created_by=user.id,
     )

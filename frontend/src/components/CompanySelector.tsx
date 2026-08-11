@@ -43,6 +43,13 @@ export function CompanySelector({lang,setLang,onContinue}:{lang:Lang;setLang:(l:
       const token=sessionStorage.getItem('corvax_token');
       const response=await fetch('/api/v1/auth/company-context',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({company_id:company.apiId})});
       if(!response.ok)throw new Error();
+      const context=await response.json();
+      try{
+        const stored=JSON.parse(localStorage.getItem('corvax_user')||'{}');
+        const byCompany={...(stored.permissions_by_company||{})};
+        if(Array.isArray(context.permissions))byCompany[String(company.apiId)]=context.permissions;
+        localStorage.setItem('corvax_user',JSON.stringify({...stored,permissions_by_company:byCompany}));
+      }catch{/* Login payload remains the fallback if local storage is unavailable. */}
       onContinue({...company,id:company.id_scope});
     }catch{setError(ar?'تعذر تفعيل بيئة الشركة.':'Unable to activate company workspace.')}finally{setLoading(false)}
   }

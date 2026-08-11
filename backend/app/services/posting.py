@@ -129,7 +129,6 @@ def create_posted_journal(
         status="POSTED",
         cash_flow_activity=cash_flow_activity,
         cash_flow_kind=cash_flow_kind,
-        entry_origin="SYSTEM",
         total_debit=total_debit,
         total_credit=total_credit,
         created_by=user_id,

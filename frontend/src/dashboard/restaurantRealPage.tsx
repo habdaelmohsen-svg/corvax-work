@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {UtensilsCrossed, Plus, Receipt, TrendingUp, Bike, Wallet, Search} from 'lucide-react';
+import {UtensilsCrossed, Plus, Receipt, TrendingUp, Bike, Wallet} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel, fmt} from './ui';
 
@@ -12,13 +12,11 @@ import {DataTable, Kpi, Panel, fmt} from './ui';
 type Platform={id:number;code:string;name_ar:string;name_en:string;commission_rate:number};
 type MenuItem={id:number;code:string;name_ar:string;name_en:string;selling_price:number;vat_rate?:number};
 type Order={id:number;number:string;order_date:string;order_type:string;payment_channel:string;
-  subtotal?:number;vat_amount?:number;total?:number;platform_name?:string;status?:string};
+  subtotal?:number;vat_amount?:number;total?:number;platform_name?:string;settlement_status?:string};
 type Item={id:number;code:string;name_ar:string;name_en:string};
 type BOM={id:number;code?:string;name_ar?:string;finished_item_id?:number};
 type WH={id:number;code:string;name_ar:string;name_en:string};
 type Bank={id:number;bank_name_ar?:string;name_ar?:string};
-type Branch={id:number;code:string;name_ar:string;name_en:string};
-type Table={id:number;branch_id:number;code:string;name_ar:string;name_en:string;capacity:number;status:string};
 
 async function json(url:string,init?:RequestInit){
   const r=await apiFetch(url,init); const x=await r.json().catch(()=>({}));
@@ -57,15 +55,11 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [boms,setBoms]=useState<BOM[]>([]);
   const [warehouses,setWarehouses]=useState<WH[]>([]);
   const [banks,setBanks]=useState<Bank[]>([]);
-  const [branches,setBranches]=useState<Branch[]>([]);
-  const [tables,setTables]=useState<Table[]>([]);
   const [summary,setSummary]=useState<any>(null);
   const [msg,setMsg]=useState(''); const [err,setErr]=useState(false); const [busy,setBusy]=useState(false);
-  const [orderSearch,setOrderSearch]=useState('');
   // sell
   const [oType,setOType]=useState('TAKEAWAY'); const [oChannel,setOChannel]=useState('CASH');
   const [oWh,setOWh]=useState(''); const [oBank,setOBank]=useState(''); const [oPlatform,setOPlatform]=useState('');
-  const [oBranch,setOBranch]=useState(''); const [oTable,setOTable]=useState(''); const [guestCount,setGuestCount]=useState('1');
   const [cart,setCart]=useState<{menu_item_id:number;quantity:number}[]>([]);
   const [pickItem,setPickItem]=useState(''); const [pickQty,setPickQty]=useState('1');
   // menu item
@@ -77,7 +71,7 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
 
   const load=async()=>{
     try{
-      const [pf,mn,or,it,bm,wh,bk,sm,br,tb]=await Promise.all([
+      const [pf,mn,or,it,bm,wh,bk,sm]=await Promise.all([
         json(`/api/v1/pos/platforms?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/pos/menu?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/pos/orders?company_id=${companyId}`).catch(()=>[]),
@@ -86,24 +80,16 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
         json(`/api/v1/inventory/warehouses?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/subledgers/bank-accounts?company_id=${companyId}`).catch(()=>[]),
         json(`/api/v1/pos/summary?company_id=${companyId}`).catch(()=>null),
-        json(`/api/v1/enterprise/companies/${companyId}/branches`).catch(()=>[]),
-        json(`/api/v1/restaurant/tables?company_id=${companyId}`).catch(()=>[]),
       ]);
       setPlatforms(Array.isArray(pf)?pf:[]); setMenu(Array.isArray(mn)?mn:[]);
       setOrders(Array.isArray(or)?or:[]); setItems(Array.isArray(it)?it:[]);
       setBoms(Array.isArray(bm)?bm:[]); setWarehouses(Array.isArray(wh)?wh:[]);
       setBanks(Array.isArray(bk)?bk:[]); setSummary(sm);
-      setBranches(Array.isArray(br)?br:[]);setTables(Array.isArray(tb)?tb:[]);
       if(!oWh&&wh?.length)setOWh(String(wh[0].id));
       if(!oBank&&bk?.length)setOBank(String(bk[0].id));
       if(!pickItem&&mn?.length)setPickItem(String(mn[0].id));
       if(!mItem&&it?.length)setMItem(String(it[0].id));
       if(!mBom&&bm?.length)setMBom(String(bm[0].id));
-      if(!oBranch&&br?.length){
-        const branchId=String(br[0].id);setOBranch(branchId);
-        const firstTable=(Array.isArray(tb)?tb:[]).find((x:Table)=>String(x.branch_id)===branchId&&['AVAILABLE','RESERVED'].includes(x.status));
-        if(firstTable)setOTable(String(firstTable.id));
-      }
     }catch(e:any){setMsg(String(e.message||e));setErr(true);}
   };
   useEffect(()=>{load()},[companyId]);
@@ -134,7 +120,6 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
     if(!oWh){bad({message:ar?'اختر المستودع':'Pick a warehouse'});return;}
     if(oChannel==='DELIVERY'&&!oPlatform){bad({message:ar?'اختر منصة التوصيل':'Pick the platform'});return;}
     if(oChannel!=='DELIVERY'&&!oBank){bad({message:ar?'اختر الحساب البنكي':'Pick a bank account'});return;}
-    if(oType==='DINE_IN'&&(!oBranch||!oTable)){bad({message:ar?'طلبات الصالة تحتاج فرعًا وطاولة متاحة':'Dine-in orders require a branch and an available table'});return;}
     setBusy(true);setMsg('');
     try{
       const body:any={company_id:companyId,order_date:iso(),warehouse_id:Number(oWh),
@@ -142,9 +127,6 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
         lines:cart.map(l=>({menu_item_id:l.menu_item_id,quantity:l.quantity}))};
       if(oChannel==='DELIVERY')body.platform_id=Number(oPlatform);
       else body.bank_account_id=Number(oBank);
-      if(oType==='DINE_IN'){
-        body.branch_id=Number(oBranch);body.table_id=Number(oTable);body.guest_count=Number(guestCount)||1;
-      }
       const r=await json('/api/v1/pos/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       ok(ar?`تم تسجيل الطلب ${r.number||''} — الإجمالي ${fmt(Number(r.total||cartTotal))}`
            :`Order ${r.number||''} recorded — total ${fmt(Number(r.total||cartTotal))}`);
@@ -188,12 +170,6 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
 
   const fcPercent=Number(summary?.food_cost_percent||0);
   const fcGood=fcPercent>0&&fcPercent<=35;
-  const branchTables=tables.filter(t=>String(t.branch_id)===oBranch&&['AVAILABLE','RESERVED'].includes(t.status));
-  const normalizedOrderSearch=orderSearch.trim().toLowerCase();
-  const visibleOrders=normalizedOrderSearch
-    ? orders.filter(o=>[o.number,o.order_type,o.payment_channel,o.platform_name,o.status,o.total]
-        .some(value=>String(value??'').toLowerCase().includes(normalizedOrderSearch)))
-    : orders;
 
   return <>
     <div className="kpis">
@@ -237,13 +213,6 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
                     {banks.map(b=><option key={b.id} value={b.id}>{b.bank_name_ar||b.name_ar||`#${b.id}`}</option>)}</select></label>}
               <label>{ar?'المستودع':'Warehouse'}<select style={field} value={oWh} onChange={e=>setOWh(e.target.value)}>
                 {warehouses.map(w=><option key={w.id} value={w.id}>{w.code} — {ar?w.name_ar:w.name_en}</option>)}</select></label>
-              {oType==='DINE_IN'&&<>
-                <label>{ar?'الفرع':'Branch'}<select style={field} value={oBranch} onChange={e=>{const id=e.target.value;setOBranch(id);const first=tables.find(t=>String(t.branch_id)===id&&['AVAILABLE','RESERVED'].includes(t.status));setOTable(first?String(first.id):'')}}>
-                  <option value="">{ar?'اختر...':'Select...'}</option>{branches.map(b=><option key={b.id} value={b.id}>{b.code} — {ar?b.name_ar:b.name_en}</option>)}</select></label>
-                <label>{ar?'الطاولة':'Table'}<select style={field} value={oTable} onChange={e=>setOTable(e.target.value)}>
-                  <option value="">{ar?'اختر طاولة متاحة...':'Select an available table...'}</option>{branchTables.map(t=><option key={t.id} value={t.id}>{t.code} — {ar?t.name_ar:t.name_en} ({t.capacity})</option>)}</select></label>
-                <label>{ar?'عدد الضيوف':'Guests'}<input type="number" min="1" style={field} value={guestCount} onChange={e=>setGuestCount(e.target.value)}/></label>
-              </>}
             </div>
             <div style={{...grid,paddingTop:0,alignItems:'end'}}>
               <label>{ar?'الصنف':'Menu item'}<select style={field} value={pickItem} onChange={e=>setPickItem(e.target.value)}>
@@ -337,23 +306,14 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
       </Panel>
     </>}
 
-    {tab==='orders'&&<Panel title={ar?'الطلبات':'Orders'} icon={<Receipt size={18}/>}> 
-      <div style={{padding:'0 12px 12px',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-        <Search size={17}/>
-        <input value={orderSearch} onChange={e=>setOrderSearch(e.target.value)}
-          placeholder={ar?'ابحث بالرقم أو النوع أو القناة أو الحالة...':'Search number, type, channel, or status...'}
-          aria-label={ar?'بحث الطلبات':'Search orders'}
-          style={{...field,marginTop:0,maxWidth:440}}/>
-        {orderSearch&&<button style={{...smallBtn,background:'#64748b'}} onClick={()=>setOrderSearch('')}>{ar?'مسح':'Clear'}</button>}
-        <small style={{opacity:0.75}}>{ar?`${visibleOrders.length} من ${orders.length}`:`${visibleOrders.length} of ${orders.length}`}</small>
-      </div>
+    {tab==='orders'&&<Panel title={ar?'الطلبات':'Orders'} icon={<Receipt size={18}/>}>
       <DataTable headers={[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'النوع':'Type',ar?'القناة':'Channel',
         ar?'الصافي':'Net',ar?'الضريبة':'VAT',ar?'الإجمالي':'Total',ar?'إجراء':'Action']}
-        rows={visibleOrders.map(o=>[o.number,o.order_date,
+        rows={orders.map(o=>[o.number,o.order_date,
           (ORDER_TYPES.find(t=>t[0]===o.order_type)||[])[ar?1:2]||o.order_type,
           o.platform_name||((CHANNELS.find(c=>c[0]===o.payment_channel)||[])[ar?1:2]||o.payment_channel),
           fmt(Number(o.subtotal||0)),fmt(Number(o.vat_amount||0)),fmt(Number(o.total||0)),
-          (o.payment_channel==='DELIVERY'&&o.status!=='SETTLED')
+          (o.payment_channel==='DELIVERY'&&o.settlement_status!=='SETTLED')
             ? <button key={o.id} style={smallBtn} disabled={busy} onClick={()=>settle(o.id)}>{ar?'تسوية':'Settle'}</button>
             : '—'])}/>
     </Panel>}

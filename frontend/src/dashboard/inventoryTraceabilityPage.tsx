@@ -1,48 +1,36 @@
 import {useEffect, useMemo, useState} from 'react';
-import {AlertTriangle, Boxes, Container, FileCheck2, PackageCheck, ScanLine} from 'lucide-react';
+import {Boxes, Container, FileCheck2, PackageCheck, ShieldCheck, TrendingDown} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel, fmt} from './ui';
 
-type StockRow={item_id:number};
-type Item={id:number;code:string;name_ar:string;name_en:string};
-type Warehouse={id:number;code:string;name_ar:string;name_en:string};
+type StockRow={item_id:number;item_code:string;item_name_ar:string;warehouse_id:number;warehouse_name_ar:string;quantity:number;value:number};
 type ShipmentLine={id:number;item_id:number;item_code:string;quantity:number;supplier_unit_cost:number;line_goods_value:number;allocated_landed_cost:number;landed_unit_cost:number;lot_number?:string;expiry_date?:string};
 type Shipment={id:number;number:string;container_number:string;packing_list_number:string;commercial_invoice_number:string;customs_clearance_number?:string;customs_declaration_number?:string;arrival_date:string;port_of_entry?:string;carrier?:string;goods_value:number;freight_cost:number;customs_duty:number;clearance_fees:number;other_costs:number;landed_cost_total:number;status:string;journal_id?:number;lines?:ShipmentLine[]};
-type Party={id:number;code:string;name_ar:string;name_en:string;party_type:string};
-type MobilePOLine={id:number;item_id:number;item_code:string;item_name_ar:string;item_name_en:string;remaining_quantity:number;barcode_expected:string};
-type MobilePO={id:number;number:string;status:string;supplier:string;warehouse:string;lines:MobilePOLine[]};
-type AlertRow={type:string;severity:string;reference:string;message_ar:string;message_en:string;days?:number};
-type InspectionDraft={barcode_value:string;accepted_quantity:string;rejected_quantity:string;rejection_reason:string;lot_number:string;production_date:string;expiry_date:string;storage_location:string;evidence:any[]};
+type Party={id:number;code:string;name_ar:string;party_type:string};
+type NrvLine={item_id:number;item_code:string;item_name_ar:string;warehouse_id:number;warehouse_name_ar:string;quantity:number;carrying_cost:number;unit_cost:number;nrv_per_unit:number|null;measured_at:string;writedown_required:number};
+
+const ITEM_TYPES:[string,string][]=[['RAW_MATERIAL','مواد خام'],['WORK_IN_PROGRESS','تحت التصنيع'],['FINISHED_GOOD','منتج نهائي'],['PACKAGING','تعبئة وتغليف'],['CLEANING_MATERIAL','مواد نظافة'],['OPERATING_SUPPLY','مواد تشغيلية'],['SPARE_PART','قطع غيار'],['SERVICE','خدمة']];
+const RAW_SUBTYPES:[string,string][]=[['CORE_MATERIAL','أساسية (لحوم/دواجن)'],['SPICE','بهارات'],['CHEMICAL_BINDER','مواد ربط كيميائية'],['AUXILIARY_MATERIAL','مواد مساعدة (زيوت/شحوم)']];
 
 async function json(url:string,init?:RequestInit){
-  const response=await apiFetch(url,init);const payload=await response.json().catch(()=>({}));
-  if(!response.ok){
-    const detail=payload.detail;
-    const message=typeof detail==='string'?detail:(detail&&(detail.message_ar||detail.message_en))?(detail.message_ar||detail.message_en):JSON.stringify(detail||payload);
-    throw new Error(message);
-  }
-  return payload;
+  const r=await apiFetch(url,init); const x=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(typeof x.detail==='string'?x.detail:JSON.stringify(x.detail||x));
+  return x;
 }
-
 const field={display:'block',width:'100%',marginTop:5,padding:9,border:'1px solid var(--border)',borderRadius:9} as const;
 const btn={padding:'9px 16px',borderRadius:9,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:600} as const;
 
 export function InventoryTraceabilityPage({ar,companyId}:{ar:boolean;companyId:number}){
   const today=new Date().toISOString().slice(0,10);
+  const [tab,setTab]=useState<'shipments'|'classify'|'nrv'>('shipments');
   const [stock,setStock]=useState<StockRow[]>([]);
-  const [items,setItems]=useState<Item[]>([]);
-  const [warehouses,setWarehouses]=useState<Warehouse[]>([]);
   const [suppliers,setSuppliers]=useState<Party[]>([]);
   const [shipments,setShipments]=useState<Shipment[]>([]);
-  const [orders,setOrders]=useState<any[]>([]);
-  const [mobilePO,setMobilePO]=useState<MobilePO|null>(null);
-  const [mobilePoId,setMobilePoId]=useState('');
-  const [receiptDate,setReceiptDate]=useState(today);
-  const [inspections,setInspections]=useState<Record<number,InspectionDraft>>({});
-  const [alerts,setAlerts]=useState<AlertRow[]>([]);
+  const [nrv,setNrv]=useState<{total_writedown_required:number;lines:NrvLine[]}|null>(null);
   const [message,setMessage]=useState('');
   const [busy,setBusy]=useState(false);
 
+  // shipment form
   const [supplierId,setSupplierId]=useState('');
   const [warehouseId,setWarehouseId]=useState('');
   const [container,setContainer]=useState('');
@@ -63,78 +51,63 @@ export function InventoryTraceabilityPage({ar,companyId}:{ar:boolean;companyId:n
   const [lineExpiry,setLineExpiry]=useState('');
   const [lines,setLines]=useState<{item_id:number;item_code:string;quantity:number;supplier_unit_cost:number;lot_number?:string;expiry_date?:string}[]>([]);
 
-  const itemOptions=useMemo(()=>items.map(row=>[row.id,`${row.code} — ${ar?row.name_ar:row.name_en}`] as const),[ar,items]);
-  const stockedItemCount=useMemo(()=>new Set(stock.map(row=>row.item_id)).size,[stock]);
+  // classify form
+  const [clsItem,setClsItem]=useState('');
+  const [clsType,setClsType]=useState('RAW_MATERIAL');
+  const [clsSubtype,setClsSubtype]=useState('CORE_MATERIAL');
+  const [clsValuation,setClsValuation]=useState('WEIGHTED_AVERAGE');
+  const [clsIssue,setClsIssue]=useState('FEFO');
+
+  // nrv form
+  const [nrvItem,setNrvItem]=useState('');
+  const [nrvWarehouse,setNrvWarehouse]=useState('');
+  const [nrvValue,setNrvValue]=useState('');
+
+  const warehouses=useMemo(()=>{
+    const seen=new Map<number,string>();
+    stock.forEach(r=>{if(!seen.has(r.warehouse_id))seen.set(r.warehouse_id,r.warehouse_name_ar);});
+    return [...seen.entries()];
+  },[stock]);
+  const items=useMemo(()=>{
+    const seen=new Map<number,string>();
+    stock.forEach(r=>{if(!seen.has(r.item_id))seen.set(r.item_id,`${r.item_code} — ${r.item_name_ar}`);});
+    return [...seen.entries()];
+  },[stock]);
 
   const load=async()=>{
     try{
-      const [stockRows,partyRows,shipmentRows,itemRows,warehouseRows,orderRows,alertData]=await Promise.all([
+      const [s,p,sh]=await Promise.all([
         json(`/api/v1/inventory/stock-summary?company_id=${companyId}`),
         json(`/api/v1/subledgers/parties?company_id=${companyId}`),
         json(`/api/v1/inventory/inbound-shipments?company_id=${companyId}`),
-        json(`/api/v1/inventory/items?company_id=${companyId}`),
-        json(`/api/v1/inventory/warehouses?company_id=${companyId}`),
-        json(`/api/v1/inventory/purchase-orders?company_id=${companyId}`),
-        json(`/api/v1/inventory/alerts?company_id=${companyId}`),
       ]);
-      const nextItems=Array.isArray(itemRows)?itemRows:[];
-      const nextWarehouses=Array.isArray(warehouseRows)?warehouseRows:[];
-      const nextSuppliers=(Array.isArray(partyRows)?partyRows:[]).filter((row:Party)=>['SUPPLIER','BOTH'].includes(row.party_type));
-      setStock(Array.isArray(stockRows)?stockRows:[]);
-      setSuppliers(nextSuppliers);setShipments(Array.isArray(shipmentRows)?shipmentRows:[]);
-      setItems(nextItems);setWarehouses(nextWarehouses);
-      setOrders((Array.isArray(orderRows)?orderRows:[]).filter((row:any)=>['APPROVED','PARTIALLY_RECEIVED'].includes(row.status)));
-      setAlerts(Array.isArray(alertData?.alerts)?alertData.alerts:[]);
-      if(!warehouseId&&nextWarehouses.length)setWarehouseId(String(nextWarehouses[0].id));
-      if(!lineItemId&&nextItems.length)setLineItemId(String(nextItems[0].id));
-      if(!supplierId&&nextSuppliers.length)setSupplierId(String(nextSuppliers[0].id));
-    }catch(cause:any){setMessage(String(cause.message||cause));}
+      setStock(s||[]);
+      setSuppliers((p||[]).filter((x:Party)=>x.party_type==='SUPPLIER'));
+      setShipments(sh||[]);
+      if(!warehouseId&&s?.length)setWarehouseId(String(s[0].warehouse_id));
+      if(!lineItemId&&s?.length)setLineItemId(String(s[0].item_id));
+      if(!clsItem&&s?.length)setClsItem(String(s[0].item_id));
+      if(!nrvItem&&s?.length){setNrvItem(String(s[0].item_id));setNrvWarehouse(String(s[0].warehouse_id));}
+    }catch(e:any){setMessage(String(e.message||e));}
   };
-  useEffect(()=>{void load();},[companyId]);
+  useEffect(()=>{load()},[companyId]);
+  useEffect(()=>{if(suppliers.length&&!supplierId)setSupplierId(String(suppliers[0].id));},[suppliers]);
 
-  const blankDraft=(line:MobilePOLine):InspectionDraft=>({barcode_value:'',accepted_quantity:String(line.remaining_quantity),rejected_quantity:'0',rejection_reason:'',lot_number:'',production_date:'',expiry_date:'',storage_location:'',evidence:[]});
-  const chooseMobilePO=async(value:string)=>{
-    setMobilePoId(value);setMobilePO(null);setInspections({});
-    if(!value)return;
-    try{
-      const po=await json(`/api/v1/inventory/mobile-receipts/purchase-orders/${value}?company_id=${companyId}`) as MobilePO;
-      setMobilePO(po);setInspections(Object.fromEntries(po.lines.filter(line=>Number(line.remaining_quantity)>0).map(line=>[line.id,blankDraft(line)])));
-    }catch(cause:any){setMessage(String(cause.message||cause));}
+  const loadNrv=async()=>{
+    try{const r=await json(`/api/v1/inventory/nrv-assessment?company_id=${companyId}`);setNrv(r);}
+    catch(e:any){setMessage(String(e.message||e));}
   };
-  const setInspection=(id:number,key:keyof InspectionDraft,value:any)=>setInspections(current=>({...current,[id]:{...current[id],[key]:value}}));
-  const captureEvidence=async(id:number,file?:File)=>{
-    if(!file)return;
-    if(file.size>10_485_760){setMessage(ar?'حجم الدليل يتجاوز 10 MB':'Evidence exceeds 10 MB');return;}
-    const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer()))).map(b=>b.toString(16).padStart(2,'0')).join('');
-    const evidence={file_name:file.name,content_type:file.type,size_bytes:file.size,sha256:hash,object_key:`mobile-evidence/${companyId}/${Date.now()}-${file.name}`};
-    setInspection(id,'evidence',[...(inspections[id]?.evidence||[]),evidence]);
-  };
-  const postMobileReceipt=async()=>{
-    if(!mobilePO){setMessage(ar?'اختر أمر شراء معتمدًا':'Select an approved purchase order');return;}
-    const selected=mobilePO.lines.filter(line=>Number(inspections[line.id]?.accepted_quantity||0)+Number(inspections[line.id]?.rejected_quantity||0)>0);
-    if(!selected.length){setMessage(ar?'أدخل نتيجة فحص سطر واحد على الأقل':'Enter at least one inspection result');return;}
-    setBusy(true);setMessage('');
-    try{
-      const result=await json('/api/v1/inventory/mobile-receipts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-        company_id:companyId,purchase_order_id:mobilePO.id,receipt_date:receiptDate,
-        lines:selected.map(line=>{const d=inspections[line.id];return {purchase_order_line_id:line.id,barcode_value:d.barcode_value,
-          accepted_quantity:Number(d.accepted_quantity||0),rejected_quantity:Number(d.rejected_quantity||0),rejection_reason:d.rejection_reason||null,
-          lot_number:d.lot_number,production_date:d.production_date||null,expiry_date:d.expiry_date||null,storage_location:d.storage_location,evidence:d.evidence};}),
-      })});
-      setMessage(ar?`تم إنشاء ${result.number} بعد الفحص — المرفوض ${result.rejected_quantity}`:`${result.number} posted after inspection`);
-      setMobilePO(null);setMobilePoId('');setInspections({});await load();
-    }catch(cause:any){setMessage(String(cause.message||cause));}finally{setBusy(false);}
-  };
+  useEffect(()=>{if(tab==='nrv')loadNrv();},[tab,companyId]);
 
   const addLine=()=>{
-    if(!lineItemId||!lineQty||!lineCost){setMessage(ar?'أكمل بيانات سطر الشحنة':'Complete the shipment line');return;}
-    const itemLabel=itemOptions.find(([id])=>String(id)===lineItemId)?.[1]||lineItemId;
-    setLines(current=>[...current,{item_id:Number(lineItemId),item_code:itemLabel,quantity:Number(lineQty),supplier_unit_cost:Number(lineCost),lot_number:lineLot||undefined,expiry_date:lineExpiry||undefined}]);
+    if(!lineItemId||!lineQty||!lineCost){setMessage(ar?'أكمل بيانات السطر':'Complete line fields');return;}
+    const code=items.find(([id])=>String(id)===lineItemId)?.[1]||lineItemId;
+    setLines([...lines,{item_id:Number(lineItemId),item_code:String(code),quantity:Number(lineQty),supplier_unit_cost:Number(lineCost),lot_number:lineLot||undefined,expiry_date:lineExpiry||undefined}]);
     setLineQty('');setLineCost('');setLineLot('');setLineExpiry('');
   };
 
   const createShipment=async()=>{
-    if(!container||!pl||!ci||!supplierId||!warehouseId){setMessage(ar?'رقم الكونتينر وقائمة التعبئة وفاتورة المورد والمورد والمستودع إلزامية':'Container, packing list, commercial invoice, supplier, and warehouse are required');return;}
+    if(!container||!pl||!ci){setMessage(ar?'رقم الكونتينر وPL وفاتورة المورد إلزامية':'Container, PL and commercial invoice are required');return;}
     if(!lines.length){setMessage(ar?'أضف سطرًا واحدًا على الأقل':'Add at least one line');return;}
     setBusy(true);setMessage('');
     try{
@@ -142,103 +115,131 @@ export function InventoryTraceabilityPage({ar,companyId}:{ar:boolean;companyId:n
         container_number:container,packing_list_number:pl,commercial_invoice_number:ci,customs_clearance_number:clearance||undefined,
         customs_declaration_number:declaration||undefined,port_of_entry:port||undefined,carrier:carrier||undefined,
         freight_cost:Number(freight),customs_duty:Number(duty),clearance_fees:Number(fees),other_costs:0,allocation_method:'VALUE',
-        lines:lines.map(line=>({item_id:line.item_id,quantity:line.quantity,supplier_unit_cost:line.supplier_unit_cost,lot_number:line.lot_number,expiry_date:line.expiry_date}))};
+        lines:lines.map(l=>({item_id:l.item_id,quantity:l.quantity,supplier_unit_cost:l.supplier_unit_cost,lot_number:l.lot_number,expiry_date:l.expiry_date}))};
       const created=await json('/api/v1/inventory/inbound-shipments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       setMessage(ar?`تم إنشاء الشحنة ${created.number} — التكلفة المحمّلة ${fmt(Number(created.landed_cost_total))}`:`Shipment ${created.number} created`);
-      setContainer('');setPl('');setCi('');setClearance('');setDeclaration('');setLines([]);await load();
-    }catch(cause:any){setMessage(String(cause.message||cause));}
-    finally{setBusy(false);}
+      setContainer('');setPl('');setCi('');setClearance('');setDeclaration('');setLines([]);
+      await load();
+    }catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
   };
 
   const receiveShipment=async(id:number)=>{
     setBusy(true);setMessage('');
-    try{
-      const result=await json(`/api/v1/inventory/inbound-shipments/${id}/receive?company_id=${companyId}`,{method:'POST'});
-      setMessage(ar?`تم الاستلام — القيد ${result.journal_number}`:`Received — journal ${result.journal_number}`);await load();
-    }catch(cause:any){setMessage(String(cause.message||cause));}
-    finally{setBusy(false);}
+    try{const r=await json(`/api/v1/inventory/inbound-shipments/${id}/receive?company_id=${companyId}`,{method:'POST'});
+      setMessage(ar?`تم الاستلام — قيد ${r.journal_number}`:`Received — journal ${r.journal_number}`);await load();}
+    catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
   };
 
-  const totalLanded=lines.reduce((sum,line)=>sum+line.quantity*line.supplier_unit_cost,0)+Number(freight||0)+Number(duty||0)+Number(fees||0);
-  const receivedCount=shipments.filter(row=>row.status==='RECEIVED').length;
+  const classify=async()=>{
+    setBusy(true);setMessage('');
+    try{
+      const body:any={company_id:companyId,item_id:Number(clsItem),item_type:clsType,valuation_method:clsValuation,physical_issue_method:clsIssue};
+      if(clsType==='RAW_MATERIAL')body.item_subtype=clsSubtype;
+      const r=await json('/api/v1/inventory/items/classify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      setMessage(ar?`تم تصنيف ${r.code}`:`Classified ${r.code}`);
+    }catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
+  };
+
+  const writedown=async()=>{
+    setBusy(true);setMessage('');
+    try{
+      const body:any={company_id:companyId,item_id:Number(nrvItem),warehouse_id:Number(nrvWarehouse)};
+      if(nrvValue)body.nrv_per_unit=Number(nrvValue);
+      const r=await json('/api/v1/inventory/nrv-writedown',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      setMessage(r.journal_number?(ar?`تخفيض ${fmt(Number(r.writedown))} — قيد ${r.journal_number}`:`Write-down ${fmt(Number(r.writedown))} — ${r.journal_number}`):(ar?'NRV ليست أقل من التكلفة — لا تخفيض':'NRV not below cost'));
+      await loadNrv();
+    }catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
+  };
+
+  const totalLanded=lines.reduce((s,l)=>s+l.quantity*l.supplier_unit_cost,0)+Number(freight||0)+Number(duty||0)+Number(fees||0);
+  const receivedCount=shipments.filter(s=>s.status==='RECEIVED').length;
 
   return <>
     <div className="kpis">
       <Kpi title={ar?'الشحنات الواردة':'Inbound shipments'} value={String(shipments.length)} trend="" good icon={<Container size={22}/>} tone="blue"/>
-      <Kpi title={ar?'الشحنات المستلمة':'Received shipments'} value={String(receivedCount)} trend="" good icon={<PackageCheck size={22}/>} tone="green"/>
-      <Kpi title={ar?'أصناف بها مخزون':'Items in stock'} value={String(stockedItemCount)} trend="" good icon={<Boxes size={22}/>} tone="violet"/>
-      <Kpi title={ar?'تنبيهات تشغيلية':'Operational alerts'} value={String(alerts.length)} trend="" good={alerts.length===0} icon={<AlertTriangle size={22}/>} tone="amber"/>
+      <Kpi title={ar?'مستلمة':'Received'} value={String(receivedCount)} trend="" good icon={<PackageCheck size={22}/>} tone="green"/>
+      <Kpi title={ar?'أصناف بها مخزون':'Items in stock'} value={String(items.length)} trend="" good icon={<Boxes size={22}/>} tone="violet"/>
+      <Kpi title={ar?'تخفيض NRV مطلوب':'NRV write-down due'} value={nrv?fmt(Number(nrv.total_writedown_required)):'—'} trend="" good={false} icon={<TrendingDown size={22}/>} tone="amber"/>
     </div>
 
-    {message&&<div style={{padding:10,margin:'12px 0',borderRadius:9,background:'var(--panel-2, #f1f5f9)',fontSize:14}}>{message}</div>}
+    <div style={{display:'flex',gap:8,margin:'14px 0'}}>
+      {([['shipments',ar?'الشحنات الواردة':'Shipments'],['classify',ar?'تصنيف الأصناف':'Classify'],['nrv',ar?'تقييم NRV':'NRV assessment']] as [typeof tab,string][]).map(([k,label])=>
+        <button key={k} onClick={()=>setTab(k)} style={{...btn,background:tab===k?'var(--accent, #1e40af)':'transparent',color:tab===k?'#fff':'var(--text)',border:'1px solid var(--border)'}}>{label}</button>)}
+    </div>
 
-    <Panel title={ar?'الاستلام المحمول بالباركود / QR':'Mobile barcode / QR receiving'} icon={<ScanLine size={18}/> }>
-      <div style={{padding:12,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:10}}>
-        <label>{ar?'أمر شراء معتمد':'Approved purchase order'}<select style={field} value={mobilePoId} onChange={event=>void chooseMobilePO(event.target.value)}><option value="">{ar?'اختر أمر الشراء...':'Select PO...'}</option>{orders.map((row:any)=><option key={row.id} value={row.id}>{row.number} — {row.supplier}</option>)}</select></label>
-        <label>{ar?'تاريخ الاستلام والترحيل':'Receipt / posting date'}<input type="date" style={field} value={receiptDate} onChange={event=>setReceiptDate(event.target.value)}/></label>
-      </div>
-      {mobilePO&&<div style={{padding:'0 12px 12px'}}>
-        <div style={{padding:10,borderRadius:9,background:'var(--panel-2,#f1f5f9)',marginBottom:10}}><strong>{mobilePO.number}</strong> · {mobilePO.supplier} · {mobilePO.warehouse}</div>
-        {mobilePO.lines.filter(line=>Number(line.remaining_quantity)>0).map(line=>{const d=inspections[line.id]||blankDraft(line);return <div key={line.id} style={{border:'1px solid var(--border)',borderRadius:12,padding:12,marginBottom:10}}>
-          <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><strong>{line.item_code} — {ar?line.item_name_ar:line.item_name_en}</strong><span>{ar?'المتبقي':'Remaining'}: {line.remaining_quantity}</span></div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:9,marginTop:8}}>
-            <label>{ar?'امسح الباركود / QR *':'Scan barcode / QR *'}<input autoComplete="off" inputMode="text" style={field} value={d.barcode_value} onChange={e=>setInspection(line.id,'barcode_value',e.target.value)} placeholder={line.barcode_expected}/></label>
-            <label>{ar?'مقبول *':'Accepted *'}<input type="number" min="0" step="0.0001" style={field} value={d.accepted_quantity} onChange={e=>setInspection(line.id,'accepted_quantity',e.target.value)}/></label>
-            <label>{ar?'مرفوض':'Rejected'}<input type="number" min="0" step="0.0001" style={field} value={d.rejected_quantity} onChange={e=>setInspection(line.id,'rejected_quantity',e.target.value)}/></label>
-            <label>{ar?'رقم التشغيلة *':'Lot / batch *'}<input style={field} value={d.lot_number} onChange={e=>setInspection(line.id,'lot_number',e.target.value)}/></label>
-            <label>{ar?'تاريخ الإنتاج':'Production date'}<input type="date" style={field} value={d.production_date} onChange={e=>setInspection(line.id,'production_date',e.target.value)}/></label>
-            <label>{ar?'تاريخ الانتهاء':'Expiry date'}<input type="date" style={field} value={d.expiry_date} onChange={e=>setInspection(line.id,'expiry_date',e.target.value)}/></label>
-            <label>{ar?'موقع التخزين *':'Storage bin *'}<input style={field} value={d.storage_location} onChange={e=>setInspection(line.id,'storage_location',e.target.value)} placeholder="A-03-R02-B04"/></label>
-            <label>{ar?'سبب الرفض':'Rejection reason'}<input style={field} value={d.rejection_reason} onChange={e=>setInspection(line.id,'rejection_reason',e.target.value)} disabled={Number(d.rejected_quantity||0)<=0}/></label>
-            <label>{ar?'صورة / محضر فحص':'Photo / inspection evidence'}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" capture="environment" style={field} onChange={e=>void captureEvidence(line.id,e.target.files?.[0])}/><small>{d.evidence.length} {ar?'دليل مسجل بالـ SHA-256':'evidence record(s), SHA-256 protected'}</small></label>
+    {message&&<div style={{padding:10,marginBottom:12,borderRadius:9,background:'var(--panel-2, #f1f5f9)',fontSize:14}}>{message}</div>}
+
+    {tab==='shipments'&&<>
+      <Panel title={ar?'شحنة واردة جديدة':'New inbound shipment'} icon={<Container size={18}/>}>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,padding:12}}>
+          <label>{ar?'رقم الكونتينر *':'Container No. *'}<input style={field} value={container} onChange={e=>setContainer(e.target.value)} placeholder="MSKU-1234567"/></label>
+          <label>{ar?'رقم قائمة التعبئة (PL) *':'Packing List No. *'}<input style={field} value={pl} onChange={e=>setPl(e.target.value)}/></label>
+          <label>{ar?'رقم فاتورة المورد *':'Commercial Invoice No. *'}<input style={field} value={ci} onChange={e=>setCi(e.target.value)}/></label>
+          <label>{ar?'رقم فاتورة التخليص':'Customs Clearance No.'}<input style={field} value={clearance} onChange={e=>setClearance(e.target.value)}/></label>
+          <label>{ar?'رقم البيان الجمركي':'Customs Declaration No.'}<input style={field} value={declaration} onChange={e=>setDeclaration(e.target.value)}/></label>
+          <label>{ar?'المورد':'Supplier'}<select style={field} value={supplierId} onChange={e=>setSupplierId(e.target.value)}>{suppliers.map(s=><option key={s.id} value={s.id}>{s.name_ar}</option>)}</select></label>
+          <label>{ar?'المستودع':'Warehouse'}<select style={field} value={warehouseId} onChange={e=>setWarehouseId(e.target.value)}>{warehouses.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+          <label>{ar?'تاريخ الوصول':'Arrival date'}<input type="date" style={field} value={arrival} onChange={e=>setArrival(e.target.value)}/></label>
+          <label>{ar?'الميناء':'Port'}<input style={field} value={port} onChange={e=>setPort(e.target.value)}/></label>
+          <label>{ar?'الناقل':'Carrier'}<input style={field} value={carrier} onChange={e=>setCarrier(e.target.value)}/></label>
+          <label>{ar?'الشحن':'Freight'}<input type="number" style={field} value={freight} onChange={e=>setFreight(e.target.value)}/></label>
+          <label>{ar?'الجمارك':'Customs duty'}<input type="number" style={field} value={duty} onChange={e=>setDuty(e.target.value)}/></label>
+          <label>{ar?'رسوم التخليص':'Clearance fees'}<input type="number" style={field} value={fees} onChange={e=>setFees(e.target.value)}/></label>
+        </div>
+        <div style={{padding:12,borderTop:'1px solid var(--border)'}}>
+          <strong>{ar?'أسطر الشحنة':'Shipment lines'}</strong>
+          <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr auto',gap:8,marginTop:8,alignItems:'end'}}>
+            <label>{ar?'الصنف':'Item'}<select style={field} value={lineItemId} onChange={e=>setLineItemId(e.target.value)}>{items.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+            <label>{ar?'الكمية':'Qty'}<input type="number" style={field} value={lineQty} onChange={e=>setLineQty(e.target.value)}/></label>
+            <label>{ar?'سعر المورد':'Supplier cost'}<input type="number" style={field} value={lineCost} onChange={e=>setLineCost(e.target.value)}/></label>
+            <label>{ar?'الدفعة':'Lot'}<input style={field} value={lineLot} onChange={e=>setLineLot(e.target.value)}/></label>
+            <label>{ar?'الصلاحية':'Expiry'}<input type="date" style={field} value={lineExpiry} onChange={e=>setLineExpiry(e.target.value)}/></label>
+            <button style={btn} onClick={addLine}>{ar?'إضافة':'Add'}</button>
           </div>
-        </div>})}
-        <button style={{...btn,width:'100%',minHeight:46,opacity:busy?0.6:1}} disabled={busy} onClick={postMobileReceipt}>{ar?'اعتماد الفحص وإنشاء GRN':'Post inspection and create GRN'}</button>
-      </div>}
-    </Panel>
+          {lines.length>0&&<div style={{marginTop:10}}><DataTable headers={[ar?'الصنف':'Item',ar?'الكمية':'Qty',ar?'سعر المورد':'Cost',ar?'الدفعة':'Lot',ar?'الصلاحية':'Expiry']} rows={lines.map(l=>[l.item_code,String(l.quantity),fmt(l.supplier_unit_cost),l.lot_number||'—',l.expiry_date||'—'])}/></div>}
+          <div style={{marginTop:10,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span>{ar?'إجمالي التكلفة المحمّلة المتوقع:':'Expected landed total:'} <strong>{fmt(totalLanded)}</strong></span>
+            <button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={createShipment}>{ar?'إنشاء الشحنة':'Create shipment'}</button>
+          </div>
+        </div>
+      </Panel>
 
-    <Panel title={ar?'تنبيهات المخزون والتوريد':'Inventory & supply alerts'} icon={<AlertTriangle size={18}/> }>
-      <DataTable headers={[ar?'الأولوية':'Severity',ar?'النوع':'Type',ar?'المرجع':'Reference',ar?'التنبيه':'Alert']}
-        rows={alerts.map((row,index)=>[<span key={index} style={{fontWeight:700,color:row.severity==='CRITICAL'?'#b91c1c':row.severity==='HIGH'?'#c2410c':'#a16207'}}>{row.severity}</span>,row.type,row.reference,ar?row.message_ar:row.message_en])}/>
-    </Panel>
+      <Panel title={ar?'الشحنات المسجّلة':'Recorded shipments'} icon={<FileCheck2 size={18}/>}>
+        <DataTable
+          headers={[ar?'الرقم':'No.',ar?'الكونتينر':'Container',ar?'فاتورة المورد':'Invoice',ar?'التخليص':'Clearance',ar?'التكلفة المحمّلة':'Landed',ar?'الحالة':'Status',ar?'إجراء':'Action']}
+          rows={shipments.map(s=>[s.number,s.container_number,s.commercial_invoice_number,s.customs_clearance_number||'—',fmt(Number(s.landed_cost_total)),
+            s.status==='RECEIVED'?(ar?'مستلمة':'Received'):(ar?'مسعّرة':'Costed'),
+            s.status==='COSTED'?<button key={s.id} style={{...btn,padding:'5px 12px'}} disabled={busy} onClick={()=>receiveShipment(s.id)}>{ar?'استلام':'Receive'}</button>:'✓'])}/>
+      </Panel>
+    </>}
 
-    <Panel title={ar?'شحنة واردة جديدة':'New inbound shipment'} icon={<Container size={18}/> }>
+    {tab==='classify'&&<Panel title={ar?'تصنيف صنف':'Classify item'} icon={<Boxes size={18}/>}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,padding:12}}>
-        <label>{ar?'رقم الكونتينر *':'Container No. *'}<input style={field} value={container} onChange={event=>setContainer(event.target.value)} placeholder="MSKU-1234567"/></label>
-        <label>{ar?'رقم قائمة التعبئة (PL) *':'Packing List No. *'}<input style={field} value={pl} onChange={event=>setPl(event.target.value)}/></label>
-        <label>{ar?'رقم فاتورة المورد *':'Commercial Invoice No. *'}<input style={field} value={ci} onChange={event=>setCi(event.target.value)}/></label>
-        <label>{ar?'رقم فاتورة التخليص':'Customs Clearance No.'}<input style={field} value={clearance} onChange={event=>setClearance(event.target.value)}/></label>
-        <label>{ar?'رقم البيان الجمركي':'Customs Declaration No.'}<input style={field} value={declaration} onChange={event=>setDeclaration(event.target.value)}/></label>
-        <label>{ar?'المورد':'Supplier'}<select style={field} value={supplierId} onChange={event=>setSupplierId(event.target.value)}>{suppliers.map(row=><option key={row.id} value={row.id}>{row.code} — {ar?row.name_ar:row.name_en}</option>)}</select></label>
-        <label>{ar?'المستودع':'Warehouse'}<select style={field} value={warehouseId} onChange={event=>setWarehouseId(event.target.value)}>{warehouses.map(row=><option key={row.id} value={row.id}>{row.code} — {ar?row.name_ar:row.name_en}</option>)}</select></label>
-        <label>{ar?'تاريخ الوصول':'Arrival date'}<input type="date" style={field} value={arrival} onChange={event=>setArrival(event.target.value)}/></label>
-        <label>{ar?'الميناء':'Port'}<input style={field} value={port} onChange={event=>setPort(event.target.value)}/></label>
-        <label>{ar?'الناقل':'Carrier'}<input style={field} value={carrier} onChange={event=>setCarrier(event.target.value)}/></label>
-        <label>{ar?'تكلفة الشحن':'Freight'}<input type="number" min="0" style={field} value={freight} onChange={event=>setFreight(event.target.value)}/></label>
-        <label>{ar?'الرسوم الجمركية':'Customs duty'}<input type="number" min="0" style={field} value={duty} onChange={event=>setDuty(event.target.value)}/></label>
-        <label>{ar?'رسوم التخليص':'Clearance fees'}<input type="number" min="0" style={field} value={fees} onChange={event=>setFees(event.target.value)}/></label>
+        <label>{ar?'الصنف':'Item'}<select style={field} value={clsItem} onChange={e=>setClsItem(e.target.value)}>{items.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+        <label>{ar?'النوع':'Type'}<select style={field} value={clsType} onChange={e=>setClsType(e.target.value)}>{ITEM_TYPES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></label>
+        {clsType==='RAW_MATERIAL'&&<label>{ar?'الفئة الفرعية':'Subtype'}<select style={field} value={clsSubtype} onChange={e=>setClsSubtype(e.target.value)}>{RAW_SUBTYPES.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></label>}
+        <label>{ar?'طريقة التقييم':'Valuation'}<select style={field} value={clsValuation} onChange={e=>setClsValuation(e.target.value)}><option value="WEIGHTED_AVERAGE">{ar?'متوسط مرجح':'Weighted average'}</option><option value="FIFO">FIFO</option></select></label>
+        <label>{ar?'طريقة الصرف المادي':'Physical issue'}<select style={field} value={clsIssue} onChange={e=>setClsIssue(e.target.value)}><option value="FEFO">FEFO ({ar?'الأقرب انتهاءً':'earliest expiry'})</option><option value="FIFO">FIFO</option></select></label>
       </div>
-      <div style={{padding:12,borderTop:'1px solid var(--border)'}}>
-        <strong>{ar?'أسطر الشحنة':'Shipment lines'}</strong>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:8,marginTop:8,alignItems:'end'}}>
-          <label>{ar?'الصنف':'Item'}<select style={field} value={lineItemId} onChange={event=>setLineItemId(event.target.value)}>{itemOptions.map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>
-          <label>{ar?'الكمية':'Qty'}<input type="number" min="0" style={field} value={lineQty} onChange={event=>setLineQty(event.target.value)}/></label>
-          <label>{ar?'سعر المورد':'Supplier cost'}<input type="number" min="0" style={field} value={lineCost} onChange={event=>setLineCost(event.target.value)}/></label>
-          <label>{ar?'الدفعة':'Lot'}<input style={field} value={lineLot} onChange={event=>setLineLot(event.target.value)}/></label>
-          <label>{ar?'الصلاحية':'Expiry'}<input type="date" style={field} value={lineExpiry} onChange={event=>setLineExpiry(event.target.value)}/></label>
-          <button style={btn} onClick={addLine}>{ar?'إضافة':'Add'}</button>
-        </div>
-        {lines.length>0&&<div style={{marginTop:10}}><DataTable headers={[ar?'الصنف':'Item',ar?'الكمية':'Qty',ar?'سعر المورد':'Cost',ar?'الدفعة':'Lot',ar?'الصلاحية':'Expiry']} rows={lines.map(line=>[line.item_code,String(line.quantity),fmt(line.supplier_unit_cost),line.lot_number||'—',line.expiry_date||'—'])}/></div>}
-        <div style={{marginTop:10,display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-          <span>{ar?'إجمالي التكلفة المحمّلة المتوقع:':'Expected landed total:'} <strong>{fmt(totalLanded)}</strong></span>
-          <button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={createShipment}>{ar?'إنشاء الشحنة':'Create shipment'}</button>
-        </div>
+      <div style={{padding:12}}><button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={classify}>{ar?'حفظ التصنيف':'Save classification'}</button>
+        <p style={{marginTop:8,fontSize:13,color:'var(--muted)'}}>{ar?'ملاحظة: LIFO ممنوع حسب معيار IAS 2. تغيير طريقة التقييم يُسجّل في سجل التدقيق.':'Note: LIFO is prohibited by IAS 2. Valuation changes are audit-logged.'}</p>
       </div>
-    </Panel>
+    </Panel>}
 
-    <Panel title={ar?'الشحنات المسجلة':'Recorded shipments'} icon={<FileCheck2 size={18}/> }>
-      <DataTable headers={[ar?'الرقم':'No.',ar?'الكونتينر':'Container',ar?'فاتورة المورد':'Invoice',ar?'التخليص':'Clearance',ar?'التكلفة المحمّلة':'Landed',ar?'الحالة':'Status',ar?'إجراء':'Action']}
-        rows={shipments.map(row=>[row.number,row.container_number,row.commercial_invoice_number,row.customs_clearance_number||'—',fmt(Number(row.landed_cost_total)),row.status==='RECEIVED'?(ar?'مستلمة':'Received'):(ar?'مسعّرة':'Costed'),row.status==='COSTED'?<button key={row.id} style={{...btn,padding:'5px 12px'}} disabled={busy} onClick={()=>receiveShipment(row.id)}>{ar?'استلام':'Receive'}</button>:'✓'])}/>
-    </Panel>
+    {tab==='nrv'&&<>
+      <Panel title={ar?'قيد تخفيض NRV':'Record NRV write-down'} icon={<TrendingDown size={18}/>}>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,padding:12}}>
+          <label>{ar?'الصنف':'Item'}<select style={field} value={nrvItem} onChange={e=>setNrvItem(e.target.value)}>{items.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+          <label>{ar?'المستودع':'Warehouse'}<select style={field} value={nrvWarehouse} onChange={e=>setNrvWarehouse(e.target.value)}>{warehouses.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+          <label>{ar?'NRV لكل وحدة (اتركها فارغة لاستخدام المحفوظة)':'NRV per unit (blank = stored)'}<input type="number" style={field} value={nrvValue} onChange={e=>setNrvValue(e.target.value)}/></label>
+        </div>
+        <div style={{padding:12}}><button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={writedown}>{ar?'ترحيل التخفيض':'Post write-down'}</button></div>
+      </Panel>
+      <Panel title={ar?'تقرير تقييم NRV (للمراجع الخارجي)':'NRV assessment (external auditor)'} icon={<ShieldCheck size={18}/>}>
+        <DataTable
+          headers={[ar?'الصنف':'Item',ar?'المستودع':'Warehouse',ar?'الكمية':'Qty',ar?'التكلفة/وحدة':'Cost/u',ar?'NRV/وحدة':'NRV/u',ar?'القياس':'Measured',ar?'تخفيض مطلوب':'Write-down']}
+          rows={(nrv?.lines||[]).map(l=>[l.item_code,l.warehouse_name_ar,String(l.quantity),fmt(Number(l.unit_cost)),l.nrv_per_unit!=null?fmt(Number(l.nrv_per_unit)):'—',l.measured_at==='NRV'?(ar?'بـNRV':'at NRV'):(ar?'بالتكلفة':'at cost'),fmt(Number(l.writedown_required))])}/>
+      </Panel>
+    </>}
   </>;
 }

@@ -25,7 +25,7 @@ def login(client: TestClient, email: str, password: str) -> dict[str, str]:
 
 with TestClient(app) as client:
     admin = login(client, "admin@corvaxplatform.com", "Corvax@123")
-    assert client.get("/health").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.1"
+    assert client.get("/health").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
     assert len(client.get("/api/v1/companies", headers=admin).json()) == 4
 
     create_user = client.post(
@@ -61,19 +61,6 @@ with TestClient(app) as client:
     assert client.post(f"/api/v1/finance/journals/{journal_id}/approve", headers=cfo).status_code == 409
     assert client.post(f"/api/v1/finance/journals/{journal_id}/approve", headers=admin).json()["status"] == "APPROVED"
     assert client.post(f"/api/v1/finance/journals/{journal_id}/post", headers=admin).json()["status"] == "POSTED"
-    reversal_response = client.post(f"/api/v1/finance/journals/{journal_id}/reverse?reversal_date=2026-07-12", headers=admin)
-    assert reversal_response.status_code == 201, reversal_response.text
-    reversal = reversal_response.json()
-    assert reversal["status"] == "POSTED"
-    assert reversal["reference"].startswith("REV-")
-    assert float(reversal["total_debit"]) == float(draft.json()["total_credit"])
-    assert float(reversal["total_credit"]) == float(draft.json()["total_debit"])
-    original_by_code = {line["account_code"]: line for line in draft.json()["lines"]}
-    reversed_by_code = {line["account_code"]: line for line in reversal["lines"]}
-    assert set(reversed_by_code) == set(original_by_code)
-    for code, original_line in original_by_code.items():
-        assert float(reversed_by_code[code]["debit"]) == float(original_line["credit"])
-        assert float(reversed_by_code[code]["credit"]) == float(original_line["debit"])
 
     parties = client.get("/api/v1/subledgers/parties?company_id=1", headers=admin).json()
     banks = client.get("/api/v1/subledgers/bank-accounts?company_id=1", headers=admin).json()

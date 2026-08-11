@@ -10,7 +10,7 @@ from app.main import app
 def ok(r,s=200): assert r.status_code==s,(r.status_code,r.text); return r.json()
 with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'})); h={'Authorization':f"Bearer {login['access_token']}"}
-    assert ok(c.get('/health'))['version']== '1.0.0-agreement-completion-rc27.4-r9.1'
+    assert ok(c.get('/health'))['version']== '1.0.0-agreement-completion-rc27.4-r9.2'
     p=ok(c.post('/api/v1/risk-maintenance/ifrs9/portfolios',headers=h,json={'company_id':1,'code':'TRADE','name_ar':'العملاء','name_en':'Trade receivables','buckets':[{'min_days':0,'max_days':30,'loss_rate':'0.01'},{'min_days':31,'max_days':90,'loss_rate':'0.05'},{'min_days':91,'max_days':None,'loss_rate':'0.20'}]}),201)
     ok(c.post('/api/v1/risk-maintenance/ifrs9/exposures',headers=h,json={'company_id':1,'portfolio_id':p['id'],'reference':'INV-1','customer_name':'Customer A','due_date':'2026-06-01','gross_amount':'10000','carrying_amount':'10000'}),201)
     run=ok(c.post('/api/v1/risk-maintenance/ifrs9/runs',headers=h,json={'company_id':1,'portfolio_id':p['id'],'as_of_date':'2026-07-12','post_journal':False}),201)

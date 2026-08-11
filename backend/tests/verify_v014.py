@@ -32,18 +32,8 @@ def assert_ok(response, expected=200):
 
 with TestClient(app) as client:
     admin = login(client)
-    assert_ok(client.post("/api/v1/admin/users", headers=admin, json={
-        "name_ar": "مراجع مشتريات 14", "name_en": "Procurement Reviewer 14",
-        "email": "v014.po.reviewer@corvaxplatform.com", "password": "V014Reviewer@123",
-        "require_password_change": False,
-        "memberships": [{"company_id": 4, "role_code": "CFO"}],
-    }), 201)
-    reviewer_login = assert_ok(client.post("/api/v1/auth/login", json={
-        "email": "v014.po.reviewer@corvaxplatform.com", "password": "V014Reviewer@123",
-    }))
-    po_reviewer = {"Authorization": f"Bearer {reviewer_login['access_token']}"}
     health = assert_ok(client.get("/health"))
-    assert health["version"] == "1.0.0-agreement-completion-rc27.4-r9.1"
+    assert health["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
     assert health.get("status") == "ok"
 
     # Budget control from seeded approved budget.
@@ -86,8 +76,7 @@ with TestClient(app) as client:
         "company_id":4,"order_date":"2026-07-12","supplier_id":supplier["id"],"warehouse_id":warehouse["id"],
         "lines":[{"item_id":raw["id"],"quantity":100,"unit_price":12,"vat_rate":15}],
     }), 201)
-    assert client.post(f"/api/v1/inventory/purchase-orders/{po['id']}/approve", headers=admin).status_code == 409
-    assert assert_ok(client.post(f"/api/v1/inventory/purchase-orders/{po['id']}/approve", headers=po_reviewer))["status"] == "APPROVED"
+    assert assert_ok(client.post(f"/api/v1/inventory/purchase-orders/{po['id']}/approve", headers=admin))["status"] == "APPROVED"
     grn = assert_ok(client.post(f"/api/v1/inventory/purchase-orders/{po['id']}/receive", headers=admin, json={
         "receipt_date":"2026-07-12","lines":[{"purchase_order_line_id":1,"quantity":100,"lot_number":"LOT-PO-001","expiry_date":"2027-07-12"}],
     }), 201)

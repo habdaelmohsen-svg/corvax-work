@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from calendar import monthrange
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
@@ -13,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import (
     Account, CreditNote, CreditNoteLine, JournalEntry, JournalLine, MenuItem, PosControlLine, PosControlRequest,
     PosOrder, PosOrderLine, PurchaseInvoice, PurchaseInvoiceLine, SalesInvoice, SalesInvoiceLine, TaxCode,
-    VatReturnLine, VatReturnSnapshot, VatReportingProfile, ImportDeclaration, ExportEvidence, AssetLifecycleTransaction,
+    VatReturnLine, VatReturnSnapshot, ImportDeclaration, ExportEvidence, AssetLifecycleTransaction,
 )
 
 MONEY = Decimal("0.01")
@@ -153,36 +152,9 @@ def _aggregate_line(boxes: dict, code: TaxCode, *, base: Decimal, tax: Decimal, 
         box["sample_ids"].append(source_id)
 
 
-def _validate_vat_period(db: Session, company_id: int, period_start: date, period_end: date) -> None:
+def build_vat_return(db: Session, *, company_id: int, period_start: date, period_end: date, user_id: int) -> VatReturnSnapshot:
     if period_end < period_start:
         raise HTTPException(422, "Invalid VAT period")
-    month_end = date(period_start.year, period_start.month, monthrange(period_start.year, period_start.month)[1])
-    valid_month = period_start.day == 1 and period_end == month_end
-    quarter_end_month = period_start.month + 2
-    valid_quarter = (
-        period_start.day == 1
-        and period_start.month in {1, 4, 7, 10}
-        and period_end == date(period_start.year, quarter_end_month, monthrange(period_start.year, quarter_end_month)[1])
-    )
-    profile = db.scalar(select(VatReportingProfile).where(VatReportingProfile.company_id == company_id))
-    frequency = profile.filing_frequency if profile else None
-    if frequency == "MONTHLY" and not valid_month:
-        raise HTTPException(422, "VAT period must be one complete calendar month for the configured MONTHLY filing frequency")
-    if frequency == "QUARTERLY" and not valid_quarter:
-        raise HTTPException(422, "VAT period must be one complete calendar quarter for the configured QUARTERLY filing frequency")
-    if frequency is None and not (valid_month or valid_quarter):
-        raise HTTPException(422, "VAT period must be a complete calendar month or calendar quarter")
-    overlaps = db.scalars(select(VatReturnSnapshot).where(
-        VatReturnSnapshot.company_id == company_id,
-        VatReturnSnapshot.period_start <= period_end,
-        VatReturnSnapshot.period_end >= period_start,
-    )).all()
-    if any(row.period_start != period_start or row.period_end != period_end for row in overlaps):
-        raise HTTPException(409, "VAT return period overlaps an existing VAT return")
-
-
-def build_vat_return(db: Session, *, company_id: int, period_start: date, period_end: date, user_id: int) -> VatReturnSnapshot:
-    _validate_vat_period(db, company_id, period_start, period_end)
     ensure_default_tax_codes(db, company_id, user_id)
     row = db.scalar(select(VatReturnSnapshot).where(
         VatReturnSnapshot.company_id == company_id,
@@ -191,12 +163,6 @@ def build_vat_return(db: Session, *, company_id: int, period_start: date, period
     ).options(selectinload(VatReturnSnapshot.lines)))
     if row and row.status == "APPROVED":
         raise HTTPException(409, "Approved VAT return snapshot cannot be regenerated")
-    preserved_adjustments: dict[str, tuple[Decimal, Decimal]] = {}
-    if row:
-        preserved_adjustments = {
-            line.box_code: (money(line.adjustment_base), money(line.adjustment_tax))
-            for line in row.lines
-        }
     if not row:
         row = VatReturnSnapshot(company_id=company_id, period_start=period_start, period_end=period_end, created_by=user_id)
         db.add(row); db.flush()
@@ -370,35 +336,18 @@ def build_vat_return(db: Session, *, company_id: int, period_start: date, period
 
     for box_code, values in boxes.items():
         ar, en = BOX_NAMES[box_code]
-        adjustment_base, adjustment_tax = preserved_adjustments.get(
-            box_code, (Decimal("0.00"), Decimal("0.00"))
-        )
         row.lines.append(VatReturnLine(
             box_code=box_code, name_ar=ar, name_en=en,
             base_amount=money(values["base"]), tax_amount=money(values["tax"]),
-            adjustment_base=adjustment_base, adjustment_tax=adjustment_tax,
-            transaction_count=values["count"],
+            adjustment_base=0, adjustment_tax=0, transaction_count=values["count"],
             details_json=json.dumps({"sources": dict(values["sources"]), "sample_source_ids": values["sample_ids"]}),
         ))
 
     standard_sales = money(boxes["SALES_STANDARD"]["base"])
     standard_purchases = money(boxes["PURCHASE_STANDARD"]["base"])
-    output_boxes = {"SALES_STANDARD", "PURCHASE_REVERSE_CHARGE", "PURCHASE_IMPORTS_THROUGH_RETURN"}
-    input_boxes = {"PURCHASE_STANDARD", "PURCHASE_IMPORTS_CUSTOMS", "PURCHASE_REVERSE_CHARGE", "PURCHASE_IMPORTS_THROUGH_RETURN"}
-    line_by_box = {line.box_code: line for line in row.lines}
-    output_vat = money(sum((
-        Decimal(line_by_box[code].tax_amount) - Decimal(line_by_box[code].adjustment_tax)
-        for code in output_boxes if code in line_by_box
-    ), Decimal("0")))
-    input_vat = money(sum((
-        Decimal(line_by_box[code].tax_amount) - Decimal(line_by_box[code].adjustment_tax)
-        for code in input_boxes if code in line_by_box
-    ), Decimal("0")))
-    net = money(
-        output_vat - input_vat
-        + Decimal(str(row.prior_period_correction or 0))
-        - Decimal(str(row.carried_forward_vat or 0))
-    )
+    output_vat = money(boxes["SALES_STANDARD"]["tax"] + reverse_charge_output + import_return_output)
+    input_vat = money(sum((boxes[key]["tax"] for key in ("PURCHASE_STANDARD", "PURCHASE_IMPORTS_CUSTOMS", "PURCHASE_REVERSE_CHARGE", "PURCHASE_IMPORTS_THROUGH_RETURN")), Decimal("0")))
+    net = money(output_vat - input_vat)
     gl_output = _account_movement(db, company_id, "212010", period_start, period_end, natural="CREDIT")
     gl_input = _account_movement(db, company_id, "114010", period_start, period_end, natural="DEBIT")
 
@@ -419,28 +368,14 @@ def build_vat_return(db: Session, *, company_id: int, period_start: date, period
 
 def serialize_vat_return(row: VatReturnSnapshot) -> dict:
     lines = sorted(row.lines, key=lambda x: x.box_code)
-    total_sales = money(sum((
-        Decimal(line.base_amount) - Decimal(line.adjustment_base)
-        for line in lines
-        if line.box_code.startswith("SALES_")
-        and line.box_code not in {"SALES_OUT_OF_SCOPE", "SALES_EXPORT_PENDING_EVIDENCE"}
-    ), Decimal("0")))
+    total_sales = money(sum((Decimal(line.base_amount) for line in lines if line.box_code.startswith("SALES_") and line.box_code not in {"SALES_OUT_OF_SCOPE", "SALES_EXPORT_PENDING_EVIDENCE"}), Decimal("0")))
     purchase_control_boxes = {"PURCHASE_OUT_OF_SCOPE", "PURCHASE_FOREIGN_NO_SAUDI_VAT", "PURCHASE_IMPORTS_SUSPENDED", "PURCHASE_IMPORTS_EXEMPT"}
-    total_purchases = money(sum((
-        Decimal(line.base_amount) - Decimal(line.adjustment_base)
-        for line in lines
-        if line.box_code.startswith("PURCHASE_") and line.box_code not in purchase_control_boxes
-    ), Decimal("0")))
+    total_purchases = money(sum((Decimal(line.base_amount) for line in lines if line.box_code.startswith("PURCHASE_") and line.box_code not in purchase_control_boxes), Decimal("0")))
     return {
         "id": row.id, "company_id": row.company_id, "period_start": row.period_start, "period_end": row.period_end,
         "status": row.status, "standard_rated_sales": money(row.standard_rated_sales),
         "standard_rated_purchases": money(row.standard_rated_purchases), "total_sales": total_sales,
         "total_purchases": total_purchases, "output_vat": money(row.output_vat), "input_vat": money(row.input_vat),
-        "prior_period_correction": money(row.prior_period_correction),
-        "carried_forward_vat": money(row.carried_forward_vat),
-        "adjustment_reason": row.adjustment_reason,
-        "adjustments_updated_by": row.adjustments_updated_by,
-        "adjustments_updated_at": row.adjustments_updated_at,
         "net_vat_payable": money(row.net_vat_payable), "gl_output_vat": money(row.gl_output_vat),
         "gl_input_vat": money(row.gl_input_vat), "output_reconciliation_difference": money(row.output_reconciliation_difference),
         "input_reconciliation_difference": money(row.input_reconciliation_difference),
@@ -453,8 +388,6 @@ def serialize_vat_return(row: VatReturnSnapshot) -> dict:
             "box_code": line.box_code, "name_ar": line.name_ar, "name_en": line.name_en,
             "base_amount": money(line.base_amount), "tax_amount": money(line.tax_amount),
             "adjustment_base": money(line.adjustment_base), "adjustment_tax": money(line.adjustment_tax),
-            "reported_base_amount": money(Decimal(line.base_amount) - Decimal(line.adjustment_base)),
-            "reported_tax_amount": money(Decimal(line.tax_amount) - Decimal(line.adjustment_tax)),
             "transaction_count": line.transaction_count, "details": json.loads(line.details_json or "{}"),
         } for line in lines],
     }

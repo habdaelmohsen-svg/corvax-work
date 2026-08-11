@@ -17,7 +17,7 @@ os.environ.update(
         "SEED_DEMO_DATA": "true",
         "AUTO_CREATE_SCHEMA": "true",
         "TRUSTED_HOSTS": "testserver,localhost,127.0.0.1",
-        "APP_VERSION": "1.0.0-agreement-completion-rc27.4",
+        "APP_VERSION": "1.0.0-agreement-completion-rc27.4-r9.2",
         "ENABLE_RATE_LIMIT_TESTING": "true",
     }
 )

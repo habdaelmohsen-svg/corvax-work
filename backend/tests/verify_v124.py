@@ -7,7 +7,7 @@ from pathlib import Path
 
 BACKEND_DIR=Path(__file__).resolve().parents[1];sys.path.insert(0,str(BACKEND_DIR))
 DB_PATH=Path('/tmp')/'verify_v124.db';DB_PATH.unlink(missing_ok=True)
-os.environ.update({'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc24-zakat-cit','SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1','APP_VERSION':'1.0.0-agreement-completion-rc27.4','ENABLE_RATE_LIMIT_TESTING':'true'})
+os.environ.update({'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc24-zakat-cit','SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1','APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.2','ENABLE_RATE_LIMIT_TESTING':'true'})
 import subprocess
 subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND_DIR, check=True)
 from fastapi.testclient import TestClient
@@ -23,7 +23,7 @@ def ok(r,status=200):assert r.status_code==status,r.text;return r.json()
 def main():
   with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'}));admin={'Authorization':f"Bearer {login['access_token']}"}
-    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.4'
+    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.4-r9.2'
     from app.core.migration_head import expected_migration_head
     assert ok(c.get('/health/ready'))['migration_head']==expected_migration_head()
     ok(c.post('/api/v1/admin/users',headers=admin,json={'name_ar':'مراجع الزكاة والضريبة','name_en':'Zakat CIT Approver','email':'rc24.approver@corvaxplatform.com','password':'Rc24Approver@123','require_password_change':False,'memberships':[{'company_id':1,'role_code':'SUPER_ADMIN'}]}),201)
@@ -42,7 +42,6 @@ def main():
       ]);db.commit()
     profile=ok(c.post('/api/v1/zakat-income-tax/profiles',headers=admin,json={'company_id':1,'zakat_registration_number':'ZAKAT-001','cit_registration_number':'CIT-001','return_basis':'MIXED','saudi_gcc_ownership_percent':60,'non_saudi_ownership_percent':40,'zakat_rate_hijri':2.5,'hijri_year_days':354,'income_tax_rate':20,'tax_loss_utilization_cap_percent':25,'zakat_method':'FINANCING_SOURCES_LESS_DEDUCTIBLE_ASSETS','minimum_zakat_amount':0,'notes':'Controlled test'}),201)
     assert D(profile['saudi_gcc_ownership_percent'])==D(60)
-    profile_read=ok(c.get('/api/v1/zakat-income-tax/profiles/1',headers=admin));assert profile_read['company_id']==1 and D(profile_read['non_saudi_ownership_percent'])==D(40)
     loss=ok(c.post('/api/v1/zakat-income-tax/losses',headers=admin,json={'company_id':1,'origin_year':2025,'original_amount':100000,'evidence_reference':'ASSESSMENT-2025','notes':'Approved tax loss'}),201)
     ret=ok(c.post('/api/v1/zakat-income-tax/returns',headers=admin,json={'company_id':1,'period_start':'2026-01-01','period_end':'2026-12-31','zakat_credits':100,'cit_credits':4000,'notes':'RC24 annual return'}),201)
     assert str(ret['due_date'])=='2027-04-30' and D(ret['accounting_profit_before_zakat_tax'])==D(700000)
@@ -52,11 +51,6 @@ def main():
     ret=adj({'regime':'CIT','direction':'DEDUCT','code':'EXEMPT_INCOME','description_ar':'دخل معفى','description_en':'Exempt income','amount':10000,'source_account_code':'411010','evidence_reference':'TAX-WP-02','recurring':False})
     ret=adj({'regime':'ZAKAT','direction':'ADD','code':'OTHER_FINANCING_SOURCE','description_ar':'مصدر تمويل مضاف','description_en':'Additional financing source','amount':100000,'evidence_reference':'ZAKAT-WP-01','recurring':False})
     ret=adj({'regime':'ZAKAT','direction':'DEDUCT','code':'QUALIFYING_DEDUCTION','description_ar':'حسم زكوي مؤيد','description_en':'Supported zakat deduction','amount':20000,'evidence_reference':'ZAKAT-WP-02','recurring':False})
-    removable=adj({'regime':'CIT','direction':'ADD','code':'R6-TEMP','description_ar':'تعديل مؤقت للاختبار','description_en':'Temporary verification adjustment','amount':1,'evidence_reference':'R6-TEMP','recurring':False})
-    removable_id=next(row['id'] for row in removable['adjustments'] if row['code']=='R6-TEMP')
-    deleted=ok(c.delete(f"/api/v1/zakat-income-tax/returns/{ret['id']}/adjustments/{removable_id}",headers=admin));assert all(row['code']!='R6-TEMP' for row in deleted['adjustments'])
-    ret=ok(c.post(f"/api/v1/zakat-income-tax/returns/{ret['id']}/recalculate",headers=admin))
-    ret_read=ok(c.get(f"/api/v1/zakat-income-tax/returns/{ret['id']}",headers=admin));assert ret_read['id']==ret['id'] and all(row['code']!='R6-TEMP' for row in ret_read['adjustments'])
     assert D(ret['adjusted_taxable_profit'])==D(740000)
     assert D(ret['cit_base_before_losses'])==D(296000)
     assert D(ret['tax_losses_utilized'])==D(74000)

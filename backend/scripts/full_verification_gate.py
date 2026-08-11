@@ -41,20 +41,12 @@ def main() -> int:
             for suffix in ("", "-journal", "-shm", "-wal"):
                 Path(f"{database}{suffix}").unlink(missing_ok=True)
         environment = os.environ.copy()
-        # Some maintained scripts launch Alembic in a child process whose cwd is
-        # ``backend``.  Relative PYTHONPATH entries silently change meaning there,
-        # so normalise every entry before starting the verification.  Include the
-        # project venv explicitly because the gate may itself be launched by the
-        # platform Python while dependencies live in ``.venv``.
-        python_paths = [BACKEND]
-        venv_sites = sorted((ROOT / ".venv" / "lib").glob("python*/site-packages"))
-        python_paths.extend(venv_sites)
-        for raw_path in environment.get("PYTHONPATH", "").split(os.pathsep):
-            if not raw_path:
-                continue
-            path = Path(raw_path).expanduser()
-            python_paths.append(path if path.is_absolute() else (ROOT / path).resolve())
-        environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(str(path) for path in python_paths))
+        existing_pythonpath = environment.get("PYTHONPATH", "")
+        environment["PYTHONPATH"] = (
+            f"{BACKEND}{os.pathsep}{existing_pythonpath}"
+            if existing_pythonpath
+            else str(BACKEND)
+        )
         try:
             result = subprocess.run(
                 [sys.executable, str(script)],

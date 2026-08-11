@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: corvax
       POSTGRES_USER: corvax
-      POSTGRES_PASSWORD: ${CORVAX_DB_PASSWORD:?Set CORVAX_DB_PASSWORD}
+      POSTGRES_PASSWORD: change-this-local-password
     volumes:
       - corvax_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -20,8 +20,8 @@ services:
         condition: service_healthy
     environment:
       ENVIRONMENT: development
-      DATABASE_URL: ${CORVAX_DATABASE_URL:?Set CORVAX_DATABASE_URL}
-      SECRET_KEY: ${CORVAX_SECRET_KEY:?Set CORVAX_SECRET_KEY}
+      DATABASE_URL: postgresql://corvax:change-this-local-password@db:5432/corvax
+      SECRET_KEY: local-development-secret-change-before-production-123456789
       SEED_DEMO_DATA: "true"
       ALLOWED_ORIGINS: http://localhost:8000
       TRUSTED_HOSTS: localhost,127.0.0.1

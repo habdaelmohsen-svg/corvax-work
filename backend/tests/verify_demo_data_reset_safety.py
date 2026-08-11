@@ -95,11 +95,13 @@ def main() -> None:
     page = (root / "frontend/src/dashboard/dataResetPage.tsx").read_text(
         encoding="utf-8"
     )
+    demo_api = (root / "backend/app/api/data_reset.py").read_text(encoding="utf-8")
     assert (
         "key: 'dataReset'" in navigation
         and "requires: ['data.reset']" in navigation
     )
-    assert "authorization_token" in page and "confirmation === phrase" in page
+    assert "authorization_token" in demo_api and "_verify_authorization" in demo_api
+    assert "/api/v1/uat-reset" in page and "backup_acknowledged" in page
 
     with TestClient(app) as client:
         admin = auth(client, "admin@corvaxplatform.com", "Corvax@123")

@@ -486,22 +486,7 @@ def approve_lease_modification(modification_id: int, user: User = Depends(get_cu
     db.flush()
     last_period = db.scalar(select(func.max(LeaseSchedule.period_number)).where(LeaseSchedule.lease_id == lease.id)) or 0
     for idx, schedule in enumerate(schedules, start=1):
-        db.add(LeaseSchedule(
-            lease_id=lease.id,
-            period_number=last_period + idx,
-            payment_date=schedule["payment_date"],
-            period_end_date=schedule["payment_date"],
-            cash_payment_date=schedule["payment_date"] if schedule["payment"] else None,
-            opening_liability=schedule["opening"],
-            interest=schedule["interest"],
-            payment=schedule["payment"],
-            principal=schedule["principal"],
-            closing_liability=schedule["closing"],
-            depreciation=schedule["depreciation"],
-            status="PENDING",
-            accrual_status="PENDING",
-            cash_status="PENDING" if schedule["payment"] else "NOT_APPLICABLE",
-        ))
+        db.add(LeaseSchedule(lease_id=lease.id, period_number=last_period + idx, payment_date=schedule["payment_date"], opening_liability=schedule["opening"], interest=schedule["interest"], payment=schedule["payment"], principal=schedule["principal"], closing_liability=schedule["closing"], depreciation=schedule["depreciation"], status="PENDING"))
     lease.end_date = row.new_end_date; lease.payment_amount = row.new_payment_amount; lease.annual_discount_rate = row.new_discount_rate
     row.status = "APPROVED_POSTED"; row.approved_by = user.id; row.approved_at = utc_now(); row.carrying_liability = carrying; row.remeasured_liability = remeasured; row.rou_adjustment = adjustment; row.journal_id = journal.id
     write_audit(db, action="IFRS16_MODIFICATION_APPROVED", entity_type="LEASE_MODIFICATION", entity_id=row.id, user_id=user.id, company_id=lease.company_id, after={"journal": journal.number, "adjustment": str(adjustment), "new_schedule_periods": len(schedules)})

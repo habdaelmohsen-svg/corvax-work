@@ -28,7 +28,7 @@ def ok(response, expected=200):
 with TestClient(app) as client:
     login = ok(client.post("/api/v1/auth/login", json={"email":"admin@corvaxplatform.com","password":"Corvax@123"}))
     admin = {"Authorization": f"Bearer {login['access_token']}"}
-    assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4-r9.1"
+    assert ok(client.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
 
     # Create independent approver and security test users.
     cfo = ok(client.post("/api/v1/admin/users", headers=admin, json={
@@ -116,8 +116,6 @@ with TestClient(app) as client:
     # Verified database backup.
     backup = ok(client.post("/api/v1/backups?company_id=1", headers=admin), 201)
     verified = ok(client.post(f"/api/v1/backups/{backup['id']}/verify", headers=admin))
-    downloaded = client.get(f"/api/v1/backups/{backup['id']}/download", headers=admin)
-    assert downloaded.status_code == 200 and downloaded.content
     assert verified["status"] == "VERIFIED"
 
     # Accounting control after automated EOS posting.

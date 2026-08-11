@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from sqlalchemy import (
-    Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint,
+    Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -19,8 +19,6 @@ ITEM_TYPES = {
     "CLEANING_MATERIAL",  # مواد نظافة
     "OPERATING_SUPPLY",   # مواد تشغيلية
     "SPARE_PART",         # قطع غيار
-    "INVENTORY",          # مخزون عام
-    "CONSUMABLE",         # مستهلك غير مخزني
     "SERVICE",            # خدمة (غير مخزنية)
 }
 
@@ -32,9 +30,7 @@ RAW_MATERIAL_SUBTYPES = {
     "AUXILIARY_MATERIAL", # مواد مساعدة (زيوت/شحوم)
 }
 
-# CORVAX accounting policy: perpetual weighted average. FIFO remains available
-# only as a physical issue sequence; it is not an allowed financial valuation.
-VALUATION_METHODS = {"WEIGHTED_AVERAGE"}
+VALUATION_METHODS = {"WEIGHTED_AVERAGE", "FIFO"}   # IAS 2 - LIFO is intentionally excluded
 PHYSICAL_ISSUE_METHODS = {"FEFO", "FIFO"}
 ALLOCATION_METHODS = {"VALUE", "WEIGHT", "QUANTITY"}
 
@@ -93,45 +89,13 @@ class InboundShipmentLine(Base):
     item = relationship("Item", lazy="joined")
 
 
-class MobileReceiptInspection(Base):
-    """Warehouse/quality evidence captured by the mobile receiving workflow.
-
-    Financial quantities continue to live in ``goods_receipt_lines``.  This
-    companion record deliberately keeps inspection and chain-of-custody data
-    separate so rejected stock can never raise inventory or be invoiced by the
-    three-way match.
-    """
-    __tablename__ = "mobile_receipt_inspections"
-    __table_args__ = (
-        UniqueConstraint("goods_receipt_line_id", name="uq_mobile_inspection_grn_line"),
-    )
-    id = Column(Integer, primary_key=True)
-    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
-    goods_receipt_id = Column(Integer, ForeignKey("goods_receipts.id", ondelete="CASCADE"), nullable=False, index=True)
-    goods_receipt_line_id = Column(Integer, ForeignKey("goods_receipt_lines.id", ondelete="CASCADE"), nullable=False)
-    purchase_order_line_id = Column(Integer, ForeignKey("purchase_order_lines.id"), nullable=False, index=True)
-    item_id = Column(Integer, ForeignKey("items.id"), nullable=False, index=True)
-    barcode_value = Column(String(160), nullable=False)
-    accepted_quantity = Column(Numeric(18, 4), nullable=False, default=0)
-    rejected_quantity = Column(Numeric(18, 4), nullable=False, default=0)
-    rejection_reason = Column(String(500))
-    lot_number = Column(String(80), nullable=False)
-    production_date = Column(Date)
-    expiry_date = Column(Date)
-    storage_location = Column(String(120), nullable=False)
-    evidence_metadata = Column(Text, nullable=False, default="[]")
-    quality_status = Column(String(24), nullable=False, default="ACCEPTED")
-    inspected_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    inspected_at = Column(DateTime, nullable=False, default=utc_now)
-
-
 # Note: stock_movements.inbound_shipment_id is added by migration e19000000001 as a plain
 # integer column (no DB-level FK) to avoid a SQLite batch rebuild. The link to the shipment
 # is populated and enforced by the H9 API layer.
 
 
 __all__ = [
-    "InboundShipment", "InboundShipmentLine", "MobileReceiptInspection",
+    "InboundShipment", "InboundShipmentLine",
     "ITEM_TYPES", "RAW_MATERIAL_SUBTYPES", "VALUATION_METHODS",
     "PHYSICAL_ISSUE_METHODS", "ALLOCATION_METHODS",
 ]

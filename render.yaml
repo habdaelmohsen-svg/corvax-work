@@ -6,7 +6,7 @@ databases:
 
 services:
   - type: web
-    name: corvax-test
+    name: corvax-business-platform
     runtime: docker
     plan: starter
     autoDeploy: false
@@ -19,9 +19,7 @@ services:
           name: corvax-db
           property: connectionString
       - key: ENVIRONMENT
-        value: uat
-      - key: APP_VERSION
-        value: 1.0.0-agreement-completion-rc27.4-r9.1
+        value: production
       - key: SECRET_KEY
         sync: false
       - key: JWT_PRIVATE_KEY_PEM
@@ -37,7 +35,7 @@ services:
       - key: SEED_DEMO_DATA
         value: false
       - key: ALLOW_DATA_RESET
-        value: true
+        value: false
       - key: AUTO_CREATE_SCHEMA
         value: false
       - key: ALLOWED_ORIGINS

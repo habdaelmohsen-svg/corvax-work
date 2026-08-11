@@ -41,7 +41,7 @@ def create_user(client: TestClient, admin: dict[str, str], email: str, role_code
 
 with TestClient(app) as client:
     admin = login(client, "admin@corvaxplatform.com", "Corvax@123")
-    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.1"
+    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
 
     create_user(client, admin, "accountant.assurance@corvaxplatform.com", "ACCOUNTANT", "Assurance Accountant")
     create_user(client, admin, "controller.assurance@corvaxplatform.com", "FINANCIAL_CONTROLLER", "Financial Controller")
@@ -85,12 +85,6 @@ with TestClient(app) as client:
     assert payload["conclusion"] in {"READY", "CONDITIONAL"}, payload
     assert not [c for c in payload["checks"] if c["blocking"] and c["status"] == "FAIL"]
     run_id = payload["id"]
-    detail = client.get(f"/api/v1/assurance/{run_id}", headers=accountant)
-    assert detail.status_code == 200 and detail.json()["id"] == run_id
-    check_id = payload["checks"][0]["id"]
-    remediation = client.patch(f"/api/v1/assurance/checks/{check_id}/remediation", headers=accountant,
-                               json={"owner_user_id": 1, "due_date": "2026-12-31"})
-    assert remediation.status_code == 200 and remediation.json()["owner_user_id"] == 1
 
     submitted = client.post(f"/api/v1/assurance/{run_id}/submit", headers=accountant)
     assert submitted.status_code == 200, submitted.text

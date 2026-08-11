@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,7 +17,7 @@ os.environ.update({
     "SEED_DEMO_DATA": "true",
     "AUTO_CREATE_SCHEMA": "true",
     "TRUSTED_HOSTS": "testserver,localhost,127.0.0.1",
-    "APP_VERSION": "1.0.0-agreement-completion-rc27.4",
+    "APP_VERSION": "1.0.0-agreement-completion-rc27.4-r9.2",
     "ENABLE_RATE_LIMIT_TESTING": "true",
 })
 
@@ -27,7 +28,7 @@ from app.core.security import hash_password
 from app.db import SessionLocal
 from app.main import app
 from app.models import (
-    BankAccount, Branch, FiscalPeriod, GymDepartment, GymFacility, MenuItem, MembershipPlan, Role, User,
+    BankAccount, Branch, FiscalPeriod, FiscalYear, GymDepartment, GymFacility, MenuItem, MembershipPlan, Role, User,
     UserCompanyRole, Warehouse,
 )
 
@@ -48,8 +49,6 @@ def login(client, email):
 
 def setup_users():
     with SessionLocal() as db:
-        for period in db.scalars(select(FiscalPeriod)).all():
-            period.status = "OPEN"
         role = db.scalar(select(Role).where(Role.code == "SUPER_ADMIN")); assert role
         for email, name in [
             ("rc15-reviewer@corvaxplatform.com", "RC15 Reviewer"),
@@ -70,6 +69,11 @@ def main():
         reviewer = login(client, "rc15-reviewer@corvaxplatform.com")
         approver = login(client, "rc15-approver@corvaxplatform.com")
         aj = {**admin, "Content-Type": "application/json"}
+        today = date.today()
+        booking_date = today + timedelta(days=7)
+        booking_start = datetime.combine(booking_date, time(18, 0))
+        booking_end = booking_start + timedelta(minutes=90)
+        overlap_start = booking_start + timedelta(minutes=30)
 
         with SessionLocal() as db:
             branch = db.scalar(select(Branch).where(Branch.company_id == COMPANY_ID, Branch.active.is_(True)))
@@ -88,6 +92,15 @@ def main():
             branch_id, bank_id, warehouse_id, plan_id = branch.id, bank.id, warehouse.id, plan.id
             swim_id, strength_id, padel_id, cafe_id = swim.id, strength.id, padel.id, cafe.id
             lane_id, court_id, coffee_id, healthy_id = lane.id, court.id, coffee.id, healthy.id
+            periods = db.scalars(select(FiscalPeriod).join(FiscalYear).where(
+                FiscalYear.company_id == COMPANY_ID,
+                FiscalPeriod.start_date <= booking_date,
+                FiscalPeriod.end_date >= today,
+            )).all()
+            assert periods
+            for period in periods:
+                period.status = "OPEN"
+            db.commit()
 
         member = ok(client.post("/api/v1/revenue-recognition/members", headers=aj, json={
             "company_id": COMPANY_ID, "member_number": "RC15-M1", "name_ar": "عضو أقسام", "name_en": "RC15 Department Member", "mobile": "0501515151",
@@ -118,8 +131,8 @@ def main():
         assert session["department_id"] == swim_id and session["facility_id"] == lane_id
 
         booking = ok(client.post("/api/v1/gym/facility-bookings", headers=aj, json={
-            "company_id": COMPANY_ID, "facility_id": court_id, "starts_at": "2026-08-10T18:00:00",
-            "ends_at": "2026-08-10T19:30:00", "participants": 4, "member_id": member["id"],
+            "company_id": COMPANY_ID, "facility_id": court_id, "starts_at": booking_start.isoformat(),
+            "ends_at": booking_end.isoformat(), "participants": 4, "member_id": member["id"],
             "contract_id": contract["id"], "bank_account_id": bank_id, "notes": "RC15 padel booking",
         }))
         assert booking["status"] == "SUBMITTED" and Decimal(str(booking["net_amount"])) == Decimal("240.00")
@@ -128,8 +141,8 @@ def main():
         approved = ok(client.post(f"/api/v1/gym/facility-bookings/{booking['id']}/approve", headers=reviewer))
         assert approved["status"] == "CONFIRMED" and approved["sale_journal_id"]
         overlapping = client.post("/api/v1/gym/facility-bookings", headers=aj, json={
-            "company_id": COMPANY_ID, "facility_id": court_id, "starts_at": "2026-08-10T18:30:00",
-            "ends_at": "2026-08-10T19:30:00", "participants": 2, "bank_account_id": bank_id,
+            "company_id": COMPANY_ID, "facility_id": court_id, "starts_at": overlap_start.isoformat(),
+            "ends_at": booking_end.isoformat(), "participants": 2, "bank_account_id": bank_id,
         })
         assert overlapping.status_code == 409
         cancelled = ok(client.post(f"/api/v1/gym/facility-bookings/{booking['id']}/cancel", headers=approver, json={"reason": "RC15 cancellation and refund verification"}))
