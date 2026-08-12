@@ -65,6 +65,12 @@ PRESERVED_MASTER_TABLES = frozenset(
         "financial_statement_mappings",
         "corporate_finance_configs",
         "sod_rules",
+        # External sales connection and mirrored master dimensions survive a
+        # UAT value reset. Imported orders and sync runs are transactions.
+        "dgtera_connections",
+        "dgtera_branches",
+        "dgtera_products",
+        "dgtera_customers",
         # Parties, people, inventory and banking master data.
         "parties",
         "employees",
@@ -142,7 +148,7 @@ PRESERVED_MASTER_TABLES = frozenset(
 )
 
 # Closed, reviewed classification of transaction/event/value tables in the
-# current 279-table schema.  Any future table is UNKNOWN and blocks the reset.
+# current schema.  Any future table is UNKNOWN and blocks the reset.
 TRANSACTION_TABLES = frozenset(
     {
         "access_review_campaigns", "access_review_items", "accrual_entries",
@@ -196,6 +202,8 @@ TRANSACTION_TABLES = frozenset(
         "planning_scenario_lines", "planning_scenarios",
         "platform_settlement_batches", "platform_settlement_lines",
         "pos_control_lines", "pos_control_requests", "pos_order_lines", "pos_orders",
+        "dgtera_sales_payments", "dgtera_sales_order_lines",
+        "dgtera_sales_orders", "dgtera_sync_runs",
         "prepaid_expense_schedules", "prepaid_expenses", "product_recall_lines",
         "product_recalls", "production_cost_closes", "production_operation_logs",
         "production_orders", "production_runs", "production_scrap_records",

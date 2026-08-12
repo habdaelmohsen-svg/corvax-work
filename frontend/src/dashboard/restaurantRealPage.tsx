@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react';
 import {UtensilsCrossed, Plus, Receipt, TrendingUp, Bike, Wallet} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel, fmt} from './ui';
+import {DgteraIntegrationPage} from './dgteraIntegrationPage';
 
 // Point of sale in practice: menu items priced against a recipe, orders across
 // cash / card / delivery platforms, and settlement of what the platforms owe.
@@ -47,7 +48,7 @@ const CHANNELS:[string,string,string][]=[
 ];
 
 export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
-  const [tab,setTab]=useState<'sell'|'menu'|'platforms'|'orders'>('sell');
+  const [tab,setTab]=useState<'sell'|'menu'|'platforms'|'orders'|'dgtera'>('sell');
   const [platforms,setPlatforms]=useState<Platform[]>([]);
   const [menu,setMenu]=useState<MenuItem[]>([]);
   const [orders,setOrders]=useState<Order[]>([]);
@@ -181,7 +182,8 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
 
     <div style={{display:'flex',gap:8,margin:'14px 0',flexWrap:'wrap'}}>
       {([['sell',ar?'شاشة البيع':'Sell'],['menu',ar?'قائمة الطعام':'Menu'],
-         ['platforms',ar?'منصات التوصيل':'Platforms'],['orders',ar?'الطلبات':'Orders']] as [typeof tab,string][])
+         ['platforms',ar?'منصات التوصيل':'Platforms'],['orders',ar?'الطلبات':'Orders'],
+         ['dgtera',ar?'ربط DGTERA':'DGTERA Sync']] as [typeof tab,string][])
         .map(([k,l])=><button key={k} onClick={()=>setTab(k)}
           style={{...btn,background:tab===k?'var(--accent, #1e40af)':'transparent',
             color:tab===k?'#fff':'var(--text)',border:'1px solid var(--border)'}}>{l}</button>)}
@@ -317,5 +319,6 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
             ? <button key={o.id} style={smallBtn} disabled={busy} onClick={()=>settle(o.id)}>{ar?'تسوية':'Settle'}</button>
             : '—'])}/>
     </Panel>}
+    {tab==='dgtera'&&<DgteraIntegrationPage ar={ar} companyId={companyId}/>} 
   </>;
 }

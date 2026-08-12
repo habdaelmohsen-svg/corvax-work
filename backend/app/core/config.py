@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     mrp_inline_execution: bool = True
     payroll_strict_workflow: bool = False
 
+    # Outbound DGTERA/Odoo connector.  The allow-list is mandatory protection
+    # against turning a configurable integration URL into an SSRF primitive.
+    dgtera_allowed_hosts: str = "cheesehouse.dgtera.com"
+    dgtera_request_timeout_seconds: int = 30
+    dgtera_max_orders_per_sync: int = 10000
+    dgtera_max_order_lines_per_sync: int = 100000
+    dgtera_max_payments_per_sync: int = 50000
+    dgtera_scheduler_enabled: bool = True
+    dgtera_scheduler_poll_seconds: int = 60
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
@@ -101,6 +111,10 @@ class Settings(BaseSettings):
     @property
     def sensitive_roles(self) -> set[str]:
         return {code.strip().upper() for code in self.sensitive_role_codes.split(",") if code.strip()}
+
+    @property
+    def dgtera_hosts(self) -> tuple[str, ...]:
+        return tuple(host.strip().lower() for host in self.dgtera_allowed_hosts.split(",") if host.strip())
 
     @property
     def jwt_public_keys(self) -> dict[str, str]:

@@ -46,3 +46,4 @@ from app.models.excise_tax import *  # noqa: F401,F403
 from app.models.zakat_income_tax import *  # noqa: F401,F403
 
 from app.models.internal_completion import *  # noqa: F401,F403
+from app.models.external_integrations import *  # noqa: F401,F403
