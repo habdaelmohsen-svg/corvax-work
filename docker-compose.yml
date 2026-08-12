@@ -22,7 +22,7 @@ services:
       ENVIRONMENT: development
       DATABASE_URL: postgresql://corvax:change-this-local-password@db:5432/corvax
       SECRET_KEY: local-development-secret-change-before-production-123456789
-      SEED_DEMO_DATA: "true"
+      SEED_DEMO_DATA: "false"
       ALLOWED_ORIGINS: http://localhost:8000
       TRUSTED_HOSTS: localhost,127.0.0.1
       FORCE_HTTPS: "false"

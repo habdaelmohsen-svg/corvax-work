@@ -1,46 +1,46 @@
 import {useEffect, useRef, useState} from 'react';
-import {FileBarChart, Download, Printer, Calendar, TrendingUp, ShoppingCart, Package, Users, Landmark, Percent, ImagePlus} from 'lucide-react';
+import {Calendar, Download, FileBarChart, ImagePlus, Landmark, Package, Percent, Printer, ShoppingCart, TrendingUp, Users} from 'lucide-react';
 import {apiFetch} from '../api/client';
-import {Kpi, Panel, fmt} from './ui';
-import {ReportBuilderTab} from './reportBuilderTab';
+import {ComparativeStatementTable} from './comparativeStatementTable';
+import {
+  buildStatementRows, currentYearStart, fetchComparativeStatements,
+  formatStatementAmount, formatVariancePercent, localYmd, statementTitle,
+  type ComparativeStatementRow, type ComparisonPeriods, type FinancialStatementKey,
+  type StatementRowKind,
+} from './financialStatementEngine';
 import {printBusinessDocument} from './printDocument';
-
-// Reports Center: a UNIFIED front-end over reports that already exist in the platform.
-// It does not duplicate report logic - it calls the existing endpoints, lets the user
-// pick a period, and adds export (CSV -> opens in Excel) and print/PDF (browser).
+import {ReportBuilderTab} from './reportBuilderTab';
+import {Kpi, Panel, fmt} from './ui';
 
 async function json(url:string,init?:RequestInit){
-  const r=await apiFetch(url,init); const x=await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(typeof x.detail==='string'?x.detail:JSON.stringify(x.detail||x));
-  return x;
+  const response=await apiFetch(url,init);const payload=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(typeof payload.detail==='string'?payload.detail:JSON.stringify(payload.detail||payload));
+  return payload;
 }
-const iso=(d:Date)=>d.toISOString().slice(0,10);
+
 const btn={padding:'9px 16px',borderRadius:9,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:600} as const;
 const ghost={padding:'8px 14px',borderRadius:9,border:'1px solid var(--border)',background:'transparent',color:'var(--text)',cursor:'pointer',fontWeight:600} as const;
 const field={display:'block',width:'100%',marginTop:5,padding:9,border:'1px solid var(--border)',borderRadius:9} as const;
 const th={textAlign:'start',padding:'9px 12px',borderBottom:'2px solid var(--border)',fontWeight:700,fontSize:13} as const;
 const td={padding:'8px 12px',borderBottom:'1px solid var(--border)',fontSize:13} as const;
+
 const statusText=(status:any,ar:boolean)=>{
-  const key=String(status||'').toUpperCase();
   const labels:Record<string,[string,string]>={
     DRAFT:['مسودة','Draft'],PENDING_APPROVAL:['بانتظار الاعتماد','Pending approval'],
     APPROVED:['معتمد','Approved'],POSTED:['مرحّل','Posted'],PAID:['مدفوع','Paid'],
     PARTIALLY_PAID:['مدفوع جزئيًا','Partially paid'],CANCELLED:['ملغي','Cancelled'],
     REVERSED:['معكوس','Reversed'],ACCRUED:['مستحق','Accrued'],ELIGIBLE:['مؤهل','Eligible'],
   };
-  return labels[key]?.[ar?0:1]||status||'—';
+  return labels[String(status||'').toUpperCase()]?.[ar?0:1]||status||'—';
 };
 
 type Row=Record<string,any>;
 type Report={key:string;cat:string;ar:string;en:string};
+type PeriodPreset='month'|'quarter'|'year'|'custom';
 
 const CATEGORIES:[string,string,string][]=[
-  ['financial','المالية','Financial'],
-  ['sales','المبيعات','Sales'],
-  ['purchases','المشتريات','Purchases'],
-  ['inventory','المخزون','Inventory'],
-  ['receivables','الذمم','Receivables & Payables'],
-  ['commissions','العمولات','Commissions'],
+  ['financial','المالية','Financial'],['sales','المبيعات','Sales'],['purchases','المشتريات','Purchases'],
+  ['inventory','المخزون','Inventory'],['receivables','الذمم','Receivables & Payables'],['commissions','العمولات','Commissions'],
 ];
 const REPORTS:Report[]=[
   {key:'income',cat:'financial',ar:'قائمة الدخل',en:'Income Statement'},
@@ -58,16 +58,19 @@ const REPORTS:Report[]=[
 ];
 
 export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
+  const now=new Date();
   const [topTab,setTopTab]=useState<'ready'|'builder'>('ready');
-  const today=new Date();
-  const yearStart=new Date(today.getFullYear(),0,1);
   const [cat,setCat]=useState('financial');
   const [active,setActive]=useState<Report|null>(REPORTS[0]);
-  const [start,setStart]=useState(iso(yearStart));
-  const [end,setEnd]=useState(iso(today));
+  const [periodPreset,setPeriodPreset]=useState<PeriodPreset>('year');
+  const [start,setStart]=useState(currentYearStart(now));
+  const [end,setEnd]=useState(localYmd(now));
   const [title,setTitle]=useState('');
   const [headers,setHeaders]=useState<string[]>([]);
   const [rows,setRows]=useState<Row[]>([]);
+  const [rowKinds,setRowKinds]=useState<StatementRowKind[]>([]);
+  const [financialRows,setFinancialRows]=useState<ComparativeStatementRow[]>([]);
+  const [financialPeriods,setFinancialPeriods]=useState<ComparisonPeriods|null>(null);
   const [busy,setBusy]=useState(false);
   const [logoBusy,setLogoBusy]=useState(false);
   const [message,setMessage]=useState('');
@@ -76,90 +79,76 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
   const run=async(rep:Report)=>{
     setBusy(true);setMessage('');setActive(rep);
     try{
-      let H:string[]=[]; let R:Row[]=[]; let T=ar?rep.ar:rep.en;
-      if(rep.key==='income'){
-        const s=await json(`/api/v1/finance/statements?company_id=${companyId}&start_date=${start}&end_date=${end}`);
-        const inc=s.income_statement||{};
-        H=[ar?'البند':'Item',ar?'المبلغ':'Amount'];
-        R=[
-          [ar?'الإيرادات':'Revenue',inc.revenue],
-          [ar?'تكلفة الإيرادات':'Cost of revenue',inc.cost_of_revenue],
-          [ar?'مجمل الربح':'Gross profit',inc.gross_profit],
-          [ar?'المصروفات التشغيلية':'Operating expenses',inc.operating_expenses],
-          [ar?'الربح التشغيلي':'Operating profit',inc.operating_profit],
-          [ar?'إيرادات أخرى':'Other income',inc.other_income],
-          [ar?'مصروفات أخرى':'Other expenses',inc.other_expenses],
-          [ar?'تكلفة التمويل':'Finance cost',inc.finance_cost],
-          [ar?'الزكاة والضريبة':'Zakat & tax',inc.zakat_tax],
-          [ar?'صافي الربح':'Net profit',inc.net_profit],
-        ].map(([k,v])=>({[H[0]]:k,[H[1]]:fmt(Number(v||0))}));
-      } else if(rep.key==='balance'){
-        const s=await json(`/api/v1/finance/statements?company_id=${companyId}&start_date=${start}&end_date=${end}`);
-        const fp=s.financial_position||{};
-        H=[ar?'البند':'Item',ar?'المبلغ':'Amount'];
-        R=[
-          [ar?'أصول متداولة':'Current assets',fp.current_assets],
-          [ar?'أصول غير متداولة':'Non-current assets',fp.non_current_assets],
-          [ar?'إجمالي الأصول':'Total assets',fp.total_assets],
-          [ar?'خصوم متداولة':'Current liabilities',fp.current_liabilities],
-          [ar?'خصوم غير متداولة':'Non-current liabilities',fp.non_current_liabilities],
-          [ar?'إجمالي الخصوم':'Total liabilities',fp.total_liabilities],
-          [ar?'حقوق الملكية':'Equity',fp.equity],
-        ].map(([k,v])=>({[H[0]]:k,[H[1]]:fmt(Number(v||0))}));
-      } else if(rep.key==='cashflow'){
-        const s=await json(`/api/v1/finance/statements?company_id=${companyId}&start_date=${start}&end_date=${end}`);
-        const cf=s.cash_flows||{};
-        H=[ar?'النشاط':'Activity',ar?'التدفق':'Cash flow'];
-        R=[
-          [ar?'الأنشطة التشغيلية':'Operating',cf.net_operating],
-          [ar?'الأنشطة الاستثمارية':'Investing',cf.net_investing],
-          [ar?'الأنشطة التمويلية':'Financing',cf.net_financing],
-          [ar?'صافي التغير في النقد':'Net change',cf.net_change],
-          [ar?'النقد الافتتاحي':'Opening cash',cf.opening_cash],
-          [ar?'النقد الختامي':'Closing cash',cf.closing_cash],
-        ].map(([k,v])=>({[H[0]]:k,[H[1]]:fmt(Number(v||0))}));
-      } else if(rep.key==='trial'){
-        const s=await json(`/api/v1/finance/trial-balance?company_id=${companyId}&as_of_date=${end}`);
+      let H:string[]=[];let R:Row[]=[];let K:StatementRowKind[]=[];let T=ar?rep.ar:rep.en;
+      if(['income','balance','cashflow'].includes(rep.key)){
+        const key=rep.key as FinancialStatementKey;
+        const comparison=await fetchComparativeStatements(companyId,start,end,'indirect');
+        const lines=buildStatementRows(key,comparison,ar);
+        H=[ar?'البند':'Item',ar?'الفترة الحالية':'Current period',ar?'الفترة السابقة':'Previous period',ar?'الفترة المماثلة':'Same period last year',ar?'التغير':'Variance',ar?'نسبة التغير':'Variance %'];
+        R=lines.map(line=>({
+          [H[0]]:line.label,[H[1]]:formatStatementAmount(line.current),[H[2]]:formatStatementAmount(line.previous),
+          [H[3]]:formatStatementAmount(line.priorYear),[H[4]]:formatStatementAmount(line.variance),
+          [H[5]]:formatVariancePercent(line.variancePercent),
+        }));
+        K=lines.map(line=>line.kind);T=statementTitle(key,ar);
+        setFinancialRows(lines);setFinancialPeriods(comparison.periods);
+      }else if(rep.key==='trial'){
+        const statement=await json(`/api/v1/finance/trial-balance?company_id=${companyId}&end_date=${end}`);
         H=[ar?'الحساب':'Account',ar?'مدين':'Debit',ar?'دائن':'Credit'];
-        R=(s.rows||[]).map((a:Row)=>({[H[0]]:`${a.code} — ${ar?a.name_ar:a.name_en}`,[H[1]]:fmt(Number(a.closing_debit||0)),[H[2]]:fmt(Number(a.closing_credit||0))}));
-        R.push({[H[0]]:ar?'الإجمالي':'Total',[H[1]]:fmt(Number(s.total_debit||0)),[H[2]]:fmt(Number(s.total_credit||0))});
-      } else if(rep.key==='sales_invoices'){
-        const d=await json(`/api/v1/subledgers/sales-invoices?company_id=${companyId}`);
+        R=(statement.rows||[]).map((account:Row)=>({[H[0]]:`${account.code} — ${ar?account.name_ar:account.name_en}`,[H[1]]:fmt(Number(account.closing_debit||0)),[H[2]]:fmt(Number(account.closing_credit||0))}));
+        R.push({[H[0]]:ar?'الإجمالي':'Total',[H[1]]:fmt(Number(statement.total_debit||0)),[H[2]]:fmt(Number(statement.total_credit||0))});
+        K=R.map((_,index)=>index===R.length-1?'total':'line');
+      }else if(rep.key==='sales_invoices'){
+        const data=await json(`/api/v1/subledgers/sales-invoices?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'العميل':'Customer',ar?'الإجمالي':'Total',ar?'الحالة':'Status'];
-        R=(d||[]).map((i:Row)=>({[H[0]]:i.number||i.id,[H[1]]:i.invoice_date,[H[2]]:ar?(i.customer_name_ar||'—'):(i.customer_name_en||'—'),[H[3]]:fmt(Number(i.total||0)),[H[4]]:statusText(i.status,ar)}));
-      } else if(rep.key==='purchase_invoices'){
-        const d=await json(`/api/v1/subledgers/purchase-invoices?company_id=${companyId}`);
+        R=(data||[]).map((item:Row)=>({[H[0]]:item.number||item.id,[H[1]]:item.invoice_date,[H[2]]:ar?(item.customer_name_ar||'—'):(item.customer_name_en||'—'),[H[3]]:fmt(Number(item.total||0)),[H[4]]:statusText(item.status,ar)}));
+      }else if(rep.key==='purchase_invoices'){
+        const data=await json(`/api/v1/subledgers/purchase-invoices?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'المورد':'Supplier',ar?'الإجمالي':'Total',ar?'الحالة':'Status'];
-        R=(d||[]).map((i:Row)=>({[H[0]]:i.number||i.id,[H[1]]:i.invoice_date,[H[2]]:ar?(i.supplier_name_ar||'—'):(i.supplier_name_en||'—'),[H[3]]:fmt(Number(i.total||0)),[H[4]]:statusText(i.status,ar)}));
-      } else if(rep.key==='receipts'){
-        const d=await json(`/api/v1/subledgers/receipts?company_id=${companyId}`);
+        R=(data||[]).map((item:Row)=>({[H[0]]:item.number||item.id,[H[1]]:item.invoice_date,[H[2]]:ar?(item.supplier_name_ar||'—'):(item.supplier_name_en||'—'),[H[3]]:fmt(Number(item.total||0)),[H[4]]:statusText(item.status,ar)}));
+      }else if(rep.key==='receipts'){
+        const data=await json(`/api/v1/subledgers/receipts?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'المبلغ':'Amount',ar?'المرجع':'Reference'];
-        R=(d||[]).map((i:Row)=>({[H[0]]:i.number||i.id,[H[1]]:i.receipt_date,[H[2]]:fmt(Number(i.amount||0)),[H[3]]:i.reference||'—'}));
-      } else if(rep.key==='payments'){
-        const d=await json(`/api/v1/subledgers/payments?company_id=${companyId}`);
+        R=(data||[]).map((item:Row)=>({[H[0]]:item.number||item.id,[H[1]]:item.receipt_date,[H[2]]:fmt(Number(item.amount||0)),[H[3]]:item.reference||'—'}));
+      }else if(rep.key==='payments'){
+        const data=await json(`/api/v1/subledgers/payments?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'المبلغ':'Amount',ar?'المرجع':'Reference'];
-        R=(d||[]).map((i:Row)=>({[H[0]]:i.number||i.id,[H[1]]:i.payment_date,[H[2]]:fmt(Number(i.amount||0)),[H[3]]:i.reference||'—'}));
-      } else if(rep.key==='stock'){
-        const d=await json(`/api/v1/inventory/stock-summary?company_id=${companyId}`);
+        R=(data||[]).map((item:Row)=>({[H[0]]:item.number||item.id,[H[1]]:item.payment_date,[H[2]]:fmt(Number(item.amount||0)),[H[3]]:item.reference||'—'}));
+      }else if(rep.key==='stock'){
+        const data=await json(`/api/v1/inventory/stock-summary?company_id=${companyId}`);
         H=[ar?'الصنف':'Item',ar?'المستودع':'Warehouse',ar?'الكمية':'Quantity',ar?'القيمة':'Value'];
-        R=(d||[]).map((i:Row)=>({[H[0]]:ar?(i.item_name_ar||i.name_ar||i.item_id):(i.item_name_en||i.name_en||i.item_id),[H[1]]:ar?(i.warehouse_name_ar||i.warehouse_name_en||i.warehouse_id||'—'):(i.warehouse_name_en||i.warehouse_name_ar||i.warehouse_id||'—'),[H[2]]:fmt(Number(i.quantity||i.on_hand||0)),[H[3]]:fmt(Number(i.value||i.total_value||0))}));
-      } else if(rep.key==='ar_aging'||rep.key==='ap_aging'){
-        const lt=rep.key==='ar_aging'?'AR':'AP';
-        const d=await json(`/api/v1/subledgers/aging?company_id=${companyId}&ledger_type=${lt}&as_of_date=${end}`);
+        R=(data||[]).map((item:Row)=>({[H[0]]:ar?(item.item_name_ar||item.name_ar||item.item_id):(item.item_name_en||item.name_en||item.item_id),[H[1]]:ar?(item.warehouse_name_ar||item.warehouse_name_en||item.warehouse_id||'—'):(item.warehouse_name_en||item.warehouse_name_ar||item.warehouse_id||'—'),[H[2]]:fmt(Number(item.quantity||item.on_hand||0)),[H[3]]:fmt(Number(item.value||item.total_value||0))}));
+      }else if(rep.key==='ar_aging'||rep.key==='ap_aging'){
+        const ledger=rep.key==='ar_aging'?'AR':'AP';
+        const data=await json(`/api/v1/subledgers/aging?company_id=${companyId}&ledger_type=${ledger}&as_of_date=${end}`);
         H=[ar?'الطرف':'Party',ar?'حالي':'Current','1-30','31-60','61-90','90+',ar?'الإجمالي':'Total'];
-        const parties=d.parties||d.rows||d||[];
-        R=(Array.isArray(parties)?parties:[]).map((p:Row)=>({[H[0]]:ar?(p.party_name_ar||p.party_code):(p.party_name_en||p.party_code),[H[1]]:fmt(Number(p.CURRENT||0)),[H[2]]:fmt(Number(p['1_30']||0)),[H[3]]:fmt(Number(p['31_60']||0)),[H[4]]:fmt(Number(p['61_90']||0)),[H[5]]:fmt(Number(p['91_120']||0)+Number(p.OVER_120||0)),[H[6]]:fmt(Number(p.total||0))}));
-      } else if(rep.key==='commissions'){
-        const d=await json(`/api/v1/sales-commissions/accruals?company_id=${companyId}`);
+        const parties=data.parties||data.rows||data||[];
+        R=(Array.isArray(parties)?parties:[]).map((party:Row)=>({[H[0]]:ar?(party.party_name_ar||party.party_code):(party.party_name_en||party.party_code),[H[1]]:fmt(Number(party.CURRENT||0)),[H[2]]:fmt(Number(party['1_30']||0)),[H[3]]:fmt(Number(party['31_60']||0)),[H[4]]:fmt(Number(party['61_90']||0)),[H[5]]:fmt(Number(party['91_120']||0)+Number(party.OVER_120||0)),[H[6]]:fmt(Number(party.total||0))}));
+      }else if(rep.key==='commissions'){
+        const data=await json(`/api/v1/sales-commissions/accruals?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'المستفيد':'Beneficiary',ar?'الفاتورة':'Invoice',ar?'العمولة':'Amount',ar?'قابل للدفع':'Payable',ar?'الحالة':'Status'];
-        R=(d||[]).map((a:Row)=>({[H[0]]:a.number,[H[1]]:ar?(a.beneficiary_name_ar||a.beneficiary_name_en||'—'):(a.beneficiary_name_en||a.beneficiary_name_ar||'—'),[H[2]]:a.invoice_number||'—',[H[3]]:fmt(Number(a.amount||0)),[H[4]]:fmt(Number(a.payable_amount||0)),[H[5]]:statusText(a.status,ar)}));
+        R=(data||[]).map((item:Row)=>({[H[0]]:item.number,[H[1]]:ar?(item.beneficiary_name_ar||item.beneficiary_name_en||'—'):(item.beneficiary_name_en||item.beneficiary_name_ar||'—'),[H[2]]:item.invoice_number||'—',[H[3]]:fmt(Number(item.amount||0)),[H[4]]:fmt(Number(item.payable_amount||0)),[H[5]]:statusText(item.status,ar)}));
       }
-      setTitle(T);setHeaders(H);setRows(R);
+      if(!['income','balance','cashflow'].includes(rep.key)){setFinancialRows([]);setFinancialPeriods(null);}
+      setTitle(T);setHeaders(H);setRows(R);setRowKinds(K);
       if(!R.length)setMessage(ar?'لا توجد بيانات لهذا التقرير في الفترة المحددة':'No data for this report in the selected period');
-    }catch(e:any){setMessage(String(e.message||e));setHeaders([]);setRows([]);}
-    finally{setBusy(false);}
+    }catch(error:any){
+      setMessage(String(error.message||error));setHeaders([]);setRows([]);setRowKinds([]);setFinancialRows([]);setFinancialPeriods(null);
+    }finally{setBusy(false);}
   };
+
   useEffect(()=>{if(active)run(active);},[companyId,ar]);
+
+  const applyPeriodPreset=(preset:PeriodPreset)=>{
+    setPeriodPreset(preset);if(preset==='custom')return;
+    const current=new Date();
+    const from=preset==='month'
+      ? new Date(current.getFullYear(),current.getMonth(),1)
+      : preset==='quarter'
+        ? new Date(current.getFullYear(),Math.floor(current.getMonth()/3)*3,1)
+        : new Date(current.getFullYear(),0,1);
+    setStart(localYmd(from));setEnd(localYmd(current));
+  };
 
   const uploadLogo=async(file?:File)=>{
     if(!file)return;
@@ -169,43 +158,42 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
     setLogoBusy(true);setMessage('');
     try{
       const dataUrl=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result||''));reader.onerror=()=>reject(new Error('Unable to read logo'));reader.readAsDataURL(file);});
-      const contentBase64=dataUrl.split(',',2)[1]||'';
-      const response=await json(`/api/v1/companies/${companyId}/logo`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file_name:file.name,content_type:file.type,content_base64:contentBase64})});
+      const response=await json(`/api/v1/companies/${companyId}/logo`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file_name:file.name,content_type:file.type,content_base64:dataUrl.split(',',2)[1]||''})});
       const stored=JSON.parse(localStorage.getItem('corvax_company')||'{}');
       localStorage.setItem('corvax_company',JSON.stringify({...stored,logo_url:response.logo_url}));
       setMessage(ar?'تم حفظ شعار الشركة وسيظهر في التقارير والقيود المطبوعة.':'Company logo saved and will appear on printed reports and journals.');
-    }catch(e:any){setMessage(String(e.message||e));}
+    }catch(error:any){setMessage(String(error.message||error));}
     finally{setLogoBusy(false);if(logoInput.current)logoInput.current.value='';}
   };
 
   const exportCsv=()=>{
     if(!headers.length)return;
-    const esc=(v:any)=>{const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
-    const lines=[headers.map(esc).join(','),...rows.map(r=>headers.map(h=>esc(r[h])).join(','))];
-    const csv='\uFEFF'+lines.join('\r\n'); // BOM so Excel reads Arabic correctly
-    const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');a.href=url;a.download=`${title||'report'}_${end}.csv`;a.click();URL.revokeObjectURL(url);
+    const escape=(value:any)=>{const text=String(value??'');return /[",\n]/.test(text)?'"'+text.replace(/"/g,'""')+'"':text;};
+    const csv='\uFEFF'+[headers.map(escape).join(','),...rows.map(row=>headers.map(header=>escape(row[header])).join(','))].join('\r\n');
+    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
+    const link=document.createElement('a');link.href=url;link.download=`${title||'report'}_${end}.csv`;link.click();URL.revokeObjectURL(url);
   };
+
+  const catLabel=(value:string)=>{const found=CATEGORIES.find(item=>item[0]===value);return found?(ar?found[1]:found[2]):value;};
+
   const printReport=()=>{
     if(!active||!headers.length)return;
     const numericByReport:Record<string,number[]>={
-      income:[1],balance:[1],cashflow:[1],trial:[1,2],
-      sales_invoices:[3],purchase_invoices:[3],receipts:[2],payments:[2],
-      stock:[2,3],ar_aging:[1,2,3,4,5,6],ap_aging:[1,2,3,4,5,6],commissions:[3,4],
+      income:[1,2,3,4,5],balance:[1,2,3,4,5],cashflow:[1,2,3,4,5],trial:[1,2],
+      sales_invoices:[3],purchase_invoices:[3],receipts:[2],payments:[2],stock:[2,3],
+      ar_aging:[1,2,3,4,5,6],ap_aging:[1,2,3,4,5,6],commissions:[3,4],
     };
     const opened=printBusinessDocument({
-      ar,
-      title,
-      documentLabel:ar?'تقرير أعمال':'Business report',
-      subtitle:ar?`تقرير ${active.ar} مستخرج وفق الفترة المحددة.`:`${active.en} generated for the selected reporting period.`,
-      columns:headers,
-      rows:rows.map(row=>headers.map(header=>row[header])),
-      numericColumns:numericByReport[active.key]||[],
-      landscape:headers.length>5,
+      ar,title,documentLabel:ar?'تقرير مالي وإداري':'Financial and management report',
+      subtitle:ar?`تقرير ${active.ar} مستخرج من دفتر الأستاذ والمصادر التشغيلية المعتمدة.`:`${active.en} generated from the posted ledger and approved operating sources.`,
+      columns:headers,rows:rows.map(row=>headers.map(header=>row[header])),rowKinds,
+      numericColumns:numericByReport[active.key]||[],landscape:headers.length>5,
       meta:[
-        {label:ar?'من تاريخ':'From date',value:start},
-        {label:ar?'إلى تاريخ':'To date',value:end},
+        {label:ar?'الفترة الحالية':'Current period',value:`${start} — ${end}`},
+        ...(financialPeriods?[
+          {label:ar?'الفترة السابقة':'Previous period',value:`${financialPeriods.previous.start} — ${financialPeriods.previous.end}`},
+          {label:ar?'الفترة المماثلة':'Same period last year',value:`${financialPeriods.priorYear.start} — ${financialPeriods.priorYear.end}`},
+        ]:[]),
         {label:ar?'فئة التقرير':'Report category',value:catLabel(active.cat)},
         {label:ar?'عدد السطور':'Row count',value:rows.length},
       ],
@@ -213,19 +201,17 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
     if(!opened)setMessage(ar?'تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة لهذا الموقع.':'Unable to open the print window. Allow pop-ups for this site.');
   };
 
-  const catReports=REPORTS.filter(r=>r.cat===cat);
-  const catLabel=(c:string)=>{const f=CATEGORIES.find(x=>x[0]===c);return f?(ar?f[1]:f[2]):c;};
+  const catReports=REPORTS.filter(report=>report.cat===cat);
   const catIcon:Record<string,any>={financial:<Landmark size={16}/>,sales:<TrendingUp size={16}/>,purchases:<ShoppingCart size={16}/>,inventory:<Package size={16}/>,receivables:<Users size={16}/>,commissions:<Percent size={16}/>};
+  const topButton=(key:'ready'|'builder',label:string)=><button key={key} onClick={()=>setTopTab(key)} style={{padding:'9px 18px',borderRadius:9,border:'1px solid var(--border)',background:topTab===key?'var(--accent, #1e40af)':'transparent',color:topTab===key?'#fff':'var(--text)',cursor:'pointer',fontWeight:700}}>{label}</button>;
 
-  const _topBtn=(k:'ready'|'builder',l:string)=>(<button key={k} onClick={()=>setTopTab(k)} style={{padding:'9px 18px',borderRadius:9,border:'1px solid var(--border)',background:topTab===k?'var(--accent, #1e40af)':'transparent',color:topTab===k?'#fff':'var(--text)',cursor:'pointer',fontWeight:700}}>{l}</button>);
-  if(topTab==='builder'){
-    return <>
-      <div style={{display:'flex',gap:8,margin:'4px 0 16px'}}>{_topBtn('ready',ar?'تقارير جاهزة':'Ready reports')}{_topBtn('builder',ar?'مصمّم التقارير':'Report Builder')}</div>
-      <ReportBuilderTab ar={ar} companyId={companyId}/>
-    </>;
-  }
+  if(topTab==='builder')return <>
+    <div style={{display:'flex',gap:8,margin:'4px 0 16px'}}>{topButton('ready',ar?'تقارير جاهزة':'Ready reports')}{topButton('builder',ar?'مصمّم التقارير':'Report Builder')}</div>
+    <ReportBuilderTab ar={ar} companyId={companyId}/>
+  </>;
+
   return <>
-    <div style={{display:'flex',gap:8,margin:'4px 0 16px'}}>{_topBtn('ready',ar?'تقارير جاهزة':'Ready reports')}{_topBtn('builder',ar?'مصمّم التقارير':'Report Builder')}</div>
+    <div style={{display:'flex',gap:8,margin:'4px 0 16px'}}>{topButton('ready',ar?'تقارير جاهزة':'Ready reports')}{topButton('builder',ar?'مصمّم التقارير':'Report Builder')}</div>
     <div className="kpis">
       <Kpi title={ar?'الفئات':'Categories'} value={String(CATEGORIES.length)} trend="" good icon={<FileBarChart size={22}/>} tone="blue"/>
       <Kpi title={ar?'التقارير المتاحة':'Available reports'} value={String(REPORTS.length)} trend="" good icon={<FileBarChart size={22}/>} tone="violet"/>
@@ -233,26 +219,18 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
       <Kpi title={ar?'عدد السطور':'Rows'} value={String(rows.length)} trend="" good icon={<Package size={22}/>} tone="amber"/>
     </div>
 
-    <Panel title={ar?'مركز التقارير':'Reports Center'} icon={<FileBarChart size={18}/>}>
+    <Panel title={ar?'مركز التقارير الموحد':'Unified Reports Center'} icon={<FileBarChart size={18}/> }>
       <div style={{padding:12}}>
-        {/* category chips */}
-        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
-          {CATEGORIES.map(([k])=>
-            <button key={k} onClick={()=>setCat(k)} style={{...ghost,display:'flex',alignItems:'center',gap:6,background:cat===k?'var(--accent, #1e40af)':'transparent',color:cat===k?'#fff':'var(--text)'}}>{catIcon[k]}{catLabel(k)}</button>)}
-        </div>
-        {/* report chips in category */}
-        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
-          {catReports.map(r=>
-            <button key={r.key} onClick={()=>run(r)} style={{...ghost,background:active?.key===r.key?'var(--panel-2, #e0e7ff)':'transparent',fontWeight:active?.key===r.key?700:600}}>{ar?r.ar:r.en}</button>)}
-        </div>
-        {/* period + actions */}
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>{CATEGORIES.map(([key])=><button key={key} onClick={()=>setCat(key)} style={{...ghost,display:'flex',alignItems:'center',gap:6,background:cat===key?'var(--accent, #1e40af)':'transparent',color:cat===key?'#fff':'var(--text)'}}>{catIcon[key]}{catLabel(key)}</button>)}</div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>{catReports.map(report=><button key={report.key} onClick={()=>run(report)} style={{...ghost,background:active?.key===report.key?'var(--panel-2, #e0e7ff)':'transparent',fontWeight:active?.key===report.key?700:600}}>{ar?report.ar:report.en}</button>)}</div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:12,alignItems:'end'}}>
-          <label>{ar?'من تاريخ':'From date'}<input type="date" style={field} value={start} onChange={e=>setStart(e.target.value)}/></label>
-          <label>{ar?'إلى تاريخ':'To date'}<input type="date" style={field} value={end} onChange={e=>setEnd(e.target.value)}/></label>
+          <label>{ar?'نوع الفترة':'Period preset'}<select style={field} value={periodPreset} onChange={event=>applyPeriodPreset(event.target.value as PeriodPreset)}><option value="month">{ar?'الشهر الحالي':'Current month'}</option><option value="quarter">{ar?'الربع الحالي':'Current quarter'}</option><option value="year">{ar?'من بداية السنة':'Year to date'}</option><option value="custom">{ar?'فترة مخصصة':'Custom period'}</option></select></label>
+          <label>{ar?'من تاريخ':'From date'}<input type="date" style={field} value={start} onChange={event=>{setStart(event.target.value);setPeriodPreset('custom')}}/></label>
+          <label>{ar?'إلى تاريخ':'To date'}<input type="date" style={field} value={end} onChange={event=>{setEnd(event.target.value);setPeriodPreset('custom')}}/></label>
           <button style={{...btn,opacity:busy?0.6:1}} disabled={busy||!active} onClick={()=>active&&run(active)}>{ar?'تشغيل التقرير':'Run report'}</button>
           <button style={{...ghost,display:'flex',alignItems:'center',gap:6,justifyContent:'center'}} disabled={!rows.length} onClick={exportCsv}><Download size={16}/>{ar?'تصدير Excel':'Export Excel'}</button>
           <button style={{...ghost,display:'flex',alignItems:'center',gap:6,justifyContent:'center'}} disabled={!rows.length} onClick={printReport}><Printer size={16}/>{ar?'طباعة / PDF':'Print / PDF'}</button>
-          <input ref={logoInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={e=>uploadLogo(e.target.files?.[0])}/>
+          <input ref={logoInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event=>uploadLogo(event.target.files?.[0])}/>
           <button style={{...ghost,display:'flex',alignItems:'center',gap:6,justifyContent:'center'}} disabled={logoBusy} onClick={()=>logoInput.current?.click()}><ImagePlus size={16}/>{logoBusy?(ar?'جارٍ حفظ الشعار...':'Saving logo...'):(ar?'إضافة شعار الشركة':'Add company logo')}</button>
         </div>
       </div>
@@ -260,13 +238,13 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
 
     {message&&<div style={{padding:10,margin:'12px 0',borderRadius:9,background:'var(--panel-2, #f1f5f9)',fontSize:14}}>{message}</div>}
 
-    {headers.length>0&&<Panel title={title} icon={<Calendar size={18}/>}>
-      <div style={{overflowX:'auto',padding:'0 4px 12px'}}>
-        <table style={{width:'100%',borderCollapse:'collapse'}}>
-          <thead><tr>{headers.map(h=><th key={h} style={th}>{h}</th>)}</tr></thead>
-          <tbody>{rows.map((r,i)=><tr key={i}>{headers.map(h=><td key={h} style={td}>{r[h]}</td>)}</tr>)}</tbody>
-        </table>
-      </div>
-    </Panel>}
+    {financialPeriods&&active&&['income','balance','cashflow'].includes(active.key)
+      ? <ComparativeStatementTable ar={ar} title={title} rows={financialRows} periods={financialPeriods} loading={busy}/>
+      : headers.length>0&&<Panel title={title} icon={<Calendar size={18}/> }>
+        <div style={{overflowX:'auto',padding:'0 4px 12px'}}><table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr>{headers.map(header=><th key={header} style={th}>{header}</th>)}</tr></thead>
+          <tbody>{rows.map((row,index)=><tr key={index} data-kind={rowKinds[index]||'line'}>{headers.map(header=><td key={header} style={td}>{row[header]}</td>)}</tr>)}</tbody>
+        </table></div>
+      </Panel>}
   </>;
 }

@@ -17,7 +17,7 @@ services:
           name: corvax-test-db
           property: connectionString
       - key: APP_VERSION
-        value: 1.0.0-agreement-completion-rc27.4-r9.3
+        value: 1.0.0-agreement-completion-rc27.4-r9.4
       - key: ENVIRONMENT
         value: uat
       - key: SEED_DEMO_DATA

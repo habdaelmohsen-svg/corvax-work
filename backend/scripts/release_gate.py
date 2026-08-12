@@ -14,7 +14,7 @@ from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
 ROOT = BACKEND.parent
-EXPECTED_VERSION = "1.0.0-agreement-completion-rc27.4-r9.3"
+EXPECTED_VERSION = "1.0.0-agreement-completion-rc27.4-r9.4"
 EXPECTED_HEAD = "e19800000001"
 
 

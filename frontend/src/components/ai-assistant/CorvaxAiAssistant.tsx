@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import {createPortal} from 'react-dom';
 import type {
   CorvaxAiAssistantProps,
   CorvaxAiMessage,
@@ -202,7 +203,7 @@ export function CorvaxAiAssistant({
     }
   };
 
-  return (
+  const assistant = (
     <div className={`corvax-ai ${open ? 'is-open' : ''}`} dir={locale === 'ar' ? 'rtl' : 'ltr'}>
       <button
         ref={launcherRef}
@@ -322,6 +323,13 @@ export function CorvaxAiAssistant({
       </section>
     </div>
   );
+
+  // The launcher is mounted inside the sticky dashboard header. That header
+  // uses backdrop-filter, which creates a containing block for fixed children
+  // in Chromium. Without a portal the full-screen overlay is therefore clipped
+  // to the header and the panel collapses into a thin strip. Mounting at body
+  // level keeps the dialog viewport-fixed regardless of its visual trigger.
+  return createPortal(assistant, document.body);
 }
 
 export default CorvaxAiAssistant;

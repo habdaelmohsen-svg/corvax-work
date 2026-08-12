@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "CORVAX — The Core Business Platform"
-    app_version: str = "1.0.0-agreement-completion-rc27.4-r9.3"
+    app_version: str = "1.0.0-agreement-completion-rc27.4-r9.4"
     environment: str = "development"
     database_url: str = "sqlite:///./data/corvax.db"
 
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     field_encryption_active_kid: str = "dev-field-2026-01"
     field_encryption_keys_json: str = "{}"
 
-    seed_demo_data: bool = True
+    seed_demo_data: bool = False
     # H17 first-run bootstrap: creates the base structure and the first
     # administrator when the users table is empty. Safe in production because
     # it is idempotent and the credentials must be changed at first sign-in.

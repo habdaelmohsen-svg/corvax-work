@@ -15,7 +15,7 @@ os.environ.update({
     "SEED_DEMO_DATA": "true",
     "AUTO_CREATE_SCHEMA": "true",
     "TRUSTED_HOSTS": "testserver,localhost,127.0.0.1",
-    "APP_VERSION": "1.0.0-agreement-completion-rc27.4-r9.3",
+    "APP_VERSION": "1.0.0-agreement-completion-rc27.4-r9.4",
     "ENABLE_RATE_LIMIT_TESTING": "true",
 })
 import subprocess
@@ -43,7 +43,7 @@ def main():
             db.commit()
         login = ok(c.post("/api/v1/auth/login", json={"email": "admin@corvaxplatform.com", "password": "Corvax@123"}))
         admin = {"Authorization": f"Bearer {login['access_token']}"}
-        assert ok(c.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4-r9.3"
+        assert ok(c.get("/health"))["version"] == "1.0.0-agreement-completion-rc27.4-r9.4"
         # Compare against the live head so this test cannot rot (audit M-05).
         from app.core.migration_head import expected_migration_head
         assert ok(c.get("/health/ready"))["migration_head"] == expected_migration_head()

@@ -14,7 +14,7 @@
 3. ينشئ `render.yaml` خدمة Web وقاعدة PostgreSQL.
 4. Docker يبني React، يثبت Python، ينفذ `alembic upgrade head`، ثم يشغّل FastAPI.
 
-بيئة Blueprint الحالية `staging` و`SEED_DEMO_DATA=true` لتسهيل التجربة فقط.
+بيئة Blueprint تبدأ بدون بيانات تجريبية عبر `SEED_DEMO_DATA=false` حتى تُدخل أرصدة الافتتاح والمعاملات الفعلية فقط.
 
 ## 3. بيانات التجربة
 

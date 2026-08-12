@@ -37,7 +37,7 @@ with TestClient(app) as client:
     assert ready.status_code == 200 and ready.json()["status"] == "ready"
     assert ready.headers.get("X-Request-ID")
     assert ready.headers.get("X-Content-Type-Options") == "nosniff"
-    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.3"
+    assert client.get("/api/v1/system/release").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.4"
 
     create_user = client.post(
         "/api/v1/admin/users",

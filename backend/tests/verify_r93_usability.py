@@ -1,4 +1,4 @@
-"""Static acceptance guard for the R9.3 user-facing remediation."""
+"""Static regression guard for the R9.3 controls retained by R9.4."""
 from pathlib import Path
 
 
@@ -17,7 +17,7 @@ def main() -> None:
 
     shell = read("frontend/src/dashboard/Shell.tsx")
     assert "page-back-button" in shell and "corvaxFromHash" in shell
-    assert "apiVersion" in shell and "R9.3" in shell
+    assert "apiVersion" in shell and "R9.4" in shell
 
     journals = read("frontend/src/dashboard/manualJournalsPage.tsx")
     assert "printBusinessDocument" in journals and "printJournal(j)" in journals

@@ -50,7 +50,7 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   }, []);
   const {menuOpen, darkMode, setMenuOpen, toggleTheme} = useDashboardUi();
   const [apiOnline, setApiOnline] = useState(false);
-  const [apiVersion, setApiVersion] = useState('RC27.4 · R9.3');
+  const [apiVersion, setApiVersion] = useState('RC27.4 · R9.4');
   const [globalQuery,setGlobalQuery]=useState('');
   const [navigationNotice, setNavigationNotice] = useState('');
   const company = useMemo(() => JSON.parse(localStorage.getItem('corvax_company') || '{}'), []);

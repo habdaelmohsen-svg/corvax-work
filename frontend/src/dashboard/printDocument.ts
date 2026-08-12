@@ -12,6 +12,7 @@ export type PrintDocumentOptions = {
   documentLabel?: string;
   columns: string[];
   rows: PrintCell[][];
+  rowKinds?: Array<'line' | 'subtotal' | 'total'>;
   meta?: PrintMeta[];
   numericColumns?: number[];
   totals?: PrintCell[];
@@ -41,6 +42,17 @@ const storedCompany = (): StoredCompany => {
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
     return {};
+  }
+};
+
+const storedUserName = (ar: boolean): string => {
+  try {
+    const user = JSON.parse(localStorage.getItem('corvax_user') || '{}');
+    return ar
+      ? (user.name_ar || user.name || user.name_en || 'CORVAX')
+      : (user.name_en || user.name || user.name_ar || 'CORVAX');
+  } catch {
+    return 'CORVAX';
   }
 };
 
@@ -93,9 +105,11 @@ export function printBusinessDocument(options: PrintDocumentOptions): boolean {
   const generatedAt = new Intl.DateTimeFormat(ar ? 'ar-SA' : 'en-GB', {
     dateStyle: 'medium', timeStyle: 'short',
   }).format(new Date());
+  const generatedBy = storedUserName(ar);
   const meta = [
     ...(options.meta || []),
     {label: ar ? 'العملة' : 'Currency', value: currency},
+    {label: ar ? 'أُعد بواسطة' : 'Prepared by', value: generatedBy},
     {label: ar ? 'تاريخ الاستخراج' : 'Generated at', value: generatedAt},
   ];
   const status = options.status ? statusLabel(options.status, ar) : '';
@@ -106,7 +120,7 @@ export function printBusinessDocument(options: PrintDocumentOptions): boolean {
     : `<div class="company-mark">${escapeHtml(companyMark)}</div>`;
   const headerCells = options.columns.map((column, index) =>
     `<th class="${numeric.has(index) ? 'numeric' : ''}">${escapeHtml(column)}</th>`).join('');
-  const bodyRows = options.rows.map((row) => `<tr>${options.columns.map((_, index) =>
+  const bodyRows = options.rows.map((row, rowIndex) => `<tr data-kind="${options.rowKinds?.[rowIndex] || 'line'}">${options.columns.map((_, index) =>
     `<td class="${numeric.has(index) ? 'numeric' : ''}">${escapeHtml(row[index])}</td>`).join('')}</tr>`).join('');
   const totalsRow = options.totals
     ? `<tfoot><tr>${options.columns.map((_, index) => `<td class="${numeric.has(index) ? 'numeric' : ''}">${escapeHtml(options.totals?.[index])}</td>`).join('')}</tr></tfoot>`
@@ -122,11 +136,13 @@ export function printBusinessDocument(options: PrintDocumentOptions): boolean {
   <title>${escapeHtml(options.title)}</title>
   <style>
     :root{--accent:${accent};--ink:#172033;--muted:#657089;--line:#d9deea;--soft:#f4f6fa}
-    @page{size:A4 ${orientation};margin:12mm 10mm 15mm}
+    /* Zero page margin suppresses browser-added URL/date headers such as
+       about:blank. The controlled document supplies its own audit footer. */
+    @page{size:A4 ${orientation};margin:0}
     *{box-sizing:border-box}
     html{background:#eef1f7}
     body{margin:0 auto;max-width:1180px;background:#fff;color:var(--ink);font-family:"Segoe UI",Tahoma,Arial,"Noto Sans Arabic",sans-serif;font-size:11px;line-height:1.55;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    .document{padding:28px 30px 20px}
+    .document{padding:12mm 10mm 18mm;min-height:100vh}
     .top-rule{height:5px;background:var(--accent);border-radius:5px;margin-bottom:20px}
     .document-header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding-bottom:16px;border-bottom:1px solid var(--line)}
     .company-identity{display:flex;align-items:center;gap:12px;min-width:0}
@@ -153,6 +169,8 @@ export function printBusinessDocument(options: PrintDocumentOptions): boolean {
     td{padding:7px 9px;border-bottom:1px solid var(--line);border-inline-end:1px solid #edf0f5;vertical-align:top;overflow-wrap:anywhere}
     tbody tr:nth-child(even) td{background:#fafbfc}
     tbody tr:last-child td{border-bottom:0}
+    tbody tr[data-kind="subtotal"] td{font-weight:800;background:#f3f6fa;border-top:1px solid #aebbc9}
+    tbody tr[data-kind="total"] td{font-weight:900;color:#102f52;background:#eaf0f6;border-top:2px solid #17385f;border-bottom:3px double #17385f}
     th:last-child,td:last-child{border-inline-end:0}
     .numeric{text-align:end;font-variant-numeric:tabular-nums;direction:ltr;white-space:nowrap}
     tfoot td{font-weight:800;background:#eef2f8;border-top:2px solid var(--accent);border-bottom:0}
@@ -160,8 +178,15 @@ export function printBusinessDocument(options: PrintDocumentOptions): boolean {
     .empty{padding:30px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:8px}
     .document-footer{display:flex;justify-content:space-between;gap:16px;margin-top:14px;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font-size:9px}
     .document-footer strong{color:var(--ink)}
+    .print-page-footer{display:none}
     @media(max-width:700px){.document{padding:18px}.document-header,.title-row{align-items:flex-start;flex-direction:column}.document-kind{text-align:start}.meta{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media print{html{background:#fff}body{max-width:none}.document{padding:0}.top-rule{margin-bottom:14px}.document-header{padding-bottom:12px}.meta{margin:10px 0 14px}.document-footer{break-inside:avoid}}
+    @media print{
+      html,body{background:#fff;max-width:none;width:100%;min-height:100%}
+      .document{padding:12mm 10mm 18mm}
+      .top-rule{margin-bottom:14px}.document-header{padding-bottom:12px}.meta{margin:10px 0 14px}.document-footer{break-inside:avoid;margin-bottom:4mm}
+      .print-page-footer{position:fixed;display:flex;justify-content:space-between;align-items:center;inset-inline:10mm;bottom:5mm;padding-top:2mm;border-top:1px solid var(--line);color:var(--muted);font-size:8px;background:#fff}
+      .print-page-footer .page-number:after{content:counter(page)}
+    }
   </style>
 </head>
 <body>
@@ -174,7 +199,8 @@ export function printBusinessDocument(options: PrintDocumentOptions): boolean {
     <section class="title-row"><div><h1>${escapeHtml(options.title)}</h1>${options.subtitle ? `<p class="subtitle">${escapeHtml(options.subtitle)}</p>` : ''}</div>${status ? `<span class="status">${escapeHtml(status)}</span>` : ''}</section>
     <section class="meta">${metaHtml}</section>
     ${options.rows.length ? `<table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody>${totalsRow}</table>` : `<div class="empty">${escapeHtml(ar ? 'لا توجد بيانات للطباعة' : 'No data to print')}</div>`}
-    <footer class="document-footer"><span>${escapeHtml(ar ? 'هذا المستند مولّد آليًا من CORVAX.' : 'This document was generated automatically by CORVAX.')}</span><strong>${escapeHtml(companyName)}</strong></footer>
+    <footer class="document-footer"><span>${escapeHtml(ar ? 'هذا المستند مولّد من قيود ومصادر CORVAX المعتمدة.' : 'This document was generated from approved CORVAX ledger and operating sources.')}</span><strong>${escapeHtml(companyName)}</strong></footer>
+    <div class="print-page-footer"><span>${escapeHtml(ar ? 'سري — للاستخدام الإداري والمراجعة' : 'Confidential — management and audit use')}</span><span>${escapeHtml(options.title)} · <b class="page-number">${escapeHtml(ar ? 'صفحة ' : 'Page ')}</b></span></div>
   </main>
 </body>
 </html>`;

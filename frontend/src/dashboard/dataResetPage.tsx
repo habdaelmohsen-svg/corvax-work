@@ -20,6 +20,7 @@ const danger={...primary,background:'#b91c1c'} as const;
 
 export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [preview,setPreview]=useState<any>(null);
+  const [dryRunResult,setDryRunResult]=useState<any>(null);
   const [confirmation,setConfirmation]=useState('');
   const [backupAcknowledged,setBackupAcknowledged]=useState(false);
   const [authorizationToken,setAuthorizationToken]=useState('');
@@ -33,6 +34,7 @@ export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
       const result=await json(`/api/v1/uat-reset/preview?company_id=${companyId}`);
       setPreview(result);
       setAuthorizationToken('');
+      setDryRunResult(null);
     }catch(e:any){setMessage(String(e.message||e));setError(true)}
   };
   useEffect(()=>{load()},[companyId]);
@@ -50,10 +52,16 @@ export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
           authorization_token:dryRun?undefined:authorizationToken,
         }),
       });
-      setMessage(ar?result.message_ar:result.message_en);
-      if(dryRun)setAuthorizationToken(result.authorization_token||'');
+      if(dryRun){
+        setMessage('');
+        setAuthorizationToken(result.authorization_token||'');
+        setDryRunResult(result);
+        window.setTimeout(()=>document.getElementById('uat-reset-preview-result')?.scrollIntoView({behavior:'smooth',block:'center'}),0);
+      }
       else{
+        setMessage(ar?result.message_ar:result.message_en);
         setConfirmation('');setBackupAcknowledged(false);setAuthorizationToken('');
+        setDryRunResult(null);
         await load(true);
       }
     }catch(e:any){setMessage(String(e.message||e));setError(true)}finally{setBusy(false)}
@@ -65,6 +73,9 @@ export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
   const rows=Object.entries(preview?.tables||{}) as [string,number][];
   const canPreview=enabled&&matches&&backupAcknowledged&&!busy;
   const canDelete=canPreview&&Boolean(authorizationToken);
+  const valueRecordsToReset=Object.values(dryRunResult?.value_records_that_would_be_reset||{})
+    .reduce((sum:number,value)=>sum+Number(value||0),0);
+  const invalidateDryRun=()=>{setAuthorizationToken('');setDryRunResult(null)};
 
   return <>
     <Panel title={ar?'مسح الحركات والقيم التجريبية':'Clear trial transactions and values'} icon={<Trash2 size={20}/>}>
@@ -114,18 +125,41 @@ export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
       <div style={{padding:14,lineHeight:2,maxWidth:720}}>
         <b>{ar?'1. اكتب عبارة التأكيد حرفيًا:':'1. Type the exact confirmation phrase:'}</b>
         <div style={{margin:'8px 0',padding:'8px 12px',borderRadius:8,background:'var(--panel-2, #f1f5f9)',fontWeight:800}}>{phrase}</div>
-        <input style={field} value={confirmation} onChange={e=>{setConfirmation(e.target.value);setAuthorizationToken('')}} placeholder={ar?'اكتب العبارة هنا':'Type the phrase here'}/>
+        <input style={field} value={confirmation} onChange={e=>{setConfirmation(e.target.value);invalidateDryRun()}} placeholder={ar?'اكتب العبارة هنا':'Type the phrase here'}/>
         <label style={{display:'flex',gap:9,alignItems:'flex-start',margin:'14px 0'}}>
-          <input type="checkbox" checked={backupAcknowledged} onChange={e=>{setBackupAcknowledged(e.target.checked);setAuthorizationToken('')}} style={{marginTop:6}}/>
+          <input type="checkbox" checked={backupAcknowledged} onChange={e=>{setBackupAcknowledged(e.target.checked);invalidateDryRun()}} style={{marginTop:6}}/>
           <span>{ar?'أفهم أن الحذف غير قابل للتراجع من الشاشة، وقد أخذت نسخة احتياطية أو أقبل بدء UAT من جديد.':'I understand this cannot be undone from the UI and I have a backup or accept a fresh UAT start.'}</span>
         </label>
         <button style={{...primary,opacity:canPreview?1:.5}} disabled={!canPreview} onClick={()=>run(true)}>
-          {ar?'2. معاينة آمنة وتفعيل زر الحذف':'2. Safe preview and unlock delete'}
-        </button>
-        <button style={{...danger,opacity:canDelete?1:.5,marginInlineStart:10}} disabled={!canDelete} onClick={()=>run(false)}>
-          {ar?'3. مسح الحركات والقيم التجريبية الآن':'3. Clear trial transactions and values now'}
+          {busy?(ar?'جارٍ تنفيذ المعاينة...':'Running preview...'):(ar?'2. معاينة آمنة وتفعيل زر الحذف':'2. Safe preview and unlock delete')}
         </button>
         {!authorizationToken&&<div style={{marginTop:9,fontSize:13,opacity:.75}}>{ar?'زر الحذف النهائي يظهر هنا ويُفعّل بعد نجاح المعاينة الآمنة.':'The final delete button is here and unlocks after a successful safe preview.'}</div>}
+        {dryRunResult&&authorizationToken&&<section id="uat-reset-preview-result" role="status" aria-live="polite" style={{marginTop:16,padding:18,border:'2px solid #16a34a',borderRadius:12,background:'#f0fdf4',color:'#14532d'}}>
+          <div style={{display:'flex',gap:10,alignItems:'center',fontSize:18,fontWeight:800}}>
+            <CheckCircle2 size={25}/>
+            {ar?'تمت المعاينة الآمنة بنجاح':'Safe preview completed'}
+          </div>
+          <div style={{marginTop:8,fontWeight:800,color:'#166534'}}>
+            {ar?'لم يتم حذف أي بيانات حتى الآن. راجع الأعداد التالية ثم نفّذ الحذف النهائي إذا كانت صحيحة.':'No data has been deleted yet. Review these counts, then run the final reset if they are correct.'}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(145px,1fr))',gap:9,margin:'14px 0'}}>
+            {[
+              [ar?'حركات ستُحذف':'Transactions',dryRunResult.rows_that_would_be_deleted??0],
+              [ar?'قيم ستُصفّر':'Values reset',valueRecordsToReset],
+              [ar?'أصول ستُصفّر':'Assets reset',dryRunResult.assets_that_would_be_unvalued??0],
+              [ar?'جداول متأثرة':'Tables affected',dryRunResult.tables_affected??0],
+            ].map(([label,value])=><div key={String(label)} style={{padding:11,borderRadius:9,background:'#fff',border:'1px solid #bbf7d0'}}>
+              <small style={{display:'block',opacity:.8}}>{label}</small>
+              <strong style={{display:'block',fontSize:22,marginTop:3}}>{String(value)}</strong>
+            </div>)}
+          </div>
+          <div style={{fontSize:13,marginBottom:12}}>
+            {ar?`صلاحية المعاينة ${Math.max(1,Math.floor(Number(dryRunResult.authorization_expires_in_seconds||600)/60))} دقائق؛ إذا تغيّرت البيانات يجب إعادة المعاينة.`:`Preview authorization is valid for ${Math.max(1,Math.floor(Number(dryRunResult.authorization_expires_in_seconds||600)/60))} minutes; rerun it if data changes.`}
+          </div>
+          <button style={{...danger,opacity:canDelete?1:.5}} disabled={!canDelete} onClick={()=>run(false)}>
+            {busy?(ar?'جارٍ تنفيذ المسح...':'Clearing data...'):(ar?'3. تنفيذ الحذف النهائي الآن':'3. Run final reset now')}
+          </button>
+        </section>}
       </div>
     </Panel>}
   </>;

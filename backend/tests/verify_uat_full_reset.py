@@ -59,7 +59,9 @@ def main() -> None:
     nav = (ROOT / "frontend/src/dashboard/navigation.tsx").read_text(encoding="utf-8")
     selector = (ROOT / "frontend/src/components/CompanySelector.tsx").read_text(encoding="utf-8")
     assert "مسح الحركات والقيم التجريبية" in page
-    assert "Clear trial transactions and values now" in page
+    assert "Run final reset now" in page
+    assert "uat-reset-preview-result" in page
+    assert "No data has been deleted yet" in page
     assert "key: 'dataReset'" in nav and "requires: ['data.reset']" in nav
     assert "context.permissions" in selector and "permissions_by_company" in selector
 

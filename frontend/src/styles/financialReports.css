@@ -1,0 +1,28 @@
+.comparative-statement{background:#fff;border:1px solid var(--border);border-radius:18px;overflow:hidden;box-shadow:0 10px 30px rgba(24,53,91,.05);margin:14px 0}
+.comparative-statement__head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:20px 22px 16px;border-bottom:2px solid #17385f;background:linear-gradient(180deg,#fff,#fbfcfe)}
+.comparative-statement__head span{display:block;color:#2f6fb3;font-size:9px;letter-spacing:.14em;font-weight:800}
+.comparative-statement__head h2{margin:6px 0 0;color:#142d4b;font-size:19px}
+.comparative-statement__head>div:last-child{text-align:end}
+.comparative-statement__head small,.comparative-statement__head strong{display:block}
+.comparative-statement__head small{color:#7a8798;font-size:9px}
+.comparative-statement__head strong{margin-top:4px;color:#17385f;font-size:12px}
+.comparative-statement__scroll{overflow-x:auto}
+.comparative-statement table{width:100%;min-width:940px;border-collapse:collapse}
+.comparative-statement th,.comparative-statement td{padding:11px 13px;border-bottom:1px solid #e8edf3;font-size:11px;text-align:start}
+.comparative-statement th{background:#f3f6fa;color:#56667b;font-weight:800;vertical-align:bottom}
+.comparative-statement th span,.comparative-statement th small{display:block}
+.comparative-statement th small{margin-top:4px;color:#8995a5;font-size:8px;font-weight:500;white-space:nowrap}
+.comparative-statement .numeric{text-align:end;direction:ltr;font-variant-numeric:tabular-nums;white-space:nowrap}
+.comparative-statement tbody tr[data-kind="subtotal"] td{font-weight:800;background:#f8fafc;border-top:1px solid #bec9d7}
+.comparative-statement tbody tr[data-kind="total"] td{font-weight:900;color:#102f52;background:#eef3f8;border-top:2px solid #17385f;border-bottom:3px double #17385f}
+.comparative-statement td.positive{color:#147052}
+.comparative-statement td.negative{color:#9d3e3e}
+.comparative-statement footer{padding:10px 14px;color:#748195;background:#fbfcfd;font-size:9px}
+.theme-dark .comparative-statement{background:#13283a;border-color:#29445a}
+.theme-dark .comparative-statement__head{background:#13283a;border-color:#79a9d8}
+.theme-dark .comparative-statement__head h2,.theme-dark .comparative-statement__head strong{color:#edf4fa}
+.theme-dark .comparative-statement th{background:#172f44;color:#c5d3df}
+.theme-dark .comparative-statement th,.theme-dark .comparative-statement td{border-color:#29445a}
+.theme-dark .comparative-statement tbody tr[data-kind="subtotal"] td,.theme-dark .comparative-statement tbody tr[data-kind="total"] td{background:#172f44;color:#edf4fa}
+.theme-dark .comparative-statement footer{background:#102435;color:#a6b8c7}
+@media(max-width:720px){.comparative-statement__head{padding:16px;flex-direction:column}.comparative-statement__head>div:last-child{text-align:start}}

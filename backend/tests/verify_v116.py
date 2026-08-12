@@ -4,7 +4,7 @@ import os, sys
 from pathlib import Path
 BACKEND_DIR=Path(__file__).resolve().parents[1];sys.path.insert(0,str(BACKEND_DIR))
 DB_PATH=Path('/tmp')/'verify_v116.db';DB_PATH.unlink(missing_ok=True)
-os.environ.update({'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc16','SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1','APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.3','ENABLE_RATE_LIMIT_TESTING':'true'})
+os.environ.update({'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc16','SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1','APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.4','ENABLE_RATE_LIMIT_TESTING':'true'})
 from fastapi.testclient import TestClient
 from app.main import app
 

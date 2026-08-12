@@ -1,12 +1,12 @@
-# CORVAX RC27.4 R9.3 — Transaction/Value Reset & Usability
+# CORVAX RC27.4 R9.4 — Unified Comparative Reporting
 
 هذه الحزمة هي خط الأساس المصحح بعد RC27.
 
 ## بيانات الإصدار المعتمدة
 
-- Version: `1.0.0-agreement-completion-rc27.4-r9.3`
+- Version: `1.0.0-agreement-completion-rc27.4-r9.4`
 - Migration head: `e19800000001`
-- Frontend production build: `2,032` modules — PASSED
+- Frontend production build: `2,035` modules — PASSED
 - Backend compilation: PASSED
 - Security, branch scope, health, RC20, RC21 and RC25 verification: PASSED in the RC27.2 execution round
 - Migration head, readiness and release info are now derived from Alembic at runtime, not hard-coded
@@ -27,7 +27,7 @@ Apply migrations through `e19800000001`. The transaction/value reset is availabl
 - Fixed-asset cards remain with zero cost/depreciation/NBV and can receive a new opening value from the Fixed Assets screen.
 - Requires the `SUPER_ADMIN` role, `data.reset`, backup acknowledgement, exact phrase, safe preview and a signed 10-minute authorization.
 - Focused gate: `backend/tests/verify_uat_full_reset.py`.
-- Full release verification: `50/50` maintained verification scripts passed.
+- Full release verification: `51/51` maintained verification scripts passed.
 
 ## R9.3 usability and reporting
 
@@ -36,6 +36,15 @@ Apply migrations through `e19800000001`. The transaction/value reset is availabl
 - Report data and CSV export follow the active Arabic/English language.
 - Added authenticated company-logo upload for printed reports and journals.
 - Added a controlled Opening Balances screen for bank/asset/liability/equity GL balances, plus fixed-asset opening-value entry.
+
+## R9.4 reporting and assistant remediation
+
+- The AI assistant is rendered through a body-level portal, so the sticky header and its backdrop filter can no longer clip the dialog into a thin strip.
+- Financial Statements and Reports Center now share one comparative engine and one visual hierarchy.
+- Profit or loss, financial position and cash-flow reports show current period, previous period, same period last year, variance and variance percentage.
+- Local calendar dates replace UTC date slicing, preventing 1 January from appearing as 31 December in UTC+ time zones.
+- Print output uses a zero browser page margin, controlled audit footer, company logo, preparer, bilingual metadata and subtotal/total hierarchy.
+- Demo seeding is disabled by default in local, Docker, UAT and production configuration; the delivered data directories are empty.
 
 ## RC27.2 UI Quality Closure
 
