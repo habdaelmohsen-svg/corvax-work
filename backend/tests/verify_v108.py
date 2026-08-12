@@ -15,7 +15,7 @@ os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v108-financial-cl
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.2"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.3"
 
 import subprocess  # noqa: E402
 subprocess.run(
@@ -172,7 +172,7 @@ with TestClient(app) as client:
         assert db.get(JournalEntry, term.journal_id).status == "POSTED"
 
     health = client.get("/health")
-    assert health.status_code == 200 and health.json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
+    assert health.status_code == 200 and health.json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.3"
     ready = client.get("/health/ready")
     from app.core.migration_head import expected_migration_head
     assert ready.status_code == 200 and ready.json()["migration_head"] == expected_migration_head()

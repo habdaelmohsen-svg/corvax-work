@@ -33,7 +33,7 @@ def assert_ok(response, expected=200):
 with TestClient(app) as client:
     admin = login(client)
     health = assert_ok(client.get("/health"))
-    assert health["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
+    assert health["version"] == "1.0.0-agreement-completion-rc27.4-r9.3"
     assert health.get("status") == "ok"
 
     # Budget control from seeded approved budget.

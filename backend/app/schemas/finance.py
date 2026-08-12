@@ -54,6 +54,7 @@ class JournalOut(BaseModel):
     reference: str
     description: str
     status: str
+    cash_flow_kind: str | None = None
     total_debit: Decimal
     total_credit: Decimal
     created_by: int

@@ -33,7 +33,7 @@
 
 ## التطبيق
 
-- [ ] `alembic upgrade head` يصل إلى `e19700000001`، مع التحقق عبر `/health/ready`.
+- [ ] `alembic upgrade head` يصل إلى `e19800000001`، مع التحقق عبر `/health/ready`.
 - [ ] `/health/live` و`/health/ready` يعملان.
 - [ ] مراجعة logs و`X-Request-ID` في منصة المراقبة.
 - [ ] اختبار ضغط على عدد المستخدمين والحركات المتوقع.

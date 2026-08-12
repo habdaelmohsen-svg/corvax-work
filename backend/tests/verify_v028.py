@@ -25,7 +25,7 @@ with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'}))
     h={'Authorization':f"Bearer {login['access_token']}"}
     health=ok(c.get('/health'))
-    assert health['version']=='1.0.0-agreement-completion-rc27.4-r9.2'
+    assert health['version']=='1.0.0-agreement-completion-rc27.4-r9.3'
 
     rec_a=ok(c.post('/api/v1/intercompany/records',headers=h,json={
         'company_id':2,'counterparty_company_id':3,'document_number':'IC-2026-001',

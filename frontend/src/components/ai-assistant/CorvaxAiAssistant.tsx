@@ -226,7 +226,11 @@ export function CorvaxAiAssistant({
         <button className="corvax-ai-backdrop" type="button" aria-label={copy.close} onClick={closePanel} />
       )}
 
-      <aside
+      {/* Do not use the sidebar semantic element here. The dashboard sidebar is intentionally
+          styled through broad `.dash aside` selectors; reusing that element
+          for this dialog makes those high-specificity layout rules turn the
+          assistant into a second full-height sidebar when it opens. */}
+      <section
         ref={panelRef}
         id="corvax-ai-panel"
         className="corvax-ai-panel"
@@ -235,7 +239,7 @@ export function CorvaxAiAssistant({
         aria-labelledby={titleId}
         aria-hidden={!open}
       >
-        <header className="corvax-ai-header">
+        <div className="corvax-ai-header">
           <div className="corvax-ai-brand">
             <span className="corvax-ai-brand__mark" aria-hidden="true">C</span>
             <span>
@@ -247,7 +251,7 @@ export function CorvaxAiAssistant({
             <span className="corvax-ai-readonly"><i />{copy.readonly}</span>
             <button type="button" className="corvax-ai-icon-button" aria-label={copy.close} onClick={closePanel}>×</button>
           </div>
-        </header>
+        </div>
 
         <section className="corvax-ai-context" aria-label={locale === 'ar' ? 'سياق الاستعلام' : 'Query context'}>
           <div><span>{copy.company}</span><strong>{context.companyName}</strong></div>
@@ -255,7 +259,7 @@ export function CorvaxAiAssistant({
           {context.documentReference && <span className="corvax-ai-context__document">#{context.documentReference}</span>}
         </section>
 
-        <nav className="corvax-ai-modes" aria-label={locale === 'ar' ? 'أوضاع المساعد' : 'Assistant modes'}>
+        <div className="corvax-ai-modes" role="group" aria-label={locale === 'ar' ? 'أوضاع المساعد' : 'Assistant modes'}>
           {(Object.keys(MODE_LABELS) as CorvaxAiMode[]).map((item) => (
             <button
               key={item}
@@ -268,7 +272,7 @@ export function CorvaxAiAssistant({
               <small>{MODE_LABELS[item][locale].sub}</small>
             </button>
           ))}
-        </nav>
+        </div>
 
         <div className="corvax-ai-mode-hint">{MODE_LABELS[mode][locale].hint}</div>
 
@@ -315,7 +319,7 @@ export function CorvaxAiAssistant({
             <button type="submit" disabled={!draft.trim() || busy}>{copy.send} <span aria-hidden="true">←</span></button>
           </div>
         </form>
-      </aside>
+      </section>
     </div>
   );
 }

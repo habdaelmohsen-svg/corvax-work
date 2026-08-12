@@ -24,7 +24,7 @@ with TestClient(app) as client:
     assert health.status_code == 200, health.text
     payload = health.json()
     assert payload['app'].startswith('CORVAX'), payload
-    assert payload['version'] == '1.0.0-agreement-completion-rc27.4-r9.2', payload
+    assert payload['version'] == '1.0.0-agreement-completion-rc27.4-r9.3', payload
 
     login = client.post('/api/v1/auth/login', json={
         'email': 'admin@corvaxplatform.com',

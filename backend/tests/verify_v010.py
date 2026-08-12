@@ -25,7 +25,7 @@ def login(client: TestClient, email: str, password: str) -> dict[str, str]:
 
 with TestClient(app) as client:
     admin = login(client, "admin@corvaxplatform.com", "Corvax@123")
-    assert client.get("/health").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
+    assert client.get("/health").json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.3"
     assert len(client.get("/api/v1/companies", headers=admin).json()) == 4
 
     create_user = client.post(

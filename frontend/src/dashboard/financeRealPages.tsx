@@ -24,7 +24,7 @@ const ghost={padding:'9px 16px',borderRadius:9,border:'1px solid var(--border)',
 const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,padding:12} as const;
 
 type Bank={id:number;bank_name_ar?:string;name_ar?:string};
-type Account={code:string;name_ar:string;name_en:string;is_postable:boolean;active:boolean};
+type Account={id:number;code:string;name_ar:string;name_en:string;type:string;is_postable:boolean;active:boolean};
 type Dim={id:number;code:string;name_ar:string;name_en:string};
 
 function useCommon(companyId:number){
@@ -52,7 +52,7 @@ const bankName=(b:Bank)=>b.bank_name_ar||b.name_ar||`#${b.id}`;
 
 // ==================================================== FIXED ASSETS (IAS 16)
 export function AssetsPage({ar,companyId}:{ar:boolean;companyId:number}){
-  const {banks,branches,costCenters}=useCommon(companyId);
+  const {banks,accounts,branches,costCenters}=useCommon(companyId);
   const [categories,setCategories]=useState<any[]>([]);
   const [assets,setAssets]=useState<any[]>([]);
   const [summary,setSummary]=useState<any>(null);
@@ -63,6 +63,10 @@ export function AssetsPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [residual,setResidual]=useState('0'); const [life,setLife]=useState('60');
   const [bankId,setBankId]=useState(''); const [branchId,setBranchId]=useState(''); const [ccId,setCcId]=useState('');
   const [depDate,setDepDate]=useState(monthEnd());
+  const [openingAssetId,setOpeningAssetId]=useState(''); const [openingDate,setOpeningDate]=useState(iso());
+  const [openingCost,setOpeningCost]=useState(''); const [openingResidual,setOpeningResidual]=useState('0');
+  const [openingDep,setOpeningDep]=useState('0'); const [openingImpairment,setOpeningImpairment]=useState('0');
+  const [offsetAccountId,setOffsetAccountId]=useState('');
 
   const load=async()=>{
     try{
@@ -77,6 +81,12 @@ export function AssetsPage({ar,companyId}:{ar:boolean;companyId:number}){
   };
   useEffect(()=>{load()},[companyId]);
   useEffect(()=>{if(!bankId&&banks.length)setBankId(String(banks[0].id));},[banks]);
+  const unvaluedAssets=assets.filter((asset:any)=>asset.status==='DRAFT_UNVALUED');
+  useEffect(()=>{
+    if(unvaluedAssets.length&&!unvaluedAssets.some((asset:any)=>String(asset.id)===openingAssetId))setOpeningAssetId(String(unvaluedAssets[0].id));
+    const equityAccounts=accounts.filter(account=>account.type==='EQUITY');
+    if(!offsetAccountId&&equityAccounts.length)setOffsetAccountId(String(equityAccounts[0].id));
+  },[assets,accounts]);
 
   const create=async()=>{
     if(!nameAr||!nameEn||!catId||!cost||!bankId){setMsg(ar?'أكمل الحقول الإلزامية':'Complete required fields');return;}
@@ -98,11 +108,26 @@ export function AssetsPage({ar,companyId}:{ar:boolean;companyId:number}){
       setMsg(ar?`تم ترحيل إهلاك بقيمة ${fmt(Number(r.depreciation_amount||0))}`:`Depreciation ${fmt(Number(r.depreciation_amount||0))} posted`);await load();
     }catch(e:any){setMsg(String(e.message||e));}finally{setBusy(false);}
   };
+  const initializeOpeningValue=async()=>{
+    if(!openingAssetId||!openingCost||!offsetAccountId){setMsg(ar?'اختر الأصل والتكلفة وحساب مقابل الرصيد الافتتاحي':'Select the asset, cost and opening-balance offset account');return;}
+    setBusy(true);setMsg('');
+    try{
+      const result=await json(`/api/v1/assets/${openingAssetId}/initialize-opening-value`,{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+          company_id:companyId,opening_date:openingDate,cost:Number(openingCost),
+          residual_value:Number(openingResidual||0),accumulated_depreciation:Number(openingDep||0),
+          accumulated_impairment:Number(openingImpairment||0),offset_account_id:Number(offsetAccountId),
+        }),
+      });
+      setMsg(ar?`تم إدخال القيمة الافتتاحية للأصل ${result.asset_number} وترحيل القيد ${result.journal}`:`Opening value posted for ${result.asset_number} in ${result.journal}`);
+      setOpeningCost('');setOpeningResidual('0');setOpeningDep('0');setOpeningImpairment('0');await load();
+    }catch(e:any){setMsg(String(e.message||e));}finally{setBusy(false);}
+  };
 
   return <>
     <div className="kpis">
       <Kpi title={ar?'عدد الأصول':'Assets'} value={String(assets.length)} trend="" good icon={<Building2 size={22}/>} tone="blue"/>
-      <Kpi title={ar?'التكلفة':'Cost'} value={summary?fmt(Number(summary.total_cost||0)):'—'} trend="" good icon={<Building2 size={22}/>} tone="violet"/>
+      <Kpi title={ar?'التكلفة':'Cost'} value={summary?fmt(Number(summary.gross_cost||0)):'—'} trend="" good icon={<Building2 size={22}/>} tone="violet"/>
       <Kpi title={ar?'مجمع الإهلاك':'Accum. depreciation'} value={summary?fmt(Number(summary.accumulated_depreciation||0)):'—'} trend="" good icon={<CalendarRange size={22}/>} tone="amber"/>
       <Kpi title={ar?'القيمة الدفترية':'Net book value'} value={summary?fmt(Number(summary.net_book_value||0)):'—'} trend="IAS 16" good icon={<ClipboardCheck size={22}/>} tone="green"/>
     </div>
@@ -124,6 +149,19 @@ export function AssetsPage({ar,companyId}:{ar:boolean;companyId:number}){
       </div>
       <div style={{padding:12}}><button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={create}>{ar?'رسملة الأصل':'Capitalize asset'}</button></div>
     </Panel>
+
+    {unvaluedAssets.length>0&&<Panel title={ar?'إدخال القيمة الافتتاحية للأصول المحفوظة':'Initialize preserved asset opening values'} icon={<ClipboardCheck size={18}/>}>
+      <div style={grid}>
+        <label>{ar?'الأصل':'Asset'}<select style={field} value={openingAssetId} onChange={e=>setOpeningAssetId(e.target.value)}>{unvaluedAssets.map((asset:any)=><option key={asset.id} value={asset.id}>{asset.asset_number} — {ar?asset.name_ar:asset.name_en}</option>)}</select></label>
+        <label>{ar?'تاريخ الرصيد الافتتاحي':'Opening date'}<input type="date" style={field} value={openingDate} onChange={e=>setOpeningDate(e.target.value)}/></label>
+        <label>{ar?'تكلفة الأصل':'Asset cost'}<input type="number" min="0" style={field} value={openingCost} onChange={e=>setOpeningCost(e.target.value)}/></label>
+        <label>{ar?'القيمة المتبقية':'Residual value'}<input type="number" min="0" style={field} value={openingResidual} onChange={e=>setOpeningResidual(e.target.value)}/></label>
+        <label>{ar?'مجمع الإهلاك':'Accumulated depreciation'}<input type="number" min="0" style={field} value={openingDep} onChange={e=>setOpeningDep(e.target.value)}/></label>
+        <label>{ar?'مجمع الانخفاض':'Accumulated impairment'}<input type="number" min="0" style={field} value={openingImpairment} onChange={e=>setOpeningImpairment(e.target.value)}/></label>
+        <label>{ar?'حساب حقوق الملكية المقابل':'Opening equity offset account'}<select style={field} value={offsetAccountId} onChange={e=>setOffsetAccountId(e.target.value)}>{accounts.filter(account=>account.type==='EQUITY').map(account=><option key={account.id} value={account.id}>{account.code} — {ar?account.name_ar:account.name_en}</option>)}</select></label>
+      </div>
+      <div style={{padding:12}}><button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={initializeOpeningValue}>{ar?'حفظ القيمة وترحيل القيد':'Save value and post journal'}</button></div>
+    </Panel>}
 
     <Panel title={ar?'تشغيل الإهلاك الشهري':'Run monthly depreciation'} icon={<Play size={18}/>}>
       <div style={{...grid,alignItems:'end'}}>
@@ -149,6 +187,8 @@ export function LeasesPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [amount,setAmount]=useState(''); const [freq,setFreq]=useState('1');
   const [timing,setTiming]=useState('ARREARS'); const [rate,setRate]=useState('5');
   const [bankId,setBankId]=useState(''); const [runDate,setRunDate]=useState(monthEnd());
+  const [openingLeaseId,setOpeningLeaseId]=useState(''); const [openingDate,setOpeningDate]=useState(iso());
+  const [openingLiability,setOpeningLiability]=useState(''); const [openingRou,setOpeningRou]=useState('');
 
   const load=async()=>{
     try{
@@ -161,6 +201,10 @@ export function LeasesPage({ar,companyId}:{ar:boolean;companyId:number}){
   };
   useEffect(()=>{load()},[companyId]);
   useEffect(()=>{if(!bankId&&banks.length)setBankId(String(banks[0].id));},[banks]);
+  const unvaluedLeases=leases.filter((lease:any)=>lease.status==='DRAFT_UNVALUED');
+  useEffect(()=>{
+    if(unvaluedLeases.length&&!unvaluedLeases.some((lease:any)=>String(lease.id)===openingLeaseId))setOpeningLeaseId(String(unvaluedLeases[0].id));
+  },[leases]);
 
   const create=async()=>{
     if(!nameAr||!nameEn||!amount||!bankId){setMsg(ar?'أكمل الحقول الإلزامية':'Complete required fields');return;}
@@ -180,11 +224,22 @@ export function LeasesPage({ar,companyId}:{ar:boolean;companyId:number}){
       setMsg(ar?`تم ترحيل ${r.posted_count||0} فترة`:`${r.posted_count||0} period(s) posted`);await load();
     }catch(e:any){setMsg(String(e.message||e));}finally{setBusy(false);}
   };
+  const initializeOpeningLease=async()=>{
+    if(!openingLeaseId||!openingLiability||!openingRou){setMsg(ar?'أدخل التزام الإيجار وأصل حق الاستخدام':'Enter the lease liability and ROU asset');return;}
+    setBusy(true);setMsg('');
+    try{
+      const result=await json(`/api/v1/leases/${openingLeaseId}/initialize-opening-value`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        company_id:companyId,opening_date:openingDate,lease_liability:Number(openingLiability),rou_asset:Number(openingRou),
+      })});
+      setMsg(ar?`تمت إعادة قيمة العقد ${result.number} وإنشاء ${result.remaining_periods} فترة مستقبلية`:`Opening value restored for ${result.number} with ${result.remaining_periods} future periods`);
+      setOpeningLiability('');setOpeningRou('');await load();
+    }catch(e:any){setMsg(String(e.message||e));}finally{setBusy(false);}
+  };
 
   return <>
     <div className="kpis">
       <Kpi title={ar?'العقود':'Leases'} value={String(leases.length)} trend="IFRS 16" good icon={<CalendarRange size={22}/>} tone="blue"/>
-      <Kpi title={ar?'أصل حق الاستخدام':'ROU asset'} value={summary?fmt(Number(summary.rou_asset||summary.total_rou||0)):'—'} trend="" good icon={<Building2 size={22}/>} tone="violet"/>
+      <Kpi title={ar?'أصل حق الاستخدام':'ROU asset'} value={summary?fmt(Number(summary.gross_rou_asset||summary.rou_asset||summary.total_rou||0)):'—'} trend="" good icon={<Building2 size={22}/>} tone="violet"/>
       <Kpi title={ar?'التزام الإيجار':'Lease liability'} value={summary?fmt(Number(summary.lease_liability||summary.total_liability||0)):'—'} trend="" good icon={<Receipt size={22}/>} tone="amber"/>
       <Kpi title={ar?'فترات مرحّلة':'Posted periods'} value={summary?String(summary.posted_periods||0):'—'} trend="" good icon={<ClipboardCheck size={22}/>} tone="green"/>
     </div>
@@ -204,6 +259,16 @@ export function LeasesPage({ar,companyId}:{ar:boolean;companyId:number}){
       </div>
       <div style={{padding:12}}><button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={create}>{ar?'إنشاء العقد':'Create lease'}</button></div>
     </Panel>
+
+    {unvaluedLeases.length>0&&<Panel title={ar?'إدخال الرصيد الافتتاحي لعقود الإيجار المحفوظة':'Initialize preserved lease opening values'} icon={<ClipboardCheck size={18}/>}>
+      <div style={grid}>
+        <label>{ar?'عقد الإيجار':'Lease contract'}<select style={field} value={openingLeaseId} onChange={e=>setOpeningLeaseId(e.target.value)}>{unvaluedLeases.map((lease:any)=><option key={lease.id} value={lease.id}>{lease.number} — {ar?lease.name_ar:lease.name_en}</option>)}</select></label>
+        <label>{ar?'تاريخ الرصيد الافتتاحي':'Opening date'}<input type="date" style={field} value={openingDate} onChange={e=>setOpeningDate(e.target.value)}/></label>
+        <label>{ar?'التزام الإيجار الافتتاحي':'Opening lease liability'}<input type="number" min="0" style={field} value={openingLiability} onChange={e=>setOpeningLiability(e.target.value)}/></label>
+        <label>{ar?'أصل حق الاستخدام الافتتاحي':'Opening ROU asset'}<input type="number" min="0" style={field} value={openingRou} onChange={e=>setOpeningRou(e.target.value)}/></label>
+      </div>
+      <div style={{padding:12}}><button style={{...btn,opacity:busy?0.6:1}} disabled={busy} onClick={initializeOpeningLease}>{ar?'حفظ الرصيد وإنشاء الجدول':'Save opening value and rebuild schedule'}</button></div>
+    </Panel>}
 
     <Panel title={ar?'ترحيل جداول الإيجار':'Post lease schedules'} icon={<Play size={18}/>}>
       <div style={{...grid,alignItems:'end'}}>

@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import {
-  Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, Command,
+  ArrowLeft, ArrowRight, Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, Command,
   LogOut, Menu, Moon, Search, Sun,
 } from 'lucide-react';
 import {apiFetch} from '../api/client';
@@ -11,6 +11,12 @@ import {useDashboardUi} from './store';
 import type {CompanyScope, Lang, View} from './types';
 
 const routeFromHash = () => (window.location.hash.replace(/^#\/?/, '').split('?')[0] || 'executive') as View;
+const CORVAX_HISTORY_KEY = 'corvaxDashboardRoute';
+
+type CorvaxHistoryState = {
+  [CORVAX_HISTORY_KEY]?: true;
+  corvaxFromHash?: string | null;
+};
 
 export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   lang: Lang;
@@ -22,12 +28,29 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   const [view, setView] = useState<View>(routeFromHash);
   const navigate = useCallback((path: string, options?: {replace?: boolean}) => {
     const hash = `#${path.startsWith('/') ? path : `/${path}`}`;
-    if (options?.replace) window.history.replaceState(null, '', hash);
-    else window.location.hash = hash;
+    const currentHash = window.location.hash || '#/executive';
+    // Clicking the already-active navigation item must not rewrite the current
+    // history marker. Otherwise a direct/deep-link entry could look as if it
+    // had an in-app predecessor and Back might leave CORVAX.
+    if (!options?.replace && hash === currentHash) return;
+    const currentState = (window.history.state || {}) as CorvaxHistoryState;
+    const nextState: CorvaxHistoryState = {
+      ...currentState,
+      [CORVAX_HISTORY_KEY]: true,
+      corvaxFromHash: options?.replace ? currentState.corvaxFromHash ?? null : currentHash,
+    };
+    if (options?.replace) window.history.replaceState(nextState, '', hash);
+    else {
+      window.location.hash = hash;
+      // Setting location.hash creates the history entry. Mark that entry so the
+      // shared Back button never sends a direct/deep-link visitor outside CORVAX.
+      window.history.replaceState(nextState, '', hash);
+    }
     setView(routeFromHash());
   }, []);
   const {menuOpen, darkMode, setMenuOpen, toggleTheme} = useDashboardUi();
   const [apiOnline, setApiOnline] = useState(false);
+  const [apiVersion, setApiVersion] = useState('RC27.4 · R9.3');
   const [globalQuery,setGlobalQuery]=useState('');
   const [navigationNotice, setNavigationNotice] = useState('');
   const company = useMemo(() => JSON.parse(localStorage.getItem('corvax_company') || '{}'), []);
@@ -62,8 +85,26 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   }).format(new Date());
 
   useEffect(() => {
+    const state = (window.history.state || {}) as CorvaxHistoryState;
+    if (!state[CORVAX_HISTORY_KEY]) {
+      window.history.replaceState({
+        ...state,
+        [CORVAX_HISTORY_KEY]: true,
+        corvaxFromHash: null,
+      }, '', window.location.href);
+    }
+  }, []);
+
+  useEffect(() => {
     apiFetch('/api/v1/modules/summary')
-      .then((response) => setApiOnline(response.ok))
+      .then(async(response) => {
+        setApiOnline(response.ok);
+        if(response.ok){
+          const payload=await response.json().catch(()=>({}));
+          const match=String(payload.version||'').match(/rc(\d+\.\d+)-r(\d+\.\d+)$/i);
+          if(match)setApiVersion(`RC${match[1]} · R${match[2]}`);
+        }
+      })
       .catch(() => setApiOnline(false));
   }, []);
 
@@ -89,6 +130,15 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
     navigate(`/${next}`);
     setMenuOpen(false);
   }, [ar, availableNav, navigate, setMenuOpen]);
+
+  const goBack = useCallback(() => {
+    const state = (window.history.state || {}) as CorvaxHistoryState;
+    if (state[CORVAX_HISTORY_KEY] && state.corvaxFromHash) {
+      window.history.back();
+      return;
+    }
+    navigate('/executive', {replace: true});
+  }, [navigate]);
 
   return <main className={`dash ${darkMode ? 'theme-dark' : ''}`} dir={ar ? 'rtl' : 'ltr'}>
     <aside className={menuOpen ? 'open' : ''}>
@@ -148,7 +198,7 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
           <div><strong>{userName}</strong><span>{ar ? 'مستخدم معتمد' : 'Authorized user'}</span></div>
           <button className="logout-icon" onClick={onLogout} title={ar ? 'تسجيل الخروج' : 'Logout'}><LogOut size={17}/></button>
         </div>
-        <div className="version-line"><span>© 2026 CORVAX</span><b>v1.0 RC27.4</b></div>
+        <div className="version-line"><span>© 2026 CORVAX</span><b>{apiVersion}</b></div>
       </div>
     </aside>
 
@@ -171,7 +221,12 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
       </header>
 
       <div className="page-heading">
-        <div><span>{ar ? 'مرحبًا بعودتك' : 'Welcome back'}</span><h1>{view === 'executive' ? (ar ? `مرحبًا ${String(userName).split(' ')[0]} 👋` : `Hello ${String(userName).split(' ')[0]} 👋`) : (ar ? current.ar : current.en)}</h1><p>{view === 'executive' ? (ar ? 'إليك ملخصًا حيًا لأداء أعمالك والقرارات التي تحتاج اهتمامك.' : 'Here is a live view of business performance and decisions needing attention.') : (ar ? 'بيانات تشغيلية ومالية مترابطة مع إمكانية التتبع حتى المستند الأصلي.' : 'Connected operational and financial data with drill-through to source documents.')}</p></div>
+        <div className="page-heading-copy">
+          {view !== 'executive' && <button type="button" className="page-back-button" onClick={goBack} aria-label={ar ? 'الرجوع إلى الصفحة السابقة' : 'Back to previous page'}>
+            {ar ? <ArrowRight size={16}/> : <ArrowLeft size={16}/>}<span>{ar ? 'رجوع' : 'Back'}</span>
+          </button>}
+          <span>{ar ? 'مرحبًا بعودتك' : 'Welcome back'}</span><h1>{view === 'executive' ? (ar ? `مرحبًا ${String(userName).split(' ')[0]} 👋` : `Hello ${String(userName).split(' ')[0]} 👋`) : (ar ? current.ar : current.en)}</h1><p>{view === 'executive' ? (ar ? 'إليك ملخصًا حيًا لأداء أعمالك والقرارات التي تحتاج اهتمامك.' : 'Here is a live view of business performance and decisions needing attention.') : (ar ? 'بيانات تشغيلية ومالية مترابطة مع إمكانية التتبع حتى المستند الأصلي.' : 'Connected operational and financial data with drill-through to source documents.')}</p>
+        </div>
         <div className="heading-side"><div className="current-date"><CalendarDays size={18}/><span><strong>{formattedDate}</strong><small>{new Date().toLocaleDateString(ar ? 'ar-SA' : 'en-GB')}</small></span></div><div className={`status-pill ${apiOnline ? '' : 'offline'}`}><CheckCircle2 size={16}/>{apiOnline ? (ar ? 'متصل' : 'Connected') : (ar ? 'غير متصل' : 'Offline')}</div></div>
       </div>
 

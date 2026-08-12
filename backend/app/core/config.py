@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "CORVAX — The Core Business Platform"
-    app_version: str = "1.0.0-agreement-completion-rc27.4-r9.2"
+    app_version: str = "1.0.0-agreement-completion-rc27.4-r9.3"
     environment: str = "development"
     database_url: str = "sqlite:///./data/corvax.db"
 

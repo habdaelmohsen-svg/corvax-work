@@ -19,7 +19,7 @@ os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v111-audit-remedi
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.2"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.3"
 os.environ["MRP_INLINE_EXECUTION"] = "true"
 os.environ["ENABLE_RATE_LIMIT_TESTING"] = "true"
 
@@ -319,7 +319,7 @@ def main() -> None:
         release = client.get("/api/v1/system/release").json()
         from app.core.migration_head import expected_migration_head
         assert release["database_schema_head"] == expected_migration_head()
-        assert release["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
+        assert release["version"] == "1.0.0-agreement-completion-rc27.4-r9.3"
         summary = client.get("/api/v1/modules/summary", headers=admin).json()
         assert summary["legacy_demo_endpoints"] == "REMOVED"
         assert summary["migration_head"] == expected_migration_head()

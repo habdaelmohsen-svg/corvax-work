@@ -1,15 +1,16 @@
-import {useEffect, useState} from 'react';
-import {FileBarChart, Download, Printer, Calendar, TrendingUp, ShoppingCart, Package, Users, Landmark, Percent} from 'lucide-react';
+import {useEffect, useRef, useState} from 'react';
+import {FileBarChart, Download, Printer, Calendar, TrendingUp, ShoppingCart, Package, Users, Landmark, Percent, ImagePlus} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {Kpi, Panel, fmt} from './ui';
 import {ReportBuilderTab} from './reportBuilderTab';
+import {printBusinessDocument} from './printDocument';
 
 // Reports Center: a UNIFIED front-end over reports that already exist in the platform.
 // It does not duplicate report logic - it calls the existing endpoints, lets the user
 // pick a period, and adds export (CSV -> opens in Excel) and print/PDF (browser).
 
-async function json(url:string){
-  const r=await apiFetch(url); const x=await r.json().catch(()=>({}));
+async function json(url:string,init?:RequestInit){
+  const r=await apiFetch(url,init); const x=await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(typeof x.detail==='string'?x.detail:JSON.stringify(x.detail||x));
   return x;
 }
@@ -19,6 +20,16 @@ const ghost={padding:'8px 14px',borderRadius:9,border:'1px solid var(--border)',
 const field={display:'block',width:'100%',marginTop:5,padding:9,border:'1px solid var(--border)',borderRadius:9} as const;
 const th={textAlign:'start',padding:'9px 12px',borderBottom:'2px solid var(--border)',fontWeight:700,fontSize:13} as const;
 const td={padding:'8px 12px',borderBottom:'1px solid var(--border)',fontSize:13} as const;
+const statusText=(status:any,ar:boolean)=>{
+  const key=String(status||'').toUpperCase();
+  const labels:Record<string,[string,string]>={
+    DRAFT:['مسودة','Draft'],PENDING_APPROVAL:['بانتظار الاعتماد','Pending approval'],
+    APPROVED:['معتمد','Approved'],POSTED:['مرحّل','Posted'],PAID:['مدفوع','Paid'],
+    PARTIALLY_PAID:['مدفوع جزئيًا','Partially paid'],CANCELLED:['ملغي','Cancelled'],
+    REVERSED:['معكوس','Reversed'],ACCRUED:['مستحق','Accrued'],ELIGIBLE:['مؤهل','Eligible'],
+  };
+  return labels[key]?.[ar?0:1]||status||'—';
+};
 
 type Row=Record<string,any>;
 type Report={key:string;cat:string;ar:string;en:string};
@@ -58,7 +69,9 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [headers,setHeaders]=useState<string[]>([]);
   const [rows,setRows]=useState<Row[]>([]);
   const [busy,setBusy]=useState(false);
+  const [logoBusy,setLogoBusy]=useState(false);
   const [message,setMessage]=useState('');
+  const logoInput=useRef<HTMLInputElement>(null);
 
   const run=async(rep:Report)=>{
     setBusy(true);setMessage('');setActive(rep);
@@ -113,11 +126,11 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
       } else if(rep.key==='sales_invoices'){
         const d=await json(`/api/v1/subledgers/sales-invoices?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'العميل':'Customer',ar?'الإجمالي':'Total',ar?'الحالة':'Status'];
-        R=(d||[]).map((i:Row)=>({[H[0]]:i.number||i.id,[H[1]]:i.invoice_date,[H[2]]:ar?(i.customer_name_ar||'—'):(i.customer_name_en||'—'),[H[3]]:fmt(Number(i.total||0)),[H[4]]:i.status}));
+        R=(d||[]).map((i:Row)=>({[H[0]]:i.number||i.id,[H[1]]:i.invoice_date,[H[2]]:ar?(i.customer_name_ar||'—'):(i.customer_name_en||'—'),[H[3]]:fmt(Number(i.total||0)),[H[4]]:statusText(i.status,ar)}));
       } else if(rep.key==='purchase_invoices'){
         const d=await json(`/api/v1/subledgers/purchase-invoices?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'المورد':'Supplier',ar?'الإجمالي':'Total',ar?'الحالة':'Status'];
-        R=(d||[]).map((i:Row)=>({[H[0]]:i.number||i.id,[H[1]]:i.invoice_date,[H[2]]:ar?(i.supplier_name_ar||'—'):(i.supplier_name_en||'—'),[H[3]]:fmt(Number(i.total||0)),[H[4]]:i.status}));
+        R=(d||[]).map((i:Row)=>({[H[0]]:i.number||i.id,[H[1]]:i.invoice_date,[H[2]]:ar?(i.supplier_name_ar||'—'):(i.supplier_name_en||'—'),[H[3]]:fmt(Number(i.total||0)),[H[4]]:statusText(i.status,ar)}));
       } else if(rep.key==='receipts'){
         const d=await json(`/api/v1/subledgers/receipts?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'المبلغ':'Amount',ar?'المرجع':'Reference'];
@@ -129,7 +142,7 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
       } else if(rep.key==='stock'){
         const d=await json(`/api/v1/inventory/stock-summary?company_id=${companyId}`);
         H=[ar?'الصنف':'Item',ar?'المستودع':'Warehouse',ar?'الكمية':'Quantity',ar?'القيمة':'Value'];
-        R=(d||[]).map((i:Row)=>({[H[0]]:ar?(i.item_name_ar||i.name_ar||i.item_id):(i.item_name_en||i.name_en||i.item_id),[H[1]]:i.warehouse_name_ar||i.warehouse_id||'—',[H[2]]:fmt(Number(i.quantity||i.on_hand||0)),[H[3]]:fmt(Number(i.value||i.total_value||0))}));
+        R=(d||[]).map((i:Row)=>({[H[0]]:ar?(i.item_name_ar||i.name_ar||i.item_id):(i.item_name_en||i.name_en||i.item_id),[H[1]]:ar?(i.warehouse_name_ar||i.warehouse_name_en||i.warehouse_id||'—'):(i.warehouse_name_en||i.warehouse_name_ar||i.warehouse_id||'—'),[H[2]]:fmt(Number(i.quantity||i.on_hand||0)),[H[3]]:fmt(Number(i.value||i.total_value||0))}));
       } else if(rep.key==='ar_aging'||rep.key==='ap_aging'){
         const lt=rep.key==='ar_aging'?'AR':'AP';
         const d=await json(`/api/v1/subledgers/aging?company_id=${companyId}&ledger_type=${lt}&as_of_date=${end}`);
@@ -139,14 +152,31 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
       } else if(rep.key==='commissions'){
         const d=await json(`/api/v1/sales-commissions/accruals?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'المستفيد':'Beneficiary',ar?'الفاتورة':'Invoice',ar?'العمولة':'Amount',ar?'قابل للدفع':'Payable',ar?'الحالة':'Status'];
-        R=(d||[]).map((a:Row)=>({[H[0]]:a.number,[H[1]]:a.beneficiary_name_ar||'—',[H[2]]:a.invoice_number||'—',[H[3]]:fmt(Number(a.amount||0)),[H[4]]:fmt(Number(a.payable_amount||0)),[H[5]]:a.status}));
+        R=(d||[]).map((a:Row)=>({[H[0]]:a.number,[H[1]]:ar?(a.beneficiary_name_ar||a.beneficiary_name_en||'—'):(a.beneficiary_name_en||a.beneficiary_name_ar||'—'),[H[2]]:a.invoice_number||'—',[H[3]]:fmt(Number(a.amount||0)),[H[4]]:fmt(Number(a.payable_amount||0)),[H[5]]:statusText(a.status,ar)}));
       }
       setTitle(T);setHeaders(H);setRows(R);
       if(!R.length)setMessage(ar?'لا توجد بيانات لهذا التقرير في الفترة المحددة':'No data for this report in the selected period');
     }catch(e:any){setMessage(String(e.message||e));setHeaders([]);setRows([]);}
     finally{setBusy(false);}
   };
-  useEffect(()=>{if(active)run(active);},[companyId]);
+  useEffect(()=>{if(active)run(active);},[companyId,ar]);
+
+  const uploadLogo=async(file?:File)=>{
+    if(!file)return;
+    if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>512*1024){
+      setMessage(ar?'اختر شعارًا بصيغة PNG أو JPEG أو WEBP وبحجم لا يتجاوز 512 كيلوبايت.':'Choose a PNG, JPEG, or WEBP logo no larger than 512 KB.');return;
+    }
+    setLogoBusy(true);setMessage('');
+    try{
+      const dataUrl=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result||''));reader.onerror=()=>reject(new Error('Unable to read logo'));reader.readAsDataURL(file);});
+      const contentBase64=dataUrl.split(',',2)[1]||'';
+      const response=await json(`/api/v1/companies/${companyId}/logo`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file_name:file.name,content_type:file.type,content_base64:contentBase64})});
+      const stored=JSON.parse(localStorage.getItem('corvax_company')||'{}');
+      localStorage.setItem('corvax_company',JSON.stringify({...stored,logo_url:response.logo_url}));
+      setMessage(ar?'تم حفظ شعار الشركة وسيظهر في التقارير والقيود المطبوعة.':'Company logo saved and will appear on printed reports and journals.');
+    }catch(e:any){setMessage(String(e.message||e));}
+    finally{setLogoBusy(false);if(logoInput.current)logoInput.current.value='';}
+  };
 
   const exportCsv=()=>{
     if(!headers.length)return;
@@ -158,12 +188,29 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
     const a=document.createElement('a');a.href=url;a.download=`${title||'report'}_${end}.csv`;a.click();URL.revokeObjectURL(url);
   };
   const printReport=()=>{
-    const w=window.open('','_blank');if(!w)return;
-    const dir=ar?'rtl':'ltr';
-    const thead='<tr>'+headers.map(h=>`<th style="text-align:${ar?'right':'left'};padding:8px;border-bottom:2px solid #333">${h}</th>`).join('')+'</tr>';
-    const tbody=rows.map(r=>'<tr>'+headers.map(h=>`<td style="padding:6px 8px;border-bottom:1px solid #ccc">${r[h]??''}</td>`).join('')+'</tr>').join('');
-    w.document.write(`<html dir="${dir}"><head><title>${title}</title><meta charset="utf-8"></head><body style="font-family:Arial,sans-serif;padding:24px"><h2>${title}</h2><div style="color:#555;margin-bottom:12px">${ar?'الفترة':'Period'}: ${start} → ${end}</div><table style="width:100%;border-collapse:collapse">${thead}${tbody}</table><script>window.onload=()=>window.print()</script></body></html>`);
-    w.document.close();
+    if(!active||!headers.length)return;
+    const numericByReport:Record<string,number[]>={
+      income:[1],balance:[1],cashflow:[1],trial:[1,2],
+      sales_invoices:[3],purchase_invoices:[3],receipts:[2],payments:[2],
+      stock:[2,3],ar_aging:[1,2,3,4,5,6],ap_aging:[1,2,3,4,5,6],commissions:[3,4],
+    };
+    const opened=printBusinessDocument({
+      ar,
+      title,
+      documentLabel:ar?'تقرير أعمال':'Business report',
+      subtitle:ar?`تقرير ${active.ar} مستخرج وفق الفترة المحددة.`:`${active.en} generated for the selected reporting period.`,
+      columns:headers,
+      rows:rows.map(row=>headers.map(header=>row[header])),
+      numericColumns:numericByReport[active.key]||[],
+      landscape:headers.length>5,
+      meta:[
+        {label:ar?'من تاريخ':'From date',value:start},
+        {label:ar?'إلى تاريخ':'To date',value:end},
+        {label:ar?'فئة التقرير':'Report category',value:catLabel(active.cat)},
+        {label:ar?'عدد السطور':'Row count',value:rows.length},
+      ],
+    });
+    if(!opened)setMessage(ar?'تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة لهذا الموقع.':'Unable to open the print window. Allow pop-ups for this site.');
   };
 
   const catReports=REPORTS.filter(r=>r.cat===cat);
@@ -205,6 +252,8 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
           <button style={{...btn,opacity:busy?0.6:1}} disabled={busy||!active} onClick={()=>active&&run(active)}>{ar?'تشغيل التقرير':'Run report'}</button>
           <button style={{...ghost,display:'flex',alignItems:'center',gap:6,justifyContent:'center'}} disabled={!rows.length} onClick={exportCsv}><Download size={16}/>{ar?'تصدير Excel':'Export Excel'}</button>
           <button style={{...ghost,display:'flex',alignItems:'center',gap:6,justifyContent:'center'}} disabled={!rows.length} onClick={printReport}><Printer size={16}/>{ar?'طباعة / PDF':'Print / PDF'}</button>
+          <input ref={logoInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={e=>uploadLogo(e.target.files?.[0])}/>
+          <button style={{...ghost,display:'flex',alignItems:'center',gap:6,justifyContent:'center'}} disabled={logoBusy} onClick={()=>logoInput.current?.click()}><ImagePlus size={16}/>{logoBusy?(ar?'جارٍ حفظ الشعار...':'Saving logo...'):(ar?'إضافة شعار الشركة':'Add company logo')}</button>
         </div>
       </div>
     </Panel>

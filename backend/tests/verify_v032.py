@@ -32,7 +32,7 @@ with TestClient(app) as client:
     admin_login = ok(client.post("/api/v1/auth/login", json={"email": "admin@corvaxplatform.com", "password": "Corvax@123"}))
     admin_headers = {"Authorization": f"Bearer {admin_login['access_token']}"}
     health = ok(client.get("/health"))
-    assert health["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
+    assert health["version"] == "1.0.0-agreement-completion-rc27.4-r9.3"
     assert health.get("status") == "ok"
 
     ok(client.post("/api/v1/admin/users", headers=admin_headers, json={

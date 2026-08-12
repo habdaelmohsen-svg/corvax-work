@@ -1,5 +1,5 @@
 import {
-  BadgeDollarSign, BookOpenCheck, Boxes, Building2, CalendarRange, ClipboardCheck,
+  BadgeDollarSign, Boxes, Building2, CalendarRange, ClipboardCheck,
   DatabaseBackup, Dumbbell, Factory, FileCheck2, KeyRound, Landmark, LayoutDashboard,
   MonitorCog, Network, ShieldCheck, Workflow, ShoppingCart, TrendingUp, Users, UtensilsCrossed, WalletCards, RotateCcw, Percent, Flame, Calculator, Wrench, Truck, Scale, FileBarChart, HardHat, NotebookPen, UserCog, Eraser, Package} from 'lucide-react';
 import type { NavGroupKey, NavItem } from './types';
@@ -36,8 +36,8 @@ export const navItems: NavItem[] = [
   { key: 'exciseTax', ar: 'الضريبة الانتقائية', en: 'Excise Tax', icon: Flame, scope: allScopes, group: 'tax' },
   { key: 'zakatIncomeTax', ar: 'الزكاة وضريبة الدخل', en: 'Zakat & Income Tax', icon: Calculator, scope: allScopes, group: 'tax' },
   { key: 'budget', ar: 'الموازنة والرقابة', en: 'Budget Control', icon: WalletCards, scope: allScopes , group: 'finance' },
-  { key: 'transactions', ar: 'الحسابات والقيود', en: 'Accounting Operations', icon: BookOpenCheck, scope: allScopes, group: 'finance', requires: ['finance'] },
   { key: 'manualJournals', ar: 'قيود اليومية', en: 'Journal Entries', icon: NotebookPen, scope: allScopes, group: 'finance', requires: ['finance'] },
+  { key: 'openingBalances', ar: 'الأرصدة الافتتاحية', en: 'Opening Balances', icon: Scale, scope: allScopes, group: 'finance', requires: ['finance'] },
   { key: 'treasury', ar: 'الخزينة والتسويات', en: 'Treasury & Reconciliation', icon: Landmark, scope: allScopes, group: 'finance', requires: ['banking'] },
   { key: 'leases', ar: 'عقود الإيجار IFRS 16', en: 'IFRS 16 Leases', icon: CalendarRange, scope: allScopes, group: 'assets', requires: ['leases'] },
   { key: 'assets', ar: 'الأصول الثابتة IAS 16', en: 'IAS 16 Fixed Assets', icon: BadgeDollarSign, scope: allScopes, group: 'assets', requires: ['assets'] },
@@ -62,7 +62,7 @@ export const navItems: NavItem[] = [
   { key: 'close', ar: 'الإقفال المالي', en: 'Financial Close', icon: FileCheck2, scope: allScopes, group: 'finance', requires: ['period'] },
   { key: 'assurance', ar: 'التأكيد المالي الحازم', en: 'Financial Assurance Gate', icon: ShieldCheck, scope: allScopes, group: 'finance' },
   { key: 'compliance', ar: 'الالتزام والضرائب', en: 'Compliance & Tax', icon: ShieldCheck, scope: allScopes, group: 'tax', requires: ['compliance'] },
-  { key: 'dataReset', ar: 'مسح بيانات UAT وبدء الإدخال', en: 'Clear UAT Data', icon: Eraser, scope: allScopes, requires: ['data.reset'] },
+  { key: 'dataReset', ar: 'مسح الحركات والقيم التجريبية', en: 'Clear Trial Values', icon: Eraser, scope: allScopes, requires: ['data.reset'] },
   { key: 'security', ar: 'الأمان والنسخ الاحتياطي', en: 'Security & Backup', icon: DatabaseBackup, scope: allScopes, requires: ['security'] , group: 'system' },
   { key: 'users', ar: 'المستخدمون', en: 'Users', icon: UserCog, scope: allScopes, group: 'system', requires: ['users'] },
   { key: 'accessGovernance', ar: 'حوكمة الصلاحيات', en: 'Access Governance', icon: KeyRound, scope: allScopes, requires: ['access'] , group: 'governance' },

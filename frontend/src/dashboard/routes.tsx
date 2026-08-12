@@ -13,7 +13,6 @@ const WithholdingTaxPage = lazy(() => import('./withholdingTaxPage').then((modul
 const ExciseTaxPage = lazy(() => import('./exciseTaxPage').then((module) => ({default: module.ExciseTaxPage})));
 const ZakatIncomeTaxPage = lazy(() => import('./zakatIncomeTaxPage').then((module) => ({default: module.ZakatIncomeTaxPage})));
 const BudgetPage = lazy(() => import('./financePages').then((module) => ({default: module.BudgetPage})));
-const TransactionsPage = lazy(() => import('./financePages').then((module) => ({default: module.TransactionsPage})));
 const TreasuryPage = lazy(() => import('./financePages').then((module) => ({default: module.TreasuryPage})));
 const LeasesPage = lazy(() => import('./financeRealPages').then((module) => ({default: module.LeasesPage})));
 const AssetsPage = lazy(() => import('./financeRealPages').then((module) => ({default: module.AssetsPage})));
@@ -57,12 +56,13 @@ export function DashboardRoutes({ar, companyId, scope, view, onNavigate}: {ar: b
     finance:<FinancePage ar={ar} companyId={companyId}/>, aging:<AgingPage ar={ar} companyId={companyId}/>,
     returns:<CreditNotesPage ar={ar} companyId={companyId}/>, withholdingTax:<WithholdingTaxPage ar={ar} companyId={companyId}/>,
     exciseTax:<ExciseTaxPage ar={ar} companyId={companyId}/>, zakatIncomeTax:<ZakatIncomeTaxPage ar={ar} companyId={companyId}/>,
-    budget:<BudgetPage ar={ar} companyId={companyId}/>, transactions:<TransactionsPage ar={ar} companyId={companyId}/>,
+    budget:<BudgetPage ar={ar} companyId={companyId}/>, transactions:<ManualJournalsPage ar={ar} companyId={companyId}/>,
     inventory:<InventoryPage ar={ar} companyId={companyId}/>, inventoryTraceability:<InventoryTraceabilityPage ar={ar} companyId={companyId}/>,
     operationalControls:<OperationalControlsPage ar={ar} companyId={companyId}/>, sales:<SalesPage ar={ar} companyId={companyId}/>,
     purchases:<PurchasesPage ar={ar} companyId={companyId}/>, maintenance:<MaintenancePage ar={ar} companyId={companyId}/>,
     fleet:<FleetPage ar={ar} companyId={companyId}/>, legal:<LegalPage ar={ar} companyId={companyId}/>,
     cipProjects:<CipProjectsPage ar={ar} companyId={companyId}/>, manualJournals:<ManualJournalsPage ar={ar} companyId={companyId}/>,
+    openingBalances:<ManualJournalsPage ar={ar} companyId={companyId} openingMode/>,
     chartOfAccounts:<ChartOfAccountsPage ar={ar} companyId={companyId}/>, dataReset:<DataResetPage ar={ar} companyId={companyId}/>,
     items:<ItemsPage ar={ar} companyId={companyId}/>, users:<UsersPage ar={ar} companyId={companyId}/>,
     reports:<ReportsCenterPage ar={ar} companyId={companyId}/>, crm:<CrmPage ar={ar} companyId={companyId}/>,

@@ -10,7 +10,7 @@ DB_PATH=Path('/tmp')/'verify_v121.db'; DB_PATH.unlink(missing_ok=True)
 os.environ.update({
  'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc21-credit-notes',
  'SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1',
- 'APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.2','ENABLE_RATE_LIMIT_TESTING':'true',
+ 'APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.3','ENABLE_RATE_LIMIT_TESTING':'true',
 })
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func
@@ -25,7 +25,7 @@ def ok(r,status=200): assert r.status_code==status,r.text; return r.json()
 def main():
   with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'})); admin={'Authorization':f"Bearer {login['access_token']}"}
-    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.4-r9.2'
+    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.4-r9.3'
     u=ok(c.post('/api/v1/admin/users',headers=admin,json={'name_ar':'مراجع مرتجعات','name_en':'Returns Approver','email':'rc21.approver@corvaxplatform.com','password':'Rc21Approver@123','require_password_change':False,'memberships':[{'company_id':1,'role_code':'SUPER_ADMIN'}]}),201)
     al=ok(c.post('/api/v1/auth/login',json={'email':'rc21.approver@corvaxplatform.com','password':'Rc21Approver@123'})); approver={'Authorization':f"Bearer {al['access_token']}"}
     with SessionLocal() as db:

@@ -67,19 +67,19 @@ export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
   const canDelete=canPreview&&Boolean(authorizationToken);
 
   return <>
-    <Panel title={ar?'مسح بيانات UAT وبدء الإدخال':'Clear UAT data and start entry'} icon={<Trash2 size={20}/>}>
+    <Panel title={ar?'مسح الحركات والقيم التجريبية':'Clear trial transactions and values'} icon={<Trash2 size={20}/>}>
       <div style={{padding:16,background:'#fff7ed',color:'#9a3412',lineHeight:1.9,fontWeight:600}}>
         <AlertTriangle size={18} style={{verticalAlign:'middle',marginInlineEnd:7}}/>
         {ar
-          ? 'هذا الإجراء يحذف جميع بيانات الأعمال المضافة في الشركات الأربع، وليس بيانات Demo فقط. استخدمه مرة واحدة قبل إدخال البيانات شبه الحقيقية.'
-          : 'This removes all added business data across all four companies, not only seeded Demo rows. Use it once before semi-real UAT entry.'}
+          ? 'هذا الإجراء يحذف الحركات والأرصدة التجريبية فقط في جميع الشركات. تبقى بطاقات العملاء والموردين والأصناف والموظفين والمستودعات والبنوك والسيارات والآلات والأصول.'
+          : 'This removes trial transactions and balances only across all companies. Customer, supplier, item, employee, warehouse, bank, vehicle, machine, and asset master cards remain.'}
       </div>
     </Panel>
 
     <div className="kpis">
-      <Kpi title={ar?'صفوف ستُحذف':'Rows to delete'} value={String(preview?.total_rows??'—')} trend={ar?'كل الشركات':'all companies'} good={(preview?.total_rows||0)===0} icon={<Trash2 size={22}/>} tone="amber"/>
+      <Kpi title={ar?'صفوف حركات ستُحذف':'Transaction rows to delete'} value={String(preview?.transaction_rows??'—')} trend={ar?'كل الشركات':'all companies'} good={(preview?.transaction_rows||0)===0} icon={<Trash2 size={22}/>} tone="amber"/>
       <Kpi title={ar?'جداول بها بيانات':'Populated tables'} value={String(rows.length)} trend={ar?'بيانات أعمال':'business data'} good icon={<Database size={22}/>} tone="blue"/>
-      <Kpi title={ar?'جداول النظام المحفوظة':'Protected foundation'} value={String((preview?.protected||[]).length)} trend={ar?'لا تُمس':'untouched'} good icon={<CheckCircle2 size={22}/>} tone="green"/>
+      <Kpi title={ar?'بطاقات أصول تُصفّر':'Asset cards reset to zero'} value={String(preview?.assets_to_reset??'—')} trend={ar?'البطاقة تبقى':'cards remain'} good icon={<CheckCircle2 size={22}/>} tone="green"/>
       <Kpi title={ar?'حالة الحذف':'Reset status'} value={enabled?(ar?'جاهز':'Ready'):(ar?'مقفول':'Locked')} trend="UAT only" good={enabled} icon={<Lock size={22}/>} tone="violet"/>
     </div>
 
@@ -90,11 +90,11 @@ export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
       <div style={{padding:14,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:12,lineHeight:1.9}}>
         <div style={{padding:13,borderRadius:10,background:'#fef2f2',color:'#7f1d1d'}}>
           <b>{ar?'يُحذف':'Deleted'}</b><br/>
-          {ar?'العملاء والموردون، الأصناف والمستودعات، الموظفون، الأصول والبنوك، الفواتير والقيود والمخزون والرواتب والتصنيع والمطاعم والنادي والضرائب وجميع حركات UAT.':'Customers, suppliers, items, warehouses, employees, assets, bank data, invoices, journals, inventory, payroll, manufacturing, restaurants, gym, tax and all UAT activity.'}
+          {ar?'الفواتير والقيود وسندات القبض والصرف وحركات المخزون والرواتب والتصنيع والحجوزات والتشغيل والضرائب. تُصفّر قيمة الأصل ومجمع الإهلاك وصافي القيمة مع بقاء بطاقة الأصل.':'Invoices, journals, receipts, payments, stock, payroll, production, bookings, operations, and tax activity. Asset cost, accumulated depreciation, and NBV reset to zero while the asset card remains.'}
         </div>
         <div style={{padding:13,borderRadius:10,background:'#f0fdf4',color:'#14532d'}}>
           <b>{ar?'يبقى':'Preserved'}</b><br/>
-          {ar?'الشركات والفروع، شجرة الحسابات والفترات، المستخدمون وكلمات المرور والأدوار والصلاحيات، الجلسة الحالية، سجل التدقيق، النسخ الاحتياطية والمراجع النظامية.':'Companies, branches, chart of accounts, periods, users, passwords, roles, permissions, current session, audit trail, backups and system references.'}
+          {ar?'الشركات والفروع وشجرة الحسابات، والعملاء والموردون والأصناف والمستودعات والموظفون والبنوك والسيارات والآلات وبطاقات الأصول، والمستخدمون والصلاحيات وسجل التدقيق.':'Companies, branches, chart of accounts, customers, suppliers, items, warehouses, employees, banks, vehicles, machines, asset cards, users, permissions, and audit trail.'}
         </div>
       </div>
     </Panel>
@@ -105,12 +105,12 @@ export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
       </div>
     </Panel>}
 
-    <Panel title={ar?'معاينة البيانات التي ستُحذف':'Preview rows to delete'} icon={<Database size={18}/> }>
-      {rows.length===0?<div style={{padding:16}}>{ar?'لا توجد بيانات أعمال مضافة؛ النظام جاهز.':'No added business data remains; the system is ready.'}</div>:
+    <Panel title={ar?'معاينة الحركات والقيم التي ستُمسح':'Preview transactions and values'} icon={<Database size={18}/> }>
+      {rows.length===0&&!preview?.total_value_records?<div style={{padding:16}}>{ar?'لا توجد حركات أو قيم تجريبية؛ بيانات التأسيس جاهزة.':'No trial transactions or values remain; master data is ready.'}</div>:
         <DataTable headers={[ar?'الجدول':'Table',ar?'الصفوف':'Rows']} rows={rows.map(([table,count])=>[table,String(count)])}/>} 
     </Panel>
 
-    {rows.length>0&&<Panel title={ar?'تنفيذ المسح':'Run clean-slate reset'} icon={<Trash2 size={18}/> }>
+    {(rows.length>0||preview?.total_value_records>0)&&<Panel title={ar?'تنفيذ مسح الحركات والقيم':'Run transaction/value reset'} icon={<Trash2 size={18}/> }>
       <div style={{padding:14,lineHeight:2,maxWidth:720}}>
         <b>{ar?'1. اكتب عبارة التأكيد حرفيًا:':'1. Type the exact confirmation phrase:'}</b>
         <div style={{margin:'8px 0',padding:'8px 12px',borderRadius:8,background:'var(--panel-2, #f1f5f9)',fontWeight:800}}>{phrase}</div>
@@ -123,7 +123,7 @@ export function DataResetPage({ar,companyId}:{ar:boolean;companyId:number}){
           {ar?'2. معاينة آمنة وتفعيل زر الحذف':'2. Safe preview and unlock delete'}
         </button>
         <button style={{...danger,opacity:canDelete?1:.5,marginInlineStart:10}} disabled={!canDelete} onClick={()=>run(false)}>
-          {ar?'3. حذف جميع البيانات المضافة الآن':'3. Delete all added data now'}
+          {ar?'3. مسح الحركات والقيم التجريبية الآن':'3. Clear trial transactions and values now'}
         </button>
         {!authorizationToken&&<div style={{marginTop:9,fontSize:13,opacity:.75}}>{ar?'زر الحذف النهائي يظهر هنا ويُفعّل بعد نجاح المعاينة الآمنة.':'The final delete button is here and unlocks after a successful safe preview.'}</div>}
       </div>

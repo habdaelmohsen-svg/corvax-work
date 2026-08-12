@@ -40,6 +40,22 @@ assert 'aria-modal="true"' in ASSISTANT
 assert "event.key === 'Escape'" in ASSISTANT
 assert "launcherRef.current?.focus()" in ASSISTANT
 
+# The dashboard sidebar uses broad `.dash aside` rules (including responsive
+# transforms with !important).  The assistant dialog must not reuse the aside
+# element or opening it turns the panel into a second application sidebar.
+assert '<section\n        ref={panelRef}' in ASSISTANT
+assert '<aside\n        ref={panelRef}' not in ASSISTANT
+assert "</aside>" not in ASSISTANT
+assert '<nav className="corvax-ai-modes"' not in ASSISTANT
+assert '<div className="corvax-ai-modes" role="group"' in ASSISTANT
+assert '<header className="corvax-ai-header">' not in ASSISTANT
+assert ".dash aside" in (ROOT / "frontend/src/styles/dashboard.css").read_text(
+    encoding="utf-8"
+)
+assert ".dash nav button" in (ROOT / "frontend/src/styles/dashboard.css").read_text(
+    encoding="utf-8"
+)
+
 # The launcher participates in header layout; only the panel/backdrop may be
 # viewport-fixed. Mobile keeps one compact launcher and no floating duplicate.
 launcher_css = CSS.split(".corvax-ai-launcher {", 1)[1].split("}", 1)[0]

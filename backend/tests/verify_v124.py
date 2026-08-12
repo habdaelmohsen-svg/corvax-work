@@ -7,7 +7,7 @@ from pathlib import Path
 
 BACKEND_DIR=Path(__file__).resolve().parents[1];sys.path.insert(0,str(BACKEND_DIR))
 DB_PATH=Path('/tmp')/'verify_v124.db';DB_PATH.unlink(missing_ok=True)
-os.environ.update({'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc24-zakat-cit','SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1','APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.2','ENABLE_RATE_LIMIT_TESTING':'true'})
+os.environ.update({'DATABASE_URL':f'sqlite:///{DB_PATH}','SECRET_KEY':'verification-secret-key-corvax-rc24-zakat-cit','SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1','APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.3','ENABLE_RATE_LIMIT_TESTING':'true'})
 import subprocess
 subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=BACKEND_DIR, check=True)
 from fastapi.testclient import TestClient
@@ -23,7 +23,7 @@ def ok(r,status=200):assert r.status_code==status,r.text;return r.json()
 def main():
   with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'}));admin={'Authorization':f"Bearer {login['access_token']}"}
-    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.4-r9.2'
+    assert ok(c.get('/health'))['version']=='1.0.0-agreement-completion-rc27.4-r9.3'
     from app.core.migration_head import expected_migration_head
     assert ok(c.get('/health/ready'))['migration_head']==expected_migration_head()
     ok(c.post('/api/v1/admin/users',headers=admin,json={'name_ar':'مراجع الزكاة والضريبة','name_en':'Zakat CIT Approver','email':'rc24.approver@corvaxplatform.com','password':'Rc24Approver@123','require_password_change':False,'memberships':[{'company_id':1,'role_code':'SUPER_ADMIN'}]}),201)

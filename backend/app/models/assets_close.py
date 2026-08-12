@@ -47,8 +47,10 @@ class FixedAsset(Base):
     accumulated_impairment = Column(Numeric(18, 2), nullable=False, default=0)
     net_book_value = Column(Numeric(18, 2), nullable=False)
     status = Column(String(20), nullable=False, default="ACTIVE", index=True)
-    acquisition_journal_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=False)
-    bank_account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=False)
+    # Nullable while a preserved asset card waits for its opening valuation
+    # after an authorized UAT transaction/value reset.
+    acquisition_journal_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
+    bank_account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=True)
     branch_id = Column(Integer, ForeignKey("branches.id"))
     cost_center_id = Column(Integer, ForeignKey("cost_centers.id"))
     custodian_user_id = Column(Integer, ForeignKey("users.id"))

@@ -1,7 +1,8 @@
 import {useEffect, useMemo, useState} from 'react';
-import {BookOpenCheck, Plus, Trash2, Scale, Send, CheckCircle2, RotateCcw, Paperclip, Search} from 'lucide-react';
+import {BookOpenCheck, Plus, Trash2, Scale, Send, CheckCircle2, RotateCcw, Paperclip, Search, Printer} from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {DataTable, Kpi, Panel, fmt} from './ui';
+import {printBusinessDocument} from './printDocument';
 
 // A real manual journal entry screen:
 //  - pick any postable account from the chart of accounts (searchable)
@@ -16,7 +17,8 @@ type Account={id:number;code:string;name_ar:string;name_en:string;type:string;is
 type CostCenter={id:number;code:string;name_ar:string;name_en:string};
 type Branch={id:number;code:string;name_ar:string;name_en:string};
 type Line={account_code:string;description:string;debit:string;credit:string;cost_center_code:string;branch_code:string};
-type Journal={id:number;number:string;entry_date:string;reference:string;description:string;status:string;total_debit:number;total_credit:number};
+type JournalLine={account_code:string;account_name_ar:string;account_name_en:string;description?:string|null;debit:number;credit:number;cost_center_code?:string|null;branch_code?:string|null};
+type Journal={id:number;number:string;entry_date:string;reference:string;description:string;status:string;cash_flow_kind?:string|null;total_debit:number;total_credit:number;created_by?:number;approved_by?:number|null;posted_by?:number|null;lines?:JournalLine[]};
 
 async function json(url:string,init?:RequestInit){
   const r=await apiFetch(url,init); const x=await r.json().catch(()=>({}));
@@ -38,7 +40,7 @@ const td={padding:'6px 8px',borderBottom:'1px solid var(--border)',fontSize:13,v
 const emptyLine=():Line=>({account_code:'',description:'',debit:'',credit:'',cost_center_code:'',branch_code:''});
 const CF_ACTIVITIES:[string,string,string][]=[['','بدون تصنيف','No classification'],['OPERATING','تشغيلية','Operating'],['INVESTING','استثمارية','Investing'],['FINANCING','تمويلية','Financing']];
 
-export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number}){
+export function ManualJournalsPage({ar,companyId,openingMode=false}:{ar:boolean;companyId:number;openingMode?:boolean}){
   const [accounts,setAccounts]=useState<Account[]>([]);
   const [costCenters,setCostCenters]=useState<CostCenter[]>([]);
   const [branches,setBranches]=useState<Branch[]>([]);
@@ -46,8 +48,8 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
   const [message,setMessage]=useState(''); const [busy,setBusy]=useState(false);
   // header
   const [entryDate,setEntryDate]=useState(iso());
-  const [reference,setReference]=useState('');
-  const [description,setDescription]=useState('');
+  const [reference,setReference]=useState(openingMode?'OPENING-'+new Date().getFullYear():'');
+  const [description,setDescription]=useState(openingMode?(ar?'قيد الأرصدة الافتتاحية':'Opening balances journal'):'');
   const [cfActivity,setCfActivity]=useState('');
   // lines
   const [lines,setLines]=useState<Line[]>([emptyLine(),emptyLine()]);
@@ -65,10 +67,11 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
       setAccounts(rows.filter(a=>a.is_postable&&a.active));
       setCostCenters(Array.isArray(cc)?cc:[]);
       setBranches(Array.isArray(br)?br:[]);
-      setJournals(Array.isArray(js)?js:(js.rows||[]));
+      const journalRows:Journal[]=Array.isArray(js)?js:(js.rows||[]);
+      setJournals(openingMode?journalRows.filter(j=>j.cash_flow_kind==='OPENING_BALANCE'):journalRows);
     }catch(e:any){setMessage(String(e.message||e));}
   };
-  useEffect(()=>{load()},[companyId]);
+  useEffect(()=>{load()},[companyId,openingMode]);
 
   const setLine=(i:number,patch:Partial<Line>)=>setLines(p=>p.map((l,idx)=>idx===i?{...l,...patch}:l));
   const addLine=()=>setLines(p=>[...p,emptyLine()]);
@@ -81,18 +84,22 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
   },[lines]);
   const balanced=totals.diff===0&&totals.debit>0;
 
+  const availableAccounts=useMemo(
+    ()=>openingMode?accounts.filter(a=>!['REVENUE','EXPENSE'].includes(a.type)):accounts,
+    [accounts,openingMode],
+  );
   const filteredAccounts=useMemo(()=>{
     const q=accountFilter.trim().toLowerCase();
-    if(!q)return accounts;
-    return accounts.filter(a=>a.code.includes(q)||a.name_ar.toLowerCase().includes(q)||a.name_en.toLowerCase().includes(q));
-  },[accounts,accountFilter]);
+    if(!q)return availableAccounts;
+    return availableAccounts.filter(a=>a.code.includes(q)||a.name_ar.toLowerCase().includes(q)||a.name_en.toLowerCase().includes(q));
+  },[availableAccounts,accountFilter]);
 
   const accountLabel=(code:string)=>{
     const a=accounts.find(x=>x.code===code);
     return a?`${a.code} — ${ar?a.name_ar:a.name_en}`:code;
   };
 
-  const resetForm=()=>{setLines([emptyLine(),emptyLine()]);setReference('');setDescription('');setCfActivity('');};
+  const resetForm=()=>{setLines([emptyLine(),emptyLine()]);setReference(openingMode?'OPENING-'+new Date().getFullYear():'');setDescription(openingMode?(ar?'قيد الأرصدة الافتتاحية':'Opening balances journal'):'');setCfActivity('');};
 
   const saveJournal=async()=>{
     if(!reference.trim()||!description.trim()){setMessage(ar?'المرجع والبيان إلزاميان':'Reference and description are required');return;}
@@ -114,7 +121,8 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
           ...(l.branch_code?{branch_code:l.branch_code}:{}),
         })),
       };
-      if(cfActivity)body.cash_flow_activity=cfActivity;
+      if(openingMode)body.cash_flow_kind='OPENING_BALANCE';
+      else if(cfActivity)body.cash_flow_activity=cfActivity;
       const r=await json('/api/v1/finance/journals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       setMessage(ar?`تم حفظ القيد ${r.number} — الحالة ${r.status}`:`Journal ${r.number} saved — status ${r.status}`);
       resetForm();await load();
@@ -130,12 +138,56 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
     }catch(e:any){setMessage(String(e.message||e));}finally{setBusy(false);}
   };
 
+  const printJournal=(journal:Journal)=>{
+    const printableLines=(journal.lines||[]).map(line=>[
+      `${line.account_code} — ${ar?line.account_name_ar:line.account_name_en}`,
+      line.description||journal.description,
+      fmt(Number(line.debit||0)),
+      fmt(Number(line.credit||0)),
+      line.cost_center_code||'—',
+      line.branch_code||'—',
+    ]);
+    const opened=printBusinessDocument({
+      ar,
+      title:ar?'قيد يومية':'Journal Entry',
+      documentLabel:ar?'مستند قيد محاسبي':'Accounting journal document',
+      subtitle:journal.description,
+      status:journal.status,
+      columns:[
+        ar?'الحساب':'Account',ar?'البيان':'Description',ar?'مدين':'Debit',
+        ar?'دائن':'Credit',ar?'مركز التكلفة':'Cost center',ar?'الفرع':'Branch',
+      ],
+      rows:printableLines,
+      numericColumns:[2,3],
+      landscape:true,
+      totals:[ar?'الإجمالي':'Total','',fmt(Number(journal.total_debit||0)),fmt(Number(journal.total_credit||0)),'',''],
+      meta:[
+        {label:ar?'رقم القيد':'Journal number',value:journal.number},
+        {label:ar?'تاريخ القيد':'Entry date',value:journal.entry_date},
+        {label:ar?'المرجع':'Reference',value:journal.reference},
+        {label:ar?'عدد السطور':'Line count',value:printableLines.length},
+      ],
+    });
+    if(!opened)setMessage(ar?'تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة لهذا الموقع.':'Unable to open the print window. Allow pop-ups for this site.');
+  };
+
   const posted=journals.filter(j=>j.status==='POSTED').length;
   const inFlow=journals.filter(j=>!['POSTED','REVERSED'].includes(j.status)).length;
 
   return <>
+    {openingMode&&<Panel title={ar?'بدء النظام من أرصدتك الفعلية':'Start from your actual opening balances'} icon={<Scale size={18}/>}>
+      <div style={{padding:14,lineHeight:1.9}}>
+        {ar
+          ? 'أدخل أرصدة البنوك والأصول المتداولة والخصوم وحقوق الملكية في قيد متوازن. حساب البنك هنا هو نفس حساب الأستاذ المرتبط ببطاقة البنك. الأصول الثابتة المحفوظة تُدخل قيمتها تفصيليًا من شاشة الأصول الثابتة حتى تبقى البطاقة والقيد مترابطين.'
+          : 'Enter bank, current-asset, liability, and equity balances in one balanced journal. A bank GL account here is the same account linked to its bank card. Enter each preserved fixed asset from the Fixed Assets screen so its card and journal remain connected.'}
+        <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:10}}>
+          <button style={ghost} onClick={()=>{window.location.hash='#/assets'}}>{ar?'إدخال قيم الأصول الثابتة':'Enter fixed-asset values'}</button>
+          <button style={ghost} onClick={()=>{window.location.hash='#/chartOfAccounts'}}>{ar?'مراجعة شجرة الحسابات':'Review chart of accounts'}</button>
+        </div>
+      </div>
+    </Panel>}
     <div className="kpis">
-      <Kpi title={ar?'الحسابات القابلة للترحيل':'Postable accounts'} value={String(accounts.length)} trend="" good icon={<BookOpenCheck size={22}/>} tone="blue"/>
+      <Kpi title={ar?'الحسابات القابلة للترحيل':'Postable accounts'} value={String(availableAccounts.length)} trend="" good icon={<BookOpenCheck size={22}/>} tone="blue"/>
       <Kpi title={ar?'قيود معروضة':'Listed journals'} value={String(journals.length)} trend="" good icon={<Scale size={22}/>} tone="violet"/>
       <Kpi title={ar?'مرحّلة':'Posted'} value={String(posted)} trend="" good icon={<CheckCircle2 size={22}/>} tone="green"/>
       <Kpi title={ar?'تحت الإجراء':'In workflow'} value={String(inFlow)} trend="" good={inFlow===0} icon={<Send size={22}/>} tone="amber"/>
@@ -143,12 +195,12 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
 
     {message&&<div style={{padding:11,margin:'12px 0',borderRadius:9,background:'var(--panel-2, #f1f5f9)',fontSize:14,lineHeight:1.7}}>{message}</div>}
 
-    <Panel title={ar?'قيد يومية جديد':'New journal entry'} icon={<BookOpenCheck size={18}/>}>
+    <Panel title={openingMode?(ar?'قيد الأرصدة الافتتاحية':'Opening balances journal'):(ar?'قيد يومية جديد':'New journal entry')} icon={<BookOpenCheck size={18}/>}>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12,padding:12}}>
         <label>{ar?'تاريخ القيد':'Entry date'}<input type="date" style={field} value={entryDate} onChange={e=>setEntryDate(e.target.value)}/></label>
         <label>{ar?'المرجع':'Reference'}<input style={field} value={reference} onChange={e=>setReference(e.target.value)} placeholder={ar?'JV-2026-001':''}/></label>
         <label>{ar?'البيان':'Description'}<input style={field} value={description} onChange={e=>setDescription(e.target.value)} placeholder={ar?'بيان القيد':''}/></label>
-        <label>{ar?'تصنيف التدفق النقدي':'Cash flow activity'}<select style={field} value={cfActivity} onChange={e=>setCfActivity(e.target.value)}>{CF_ACTIVITIES.map(([v,a,e])=><option key={v} value={v}>{ar?a:e}</option>)}</select></label>
+        {!openingMode&&<label>{ar?'تصنيف التدفق النقدي':'Cash flow activity'}<select style={field} value={cfActivity} onChange={e=>setCfActivity(e.target.value)}>{CF_ACTIVITIES.map(([v,a,e])=><option key={v} value={v}>{ar?a:e}</option>)}</select></label>}
       </div>
 
       <div style={{padding:'0 12px 8px',display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
@@ -231,7 +283,7 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
       </div>
     </Panel>
 
-    <Panel title={ar?'دورة القيود (تقديم ← اعتماد ← ترحيل)':'Journal workflow (submit → approve → post)'} icon={<Send size={18}/>}>
+    <Panel title={openingMode?(ar?'اعتماد وترحيل الرصيد الافتتاحي':'Approve and post opening balances'):(ar?'دورة القيود (تقديم ← اعتماد ← ترحيل)':'Journal workflow (submit → approve → post)')} icon={<Send size={18}/>}>
       <div style={{overflowX:'auto',padding:'0 4px 12px'}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr>
@@ -252,8 +304,9 @@ export function ManualJournalsPage({ar,companyId}:{ar:boolean;companyId:number})
                 <td style={td}>{j.status}</td>
                 <td style={td}>
                   <span style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                    <button style={{...smallBtn,background:'#334155',display:'inline-flex',alignItems:'center',gap:4}} onClick={()=>printJournal(j)} title={ar?'طباعة القيد / حفظ PDF':'Print journal / Save PDF'}><Printer size={12}/>{ar?'طباعة':'Print'}</button>
                     {j.status==='DRAFT'&&<button style={smallBtn} disabled={busy} onClick={()=>workflow(j.id,'submit')}>{ar?'تقديم':'Submit'}</button>}
-                    {j.status==='SUBMITTED'&&<button style={smallBtn} disabled={busy} onClick={()=>workflow(j.id,'approve')}>{ar?'اعتماد':'Approve'}</button>}
+                    {j.status==='PENDING_APPROVAL'&&<button style={smallBtn} disabled={busy} onClick={()=>workflow(j.id,'approve')}>{ar?'اعتماد':'Approve'}</button>}
                     {j.status==='APPROVED'&&<button style={{...smallBtn,background:'#059669'}} disabled={busy} onClick={()=>workflow(j.id,'post')}>{ar?'ترحيل':'Post'}</button>}
                     {j.status==='POSTED'&&<button style={{...smallBtn,background:'#b45309'}} disabled={busy} onClick={()=>workflow(j.id,'reverse')} title={ar?'عكس القيد':'Reverse'}><RotateCcw size={12}/></button>}
                     {j.status==='REVERSED'&&'—'}

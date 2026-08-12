@@ -15,7 +15,7 @@ os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v109-finance-comp
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.2"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.3"
 
 import subprocess  # noqa: E402
 subprocess.run(
@@ -186,7 +186,7 @@ with TestClient(app) as client:
         assert db.scalar(select(func.count()).select_from(ConsolidationWorksheet).where(ConsolidationWorksheet.group_id == group_id, ConsolidationWorksheet.status == "APPROVED_FOR_CONSOLIDATION")) >= 2
 
     health = client.get("/health")
-    assert health.status_code == 200 and health.json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.2"
+    assert health.status_code == 200 and health.json()["version"] == "1.0.0-agreement-completion-rc27.4-r9.3"
     assert health.json().get("status") == "ok"
     ready = client.get("/health/ready")
     from app.core.migration_head import expected_migration_head

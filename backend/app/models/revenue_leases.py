@@ -93,7 +93,8 @@ class LeaseContract(Base):
     initial_rou_asset = Column(Numeric(18, 2), nullable=False)
     status = Column(String(20), nullable=False, default="ACTIVE", index=True)
     bank_account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=False)
-    initial_journal_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=False)
+    # Nullable while the retained contract is awaiting IFRS 16 re-initialization.
+    initial_journal_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=utc_now)
     schedules = relationship("LeaseSchedule", back_populates="lease", cascade="all, delete-orphan", lazy="selectin")

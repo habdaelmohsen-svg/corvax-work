@@ -10,7 +10,7 @@ DB_PATH=Path('/tmp')/'verify_v114.db'; DB_PATH.unlink(missing_ok=True)
 os.environ.update({
  'DATABASE_URL':f'sqlite:///{DB_PATH}', 'SECRET_KEY':'verification-secret-key-corvax-rc14',
  'SEED_DEMO_DATA':'true','AUTO_CREATE_SCHEMA':'true','TRUSTED_HOSTS':'testserver,localhost,127.0.0.1',
- 'APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.2','ENABLE_RATE_LIMIT_TESTING':'true'})
+ 'APP_VERSION':'1.0.0-agreement-completion-rc27.4-r9.3','ENABLE_RATE_LIMIT_TESTING':'true'})
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from app.core.security import hash_password

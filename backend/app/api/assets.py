@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user, branch_scope_condition
-from app.models import (AssetCategory, AssetDepreciation, AssetLifecycleTransaction, BankAccount, Branch, CostCenter, FixedAsset, User, UserCompanyRole)
+from app.models import (Account, AssetCategory, AssetDepreciation, AssetLifecycleTransaction, BankAccount, Branch, CostCenter, FixedAsset, User, UserCompanyRole)
 from app.core.time import utc_now
 from app.services.audit import write_audit
 from app.services.operations import get_account, money
@@ -54,6 +54,17 @@ class AssetIn(BaseModel):
 class DepreciationRunIn(BaseModel):
     company_id: int
     as_of_date: date
+
+
+class AssetOpeningValueIn(BaseModel):
+    company_id: int
+    opening_date: date
+    cost: Decimal = Field(gt=0)
+    residual_value: Decimal = Field(default=0, ge=0)
+    accumulated_depreciation: Decimal = Field(default=0, ge=0)
+    accumulated_impairment: Decimal = Field(default=0, ge=0)
+    offset_account_id: int
+    bank_account_id: int | None = None
 
 
 class LifecycleIn(BaseModel):
@@ -188,6 +199,146 @@ def create_asset(data: AssetIn, user: User = Depends(get_current_user), db: Sess
     write_audit(db, action="FIXED_ASSET_CAPITALIZED", entity_type="FIXED_ASSET", entity_id=row.id, user_id=user.id, company_id=data.company_id, after={"asset_number": number, "cost": str(cost), "journal": journal.number})
     db.commit()
     return {"id": row.id, "asset_number": row.asset_number, "cost": row.cost, "residual_value": row.residual_value, "net_book_value": row.net_book_value, "journal": journal.number}
+
+
+@router.post("/{asset_id}/initialize-opening-value")
+def initialize_asset_opening_value(
+    asset_id: int,
+    data: AssetOpeningValueIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Value a preserved asset card after an authorized UAT value reset."""
+    ensure_permission(db, user, data.company_id, "assets.manage")
+    asset = db.scalar(
+        select(FixedAsset)
+        .where(FixedAsset.id == asset_id, FixedAsset.company_id == data.company_id)
+        .options(selectinload(FixedAsset.category))
+    )
+    if not asset:
+        raise HTTPException(404, "Fixed asset not found")
+    if asset.status != "DRAFT_UNVALUED" or asset.acquisition_journal_id is not None:
+        raise HTTPException(409, "Only an unvalued asset card can receive an opening value")
+
+    cost = money(data.cost)
+    residual = money(data.residual_value)
+    accumulated_depreciation = money(data.accumulated_depreciation)
+    accumulated_impairment = money(data.accumulated_impairment)
+    if residual >= cost:
+        raise HTTPException(422, "Residual value must be lower than cost")
+    if accumulated_depreciation + accumulated_impairment > cost:
+        raise HTTPException(422, "Accumulated depreciation and impairment cannot exceed cost")
+    net_book_value = money(cost - accumulated_depreciation - accumulated_impairment)
+
+    offset = db.scalar(
+        select(Account).where(
+            Account.id == data.offset_account_id,
+            Account.company_id == data.company_id,
+            Account.is_postable.is_(True),
+            Account.active.is_(True),
+            Account.account_type == "EQUITY",
+        )
+    )
+    if not offset:
+        raise HTTPException(404, "Opening-balance offset must be an active postable equity account")
+    bank = None
+    if data.bank_account_id is not None:
+        bank = db.scalar(
+            select(BankAccount).where(
+                BankAccount.id == data.bank_account_id,
+                BankAccount.company_id == data.company_id,
+                BankAccount.active.is_(True),
+            )
+        )
+        if not bank:
+            raise HTTPException(404, "Bank account not found")
+
+    lines = [
+        {
+            "account_id": asset.category.asset_account_id,
+            "debit": cost,
+            "credit": 0,
+            "branch_id": asset.branch_id,
+            "cost_center_id": asset.cost_center_id,
+        }
+    ]
+    if accumulated_depreciation:
+        lines.append(
+            {
+                "account_id": asset.category.accumulated_depreciation_account_id,
+                "debit": 0,
+                "credit": accumulated_depreciation,
+                "branch_id": asset.branch_id,
+                "cost_center_id": asset.cost_center_id,
+            }
+        )
+    if accumulated_impairment:
+        impairment_account = get_account(db, data.company_id, "154030")
+        lines.append(
+            {
+                "account_id": impairment_account.id,
+                "debit": 0,
+                "credit": accumulated_impairment,
+                "branch_id": asset.branch_id,
+                "cost_center_id": asset.cost_center_id,
+            }
+        )
+    if net_book_value:
+        lines.append(
+            {
+                "account_id": offset.id,
+                "debit": 0,
+                "credit": net_book_value,
+                "branch_id": asset.branch_id,
+                "cost_center_id": asset.cost_center_id,
+            }
+        )
+
+    journal = create_posted_journal(
+        db,
+        company_id=data.company_id,
+        user_id=user.id,
+        posting_date=data.opening_date,
+        reference=f"OPEN-{asset.asset_number}",
+        description=f"Opening value for preserved asset {asset.asset_number}",
+        lines=lines,
+        cash_flow_kind="OPENING_BALANCE",
+    )
+    asset.cost = cost
+    asset.residual_value = residual
+    asset.accumulated_depreciation = accumulated_depreciation
+    asset.accumulated_impairment = accumulated_impairment
+    asset.net_book_value = net_book_value
+    asset.status = "ACTIVE"
+    asset.acquisition_journal_id = journal.id
+    asset.bank_account_id = bank.id if bank else None
+    write_audit(
+        db,
+        action="FIXED_ASSET_OPENING_VALUE_INITIALIZED",
+        entity_type="FIXED_ASSET",
+        entity_id=asset.id,
+        user_id=user.id,
+        company_id=data.company_id,
+        after={
+            "asset_number": asset.asset_number,
+            "cost": str(cost),
+            "accumulated_depreciation": str(accumulated_depreciation),
+            "accumulated_impairment": str(accumulated_impairment),
+            "net_book_value": str(net_book_value),
+            "journal": journal.number,
+        },
+    )
+    db.commit()
+    return {
+        "id": asset.id,
+        "asset_number": asset.asset_number,
+        "status": asset.status,
+        "cost": asset.cost,
+        "accumulated_depreciation": asset.accumulated_depreciation,
+        "accumulated_impairment": asset.accumulated_impairment,
+        "net_book_value": asset.net_book_value,
+        "journal": journal.number,
+    }
 
 
 @router.post("/depreciation/run")

@@ -31,6 +31,7 @@ def journal_to_out(entry: JournalEntry) -> JournalOut:
         reference=entry.reference,
         description=entry.description,
         status=entry.status,
+        cash_flow_kind=entry.cash_flow_kind,
         total_debit=entry.total_debit,
         total_credit=entry.total_credit,
         created_by=entry.created_by,
@@ -142,6 +143,18 @@ def create_journal(
     invalid = sorted(code for code, account in accounts.items() if not account.active or not account.is_postable)
     if invalid:
         raise HTTPException(422, f"Accounts are inactive or non-postable: {', '.join(invalid)}")
+    if data.cash_flow_kind == "OPENING_BALANCE":
+        if data.cash_flow_activity is not None:
+            raise HTTPException(422, "An opening-balance journal must not be classified as a period cash flow")
+        profit_and_loss = sorted(
+            code for code, account in accounts.items()
+            if account.account_type in {"REVENUE", "EXPENSE"}
+        )
+        if profit_and_loss:
+            raise HTTPException(
+                422,
+                f"Opening balances cannot use revenue or expense accounts: {', '.join(profit_and_loss)}",
+            )
 
     cc_codes = {line.cost_center_code for line in data.lines if line.cost_center_code}
     cost_centers = {
@@ -544,9 +557,13 @@ def financial_statements(
     cash_by_activity: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     cash_by_kind: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     unclassified_cash_change = Decimal("0")
+    opening_cash_adjustment = Decimal("0")
     for entry in cash_entries:
         cash_change = sum((line.debit - line.credit for line in entry.lines if line.account.is_cash), Decimal("0"))
         if cash_change == 0:
+            continue
+        if entry.cash_flow_kind == "OPENING_BALANCE":
+            opening_cash_adjustment += cash_change
             continue
         if entry.cash_flow_activity:
             cash_by_activity[entry.cash_flow_activity] += cash_change
@@ -559,7 +576,7 @@ def financial_statements(
     net_financing = cash_by_activity["FINANCING"]
     classified_net_change = net_operating + net_investing + net_financing
     net_change = classified_net_change + unclassified_cash_change
-    opening_cash = sum_groups(before_rows, {"CASH"})
+    opening_cash = sum_groups(before_rows, {"CASH"}) + opening_cash_adjustment
     closing_cash = sum_groups(cumulative_rows, {"CASH"})
     cash_balance_movement = closing_cash - opening_cash
     cash_reconciliation_difference = cash_balance_movement - net_change

@@ -21,7 +21,7 @@ def ok(r, status=200):
 with TestClient(app) as client:
     login = ok(client.post('/api/v1/auth/login', json={'email':'admin@corvaxplatform.com','password':'Corvax@123'}))
     h = {'Authorization': f"Bearer {login['access_token']}"}
-    assert ok(client.get('/health'))['version'] == '1.0.0-agreement-completion-rc27.4-r9.2'
+    assert ok(client.get('/health'))['version'] == '1.0.0-agreement-completion-rc27.4-r9.3'
     ok(client.post('/api/v1/fx-consolidation/rates', headers=h, json={
         'company_id':1,'currency_code':'USD','rate_date':'2026-07-12','rate':'3.75','source':'SAMA_REFERENCE'}), 201)
     ok(client.post('/api/v1/fx-consolidation/balances', headers=h, json={

@@ -15,7 +15,7 @@ os.environ["SECRET_KEY"] = "verification-secret-key-for-corvax-v110-advanced-man
 os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["AUTO_CREATE_SCHEMA"] = "true"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost,127.0.0.1"
-os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.2"
+os.environ["APP_VERSION"] = "1.0.0-agreement-completion-rc27.4-r9.3"
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402

@@ -10,7 +10,7 @@ from app.main import app
 def ok(r,s=200): assert r.status_code==s,(r.status_code,r.text); return r.json()
 with TestClient(app) as c:
     login=ok(c.post('/api/v1/auth/login',json={'email':'admin@corvaxplatform.com','password':'Corvax@123'})); h={'Authorization':f"Bearer {login['access_token']}"}
-    assert ok(c.get('/health'))['version']== '1.0.0-agreement-completion-rc27.4-r9.2'
+    assert ok(c.get('/health'))['version']== '1.0.0-agreement-completion-rc27.4-r9.3'
     a=ok(c.post('/api/v1/risk-maintenance/maintenance/assets',headers=h,json={'company_id':1,'code':'MIX-01','name_ar':'خلاط 1','name_en':'Mixer 1','production_line':'Sauce','criticality':'HIGH'}),201)
     plan=ok(c.post('/api/v1/risk-maintenance/maintenance/plans',headers=h,json={'company_id':1,'asset_id':a['id'],'code':'PM-MIX-30','description':'Monthly inspection','interval_days':30,'next_due_date':'2026-07-01','priority':'HIGH'}),201)
     gen=ok(c.post('/api/v1/risk-maintenance/maintenance/plans/generate-due?company_id=1&as_of_date=2026-07-12',headers=h)); assert gen['generated_count']==1

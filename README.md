@@ -1,12 +1,12 @@
-# CORVAX RC27.4 R9.2 — UAT Clean Slate
+# CORVAX RC27.4 R9.3 — Transaction/Value Reset & Usability
 
 هذه الحزمة هي خط الأساس المصحح بعد RC27.
 
 ## بيانات الإصدار المعتمدة
 
-- Version: `1.0.0-agreement-completion-rc27.4-r9.2`
-- Migration head: `e19700000001`
-- Frontend production build: `1,808` modules — PASSED
+- Version: `1.0.0-agreement-completion-rc27.4-r9.3`
+- Migration head: `e19800000001`
+- Frontend production build: `2,032` modules — PASSED
 - Backend compilation: PASSED
 - Security, branch scope, health, RC20, RC21 and RC25 verification: PASSED in the RC27.2 execution round
 - Migration head, readiness and release info are now derived from Alembic at runtime, not hard-coded
@@ -17,16 +17,25 @@
 
 The internal software scope is complete for controlled staging, pilot and UAT. Production approval remains evidence-driven and cannot be asserted from code alone. It requires a real PostgreSQL staging/production environment, sanitized or approved real data, signed UAT, parallel operation, independent penetration/accounting/tax reviews and official credentials for ZATCA, banks, WPS/Mudad, Qiwa, Muqeem and GOSI.
 
-Apply migrations through `e19700000001`. The full clean-slate reset is available only with `ENVIRONMENT=uat` and `ALLOW_DATA_RESET=true`; production rejects it unconditionally.
+Apply migrations through `e19800000001`. The transaction/value reset is available only with `ENVIRONMENT=uat` and `ALLOW_DATA_RESET=true`; production rejects it unconditionally.
 
-## R9.2 UAT clean-slate reset
+## R9.3 UAT transaction/value reset
 
-- Visible top-level action: **مسح بيانات UAT وبدء الإدخال**.
-- Deletes all added business/master/transaction data across the UAT database.
-- Preserves companies, branches, chart of accounts, periods, users, roles, permissions, sessions, audit trail and backups.
+- Visible action: **مسح الحركات والقيم التجريبية**.
+- Deletes transaction documents and postings across all UAT companies.
+- Preserves configured master cards, including parties, items, warehouses, employees, banks, vehicles, machines, fixed assets and company branding.
+- Fixed-asset cards remain with zero cost/depreciation/NBV and can receive a new opening value from the Fixed Assets screen.
 - Requires the `SUPER_ADMIN` role, `data.reset`, backup acknowledgement, exact phrase, safe preview and a signed 10-minute authorization.
 - Focused gate: `backend/tests/verify_uat_full_reset.py`.
+- Full release verification: `50/50` maintained verification scripts passed.
 
+## R9.3 usability and reporting
+
+- Fixed chatbot layout collision and added an in-app Back button.
+- Added journal printing and a bilingual, A4 business-report template.
+- Report data and CSV export follow the active Arabic/English language.
+- Added authenticated company-logo upload for printed reports and journals.
+- Added a controlled Opening Balances screen for bank/asset/liability/equity GL balances, plus fixed-asset opening-value entry.
 
 ## RC27.2 UI Quality Closure
 

@@ -37,6 +37,13 @@ class LeaseRunIn(BaseModel):
     as_of_date: date
 
 
+class LeaseOpeningValueIn(BaseModel):
+    company_id: int
+    opening_date: date
+    lease_liability: Decimal = Field(gt=0)
+    rou_asset: Decimal = Field(gt=0)
+
+
 def add_months(source: date, months: int) -> date:
     index = source.month - 1 + months
     year = source.year + index // 12
@@ -127,6 +134,114 @@ def post_schedules(data: LeaseRunIn, user: User = Depends(get_current_user), db:
         row.status="POSTED";row.journal_id=journal.id;posted.append({"schedule_id":row.id,"lease":row.lease.number,"period":row.period_number,"interest":row.interest,"payment":row.payment,"depreciation":row.depreciation,"journal":journal.number})
     write_audit(db,action="IFRS16_SCHEDULE_RUN",entity_type="LEASE_SCHEDULE",entity_id="BATCH",user_id=user.id,company_id=data.company_id,after={"as_of":str(data.as_of_date),"posted_count":len(posted)})
     db.commit();return {"company_id":data.company_id,"as_of":data.as_of_date,"posted_count":len(posted),"entries":posted}
+
+
+@router.post("/{lease_id}/initialize-opening-value")
+def initialize_lease_opening_value(
+    lease_id: int,
+    data: LeaseOpeningValueIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Restore the opening IFRS 16 value and future schedule of a preserved contract."""
+    ensure_permission(db, user, data.company_id, "leases.manage")
+    lease = db.scalar(
+        select(LeaseContract)
+        .where(LeaseContract.id == lease_id, LeaseContract.company_id == data.company_id)
+        .options(selectinload(LeaseContract.schedules))
+    )
+    if not lease:
+        raise HTTPException(404, "Lease contract not found")
+    if lease.status != "DRAFT_UNVALUED" or lease.initial_journal_id is not None:
+        raise HTTPException(409, "Only an unvalued preserved lease can receive an opening value")
+    if data.opening_date < lease.commencement_date or data.opening_date > lease.end_date:
+        raise HTTPException(422, "Opening date must be within the lease term")
+    if lease.schedules:
+        raise HTTPException(409, "Unvalued lease unexpectedly has schedule rows")
+
+    liability = money(data.lease_liability)
+    rou_asset = money(data.rou_asset)
+    rou = get_account(db, data.company_id, "152010")
+    liability_account = get_account(db, data.company_id, "222010")
+    equity = get_account(db, data.company_id, "312010")
+    lines = [
+        {"account_id": rou.id, "debit": rou_asset, "credit": 0},
+        {"account_id": liability_account.id, "debit": 0, "credit": liability},
+    ]
+    difference = money(rou_asset - liability)
+    if difference > 0:
+        lines.append({"account_id": equity.id, "debit": 0, "credit": difference})
+    elif difference < 0:
+        lines.append({"account_id": equity.id, "debit": abs(difference), "credit": 0})
+    journal = create_posted_journal(
+        db,
+        company_id=data.company_id,
+        user_id=user.id,
+        posting_date=data.opening_date,
+        reference=f"OPEN-{lease.number}",
+        description=f"Opening value for preserved lease {lease.number}",
+        lines=lines,
+        cash_flow_kind="OPENING_BALANCE",
+    )
+
+    remaining_months = months_between(data.opening_date, lease.end_date)
+    monthly_rate = Decimal(str(lease.annual_discount_rate)) / Decimal("12")
+    frequency = int(lease.payment_frequency_months)
+    opening = liability
+    monthly_depreciation = money(rou_asset / Decimal(remaining_months))
+    for period in range(1, remaining_months + 1):
+        interest = money(opening * monthly_rate)
+        scheduled_payment = money(lease.payment_amount) if period % frequency == 0 else Decimal("0")
+        payment = money(opening + interest) if period == remaining_months else scheduled_payment
+        principal = money(payment - interest) if payment else Decimal("0")
+        closing = Decimal("0") if period == remaining_months else money(opening + interest - payment)
+        depreciation = (
+            money(rou_asset - monthly_depreciation * (remaining_months - 1))
+            if period == remaining_months else monthly_depreciation
+        )
+        lease.schedules.append(
+            LeaseSchedule(
+                period_number=period,
+                payment_date=month_end(add_months(data.opening_date, period - 1)),
+                opening_liability=opening,
+                interest=interest,
+                payment=payment,
+                principal=principal,
+                closing_liability=closing,
+                depreciation=depreciation,
+                status="PENDING",
+            )
+        )
+        opening = closing
+    lease.initial_liability = liability
+    lease.initial_rou_asset = rou_asset
+    lease.initial_journal_id = journal.id
+    lease.status = "ACTIVE"
+    write_audit(
+        db,
+        action="LEASE_OPENING_VALUE_INITIALIZED",
+        entity_type="LEASE_CONTRACT",
+        entity_id=lease.id,
+        user_id=user.id,
+        company_id=data.company_id,
+        after={
+            "number": lease.number,
+            "liability": str(liability),
+            "rou_asset": str(rou_asset),
+            "remaining_periods": remaining_months,
+            "journal": journal.number,
+        },
+    )
+    db.commit()
+    return {
+        "id": lease.id,
+        "number": lease.number,
+        "status": lease.status,
+        "initial_liability": lease.initial_liability,
+        "initial_rou_asset": lease.initial_rou_asset,
+        "remaining_periods": remaining_months,
+        "journal": journal.number,
+    }
 
 
 @router.get("")

@@ -682,7 +682,12 @@ def create_opening_balance(data: OpeningBalanceIn, user: User = Depends(get_curr
         lines = ([{"account_id": control.id, "debit": amount, "credit": 0}, {"account_id": offset.id, "debit": 0, "credit": amount}]
                  if ledger == "AR" else
                  [{"account_id": offset.id, "debit": amount, "credit": 0}, {"account_id": control.id, "debit": 0, "credit": amount}])
-        journal = create_posted_journal(db, company_id=data.company_id, user_id=user.id, posting_date=data.document_date, reference=data.document_number, description=f"{ledger} opening item {data.document_number}", lines=lines)
+        journal = create_posted_journal(
+            db, company_id=data.company_id, user_id=user.id,
+            posting_date=data.document_date, reference=data.document_number,
+            description=f"{ledger} opening item {data.document_number}",
+            lines=lines, cash_flow_kind="OPENING_BALANCE",
+        )
     item = FinancialOpenItem(
         company_id=data.company_id, ledger_type=ledger, party_id=party.id, source_type="OPENING_BALANCE",
         source_id=None, document_number=data.document_number, document_date=data.document_date, due_date=data.due_date,

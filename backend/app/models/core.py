@@ -39,7 +39,9 @@ class Company(Base):
     country_code = Column(String(2), nullable=False, default="SA")
     vat_number = Column(EncryptedString(512))
     commercial_registration = Column(EncryptedString(512))
-    logo_url = Column(String(500))
+    # Stored as a compact image data URL so authenticated company metadata can
+    # provide the logo without exposing a separate unauthenticated file route.
+    logo_url = Column(Text)
     primary_color = Column(String(20), nullable=False, default="#3157D5")
     company_type = Column(String(30), nullable=False, default="TRADING")
     active = Column(Boolean, nullable=False, default=True)
