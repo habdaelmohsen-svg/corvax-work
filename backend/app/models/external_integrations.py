@@ -1,6 +1,6 @@
 """Read-only external sales mirrors.
 
-DGTERA remains the source of truth. CORVAX imports final POS sales plus the
+DGTERA remains the source of truth. CORVAX imports Branch Sales report orders plus the
 branch, product, customer, payment and service-channel dimensions carried by
 those sales. The mirror deliberately has no inventory, COGS or journal-entry
 side effects.
@@ -207,7 +207,18 @@ class DgteraSyncRun(Base):
     inserted_orders = Column(Integer, nullable=False, default=0)
     updated_orders = Column(Integer, nullable=False, default=0)
     unchanged_orders = Column(Integer, nullable=False, default=0)
+    source_lines = Column(Integer, nullable=False, default=0)
+    source_payments = Column(Integer, nullable=False, default=0)
+    source_quantity = Column(Numeric(18, 4), nullable=False, default=0)
+    source_subtotal = Column(Numeric(18, 2), nullable=False, default=0)
+    source_vat = Column(Numeric(18, 2), nullable=False, default=0)
     source_total = Column(Numeric(18, 2), nullable=False, default=0)
+    source_paid = Column(Numeric(18, 2), nullable=False, default=0)
+    source_return = Column(Numeric(18, 2), nullable=False, default=0)
+    source_discount = Column(Numeric(18, 2), nullable=False, default=0)
+    strict_reconciled = Column(Boolean, nullable=False, default=False, index=True)
+    verification_hash = Column(String(64))
+    reconciliation_details = Column(Text)
     error_message = Column(Text)
     started_at = Column(DateTime, nullable=False, default=utc_now)
     completed_at = Column(DateTime)

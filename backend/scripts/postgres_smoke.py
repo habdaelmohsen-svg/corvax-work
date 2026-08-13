@@ -5,7 +5,7 @@ import argparse, json, os, time
 from pathlib import Path
 from sqlalchemy import create_engine, text
 
-EXPECTED_HEAD='e19900000001'
+EXPECTED_HEAD='e20100000001'
 
 def main()->int:
  p=argparse.ArgumentParser(); p.add_argument('--url',default=os.getenv('DATABASE_URL')); p.add_argument('--evidence',default='docs/operations/evidence/postgres_smoke.json'); a=p.parse_args()

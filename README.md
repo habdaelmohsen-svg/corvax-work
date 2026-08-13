@@ -5,7 +5,7 @@
 ## بيانات الإصدار المعتمدة
 
 - Version: `1.0.0-agreement-completion-rc27.4-r9.4`
-- Migration head: `e19900000001`
+- Migration head: `e20100000001`
 - DGTERA daily sales runbook: `docs/DGTERA_DAILY_SALES_INTEGRATION.md`
 - Frontend production build: `2,035` modules — PASSED
 - Backend compilation: PASSED
@@ -18,7 +18,7 @@
 
 The internal software scope is complete for controlled staging, pilot and UAT. Production approval remains evidence-driven and cannot be asserted from code alone. It requires a real PostgreSQL staging/production environment, sanitized or approved real data, signed UAT, parallel operation, independent penetration/accounting/tax reviews and official credentials for ZATCA, banks, WPS/Mudad, Qiwa, Muqeem and GOSI.
 
-Apply migrations through `e19900000001`. The transaction/value reset is available only with `ENVIRONMENT=uat` and `ALLOW_DATA_RESET=true`; production rejects it unconditionally.
+Apply migrations through `e20100000001`. The transaction/value reset is available only with `ENVIRONMENT=uat` and `ALLOW_DATA_RESET=true`; production rejects it unconditionally.
 
 ## R9.3 UAT transaction/value reset
 

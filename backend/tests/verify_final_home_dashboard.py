@@ -14,6 +14,7 @@ TARGETS = (ROOT / "frontend/src/dashboard/executiveNavigation.ts").read_text(enc
 ROUTES = (ROOT / "frontend/src/dashboard/routes.tsx").read_text(encoding="utf-8")
 SHELL = (ROOT / "frontend/src/dashboard/Shell.tsx").read_text(encoding="utf-8")
 UI = (ROOT / "frontend/src/dashboard/ui.tsx").read_text(encoding="utf-8")
+DGTERA_PAGE = (ROOT / "frontend/src/dashboard/dgteraIntegrationPage.tsx").read_text(encoding="utf-8")
 
 
 for forbidden in (
@@ -49,6 +50,10 @@ assert all(label in EXECUTIVE for label in ("صافي مبيعات اليوم", 
 assert "metrics?.current?.subtotal" in EXECUTIVE
 assert "إجمالي الإيرادات (صافي)" in EXECUTIVE
 assert all(target in TARGETS for target in ("dgteraDailySales", "dgteraWeeklySales", "dgteraMonthlySales", "dgteraYearlySales"))
+assert "عرض المبيعات" in DGTERA_PAGE and "setAppliedFilters" in DGTERA_PAGE
+assert "reportComplete?" in DGTERA_PAGE and "Totals are hidden until every day is covered" in DGTERA_PAGE
+assert "Strict 100% reconciliation" in DGTERA_PAGE and "verification_hash" in DGTERA_PAGE
+assert "setInterval(()=>load().catch(()=>{}),120000)" in DGTERA_PAGE
 
 quick_actions = [line for line in EXECUTIVE.splitlines() if "<QuickAction " in line]
 assert len(quick_actions) == 8

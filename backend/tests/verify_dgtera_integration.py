@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -46,13 +47,21 @@ from app.models import (  # noqa: E402
     Party,
 )
 from app.services.dgtera_connector import (  # noqa: E402
+    BRANCH_REPORT_ORDER_STATES,
     DAY_END,
     DAY_START,
     Odoo14Client,
     classify_sale,
     validate_dgtera_url,
 )
-from app.services.dgtera_sales_sync import historical_backfill_window, sync_connection  # noqa: E402
+from app.services.dgtera_sales_sync import (  # noqa: E402
+    DgteraReconciliationError,
+    SOURCE_LOCAL_WINDOW_MARKER,
+    historical_backfill_status,
+    historical_backfill_window,
+    sync_connection,
+)
+from app.workers.dgtera_daily_sync import HISTORY_CHUNKS_PER_CYCLE, _date_windows  # noqa: E402
 
 
 def ok(response, status=200):
@@ -79,6 +88,7 @@ class StubOdooClient(Odoo14Client):
     def __init__(self, sales_date: date):
         self.sales_date = sales_date
         self.models_read: list[str] = []
+        self.order_domains: list[list] = []
         self._field_cache = {}
 
     def fields(self, model: str):
@@ -110,6 +120,8 @@ class StubOdooClient(Odoo14Client):
 
     def _search_read_all(self, model, domain, fields, *, order="id", maximum):
         self.models_read.append(model)
+        if model == "pos.order":
+            self.order_domains.append(domain)
         d = self.sales_date
         previous_day = d - timedelta(days=1)
         orders = [
@@ -121,7 +133,7 @@ class StubOdooClient(Odoo14Client):
             },
             {
                 "id": 2, "name": "INCLUDED-0000", "pos_reference": "INCLUDED-0000",
-                "date_order": f"{previous_day.isoformat()} 21:00:00", "state": "done",
+                "date_order": f"{previous_day.isoformat()} 21:00:00", "state": "draft",
                 "session_id": [501, "S501"], "partner_id": False, "lines": [102],
                 "amount_untaxed": 20, "amount_tax": 3, "amount_total": 23, "amount_paid": 23,
             },
@@ -176,17 +188,49 @@ def verify_real_connector_window(sales_date: date) -> None:
     assert rows[0]["date_order_local"].endswith("00:00:00")
     assert rows[1]["date_order_local"].endswith("23:59:59")
     assert rows[0]["service_mode"] == "TAKEAWAY"
+    assert rows[0]["state"] == "draft"
     assert rows[1]["sales_scope"] == "EXTERNAL" and rows[1]["delivery_platform_name"] == "Keeta"
     assert set(stub.models_read) == {
         "pos.order", "pos.session", "pos.order.line", "product.product",
         "res.partner", "pos.payment", "pos.payment.method",
     }
     assert not any(model.startswith("account.") or model.startswith("stock.") for model in stub.models_read)
+    state_condition = next(condition for condition in stub.order_domains[0] if condition[0] == "state")
+    assert state_condition == ("state", "in", list(BRANCH_REPORT_ORDER_STATES))
+    assert "draft" in state_condition[2] and "cancel" not in state_condition[2]
+    changed_dates = stub.changed_sales_dates(
+        datetime.now(timezone.utc) - timedelta(minutes=5),
+        sales_date - timedelta(days=365),
+        "Asia/Riyadh",
+    )
+    assert sales_date in changed_dates
+    changed_domain = stub.order_domains[-1]
+    assert any(condition[0] == "write_date" for condition in changed_domain)
+    assert not any(condition[0] == "state" for condition in changed_domain)
+
+
+def verify_attached_report_reference_totals() -> None:
+    """Lock the exact source values visible in the user's DGTERA screenshots."""
+    day_qty = sum(map(Decimal, ("208", "213", "128", "226", "126", "196", "49")))
+    day_net = sum(map(Decimal, ("3252.35", "3906.96", "2373.92", "4202.44", "1839.13", "3022.26", "878.26")))
+    day_vat = sum(map(Decimal, ("487.85", "586.04", "356.08", "630.36", "275.87", "453.34", "131.74")))
+    day_gross = sum(map(Decimal, ("3740.20", "4493.00", "2730.00", "4832.80", "2115.00", "3475.60", "1010.00")))
+    assert (day_qty, day_net, day_vat, day_gross) == (
+        Decimal("1146"), Decimal("19475.32"), Decimal("2921.28"), Decimal("22396.60")
+    )
+    assert day_net + day_vat == day_gross
+    year_net, year_vat, year_gross = Decimal("6464308.29"), Decimal("969636.26"), Decimal("7433944.55")
+    assert year_net + year_vat == year_gross
 
 
 def main() -> None:
     assert str(DAY_START) == "00:00:00"
     assert str(DAY_END) == "23:59:59"
+    assert BRANCH_REPORT_ORDER_STATES == ("draft", "paid", "done", "invoiced")
+    assert HISTORY_CHUNKS_PER_CYCLE == 24
+    assert _date_windows([
+        date(2025, 1, 1), date(2025, 1, 2), date(2025, 2, 10)
+    ]) == [(date(2025, 1, 1), date(2025, 1, 2)), (date(2025, 2, 10), date(2025, 2, 10))]
     assert validate_dgtera_url("https://cheesehouse.dgtera.com/") == "https://cheesehouse.dgtera.com"
     for unsafe in ("http://cheesehouse.dgtera.com", "https://example.com", "https://user:pass@cheesehouse.dgtera.com"):
         try:
@@ -206,6 +250,7 @@ def main() -> None:
     assert classify_sale(partner_name="", payment_method_names=["Cash"], optional_values={"table_id": [12, "T12"]})[:2] == ("INTERNAL", "DINE_IN")
     assert classify_sale(partner_name="", payment_method_names=["Cash"], optional_values={})[:2] == ("INTERNAL", "TAKEAWAY")
     verify_real_connector_window(date.today())
+    verify_attached_report_reference_totals()
 
     sales_date = date.today()
     source = {
@@ -292,6 +337,10 @@ def main() -> None:
             assert saved["sync_interval_minutes"] == 2
             assert saved["initial_sync"]["inserted"] == 1
             assert saved["initial_sync"]["reconciled"] is True
+            assert saved["initial_sync"]["strict_reconciled"] is True
+            assert saved["initial_sync"]["reconciliation"]["matched"] is True
+            assert all(saved["initial_sync"]["reconciliation"]["checks"].values())
+            assert saved["initial_sync"]["reconciliation"]["source"] == saved["initial_sync"]["reconciliation"]["corvax"]
             assert all(secret not in str(saved) for secret in secrets)
 
             with SessionLocal() as db:
@@ -320,6 +369,23 @@ def main() -> None:
                 next_history = historical_backfill_window(db, connection)
                 assert next_history and next_history[1] == date.fromordinal(sales_date.replace(day=1).toordinal() - 1)
                 assert (next_history[1] - next_history[0]).days == 30
+                isolated_old_run = DgteraSyncRun(
+                    connection_id=connection.id,
+                    company_id=connection.company_id,
+                    start_date=date(2025, 1, 1),
+                    end_date=date(2025, 1, 31),
+                    window_label=f"00:00-23:59:59 Asia/Riyadh / {SOURCE_LOCAL_WINDOW_MARKER}",
+                    status="COMPLETED",
+                    strict_reconciled=True,
+                    completed_at=datetime.now(),
+                )
+                db.add(isolated_old_run)
+                db.flush()
+                gap_status = historical_backfill_status(db, connection)
+                assert gap_status["earliest_imported_date"] == sales_date.replace(day=1)
+                assert gap_status["completed"] is False and gap_status["no_date_gaps"] is False
+                db.delete(isolated_old_run)
+                db.flush()
                 duplicate = sync_connection(db, connection, sales_date, sales_date, 1)
                 assert duplicate["unchanged"] == 1 and duplicate["inserted"] == 0
 
@@ -347,6 +413,7 @@ def main() -> None:
                 headers=headers,
             ))
             assert snap["mode"] == "SALES_ONLY"
+            assert snap["coverage"]["complete"] is True
             assert snap["window"]["day_start"] == "00:00" and snap["window"]["day_end"] == "23:59:59"
             assert snap["totals"]["orders"] == 1 and float(snap["totals"]["external_sales"]) == 230
             assert float(snap["totals"]["quantity"]) == 2
@@ -355,6 +422,12 @@ def main() -> None:
             assert snap["platform_sales"][0]["key"] == "HungerStation"
             assert snap["payment_channels"][0]["key"] == "PLATFORM_CREDIT"
             assert snap["reconciliation"]["matched"] is True
+            assert snap["reconciliation"]["strict"] is True
+            assert snap["reconciliation"]["mismatch_count"] == 0
+            assert snap["reconciliation"]["source_lines"] == snap["reconciliation"]["imported_lines"] == 1
+            assert snap["reconciliation"]["source_payments"] == snap["reconciliation"]["imported_payments"] == 1
+            assert snap["reconciliation"]["verification_hash"]
+            assert all(snap["reconciliation"]["checks"].values())
             assert snap["product_sales"][0]["key"] == "Classic Burger"
             assert len(snap["orders"][0]["lines"]) == 1 and len(snap["orders"][0]["payments"]) == 1
             analytics = ok(client.get(
@@ -366,6 +439,8 @@ def main() -> None:
             assert "next" in analytics["metrics"] and "next_change_percent" in analytics["comparison"]
             assert analytics["branch_comparison"][0]["branch"] == "Al Aziziyah"
             assert analytics["history"]["start_date"] == "2025-01-01"
+            assert analytics["coverage"]["current"]["complete"] is True
+            assert analytics["coverage"]["prior_year"]["complete"] is False
             connection_status = ok(client.get(
                 "/api/v1/integrations/dgtera/status?company_id=1",
                 headers=headers,
@@ -406,6 +481,8 @@ def main() -> None:
             assert not holding_home["inherited"] and restaurant_home["inherited"]
             assert holding_home["periods"] == restaurant_home["periods"]
             assert float(holding_home["periods"]["DAY"]["metrics"]["current"]["sales"]) == 230
+            assert holding_home["periods"]["DAY"]["coverage"]["current"]["complete"] is True
+            assert holding_home["periods"]["YEAR"]["coverage"]["current"]["complete"] is False
             restaurant_runs = ok(client.get("/api/v1/integrations/dgtera/sync-runs?company_id=3", headers=headers))
             assert restaurant_runs == runs
             with SessionLocal() as db:
@@ -450,6 +527,27 @@ def main() -> None:
             assert complete_totals["totals"]["orders"] == 506
             assert float(complete_totals["totals"]["sales"]) == 735
             assert len(complete_totals["orders"]) == 1
+            assert complete_totals["reconciliation"]["matched"] is False
+            assert complete_totals["reconciliation"]["mismatch_count"] > 0
+            assert complete_totals["reconciliation"]["verification_hash"] is None
+
+            # A strict mismatch must roll back the entire source snapshot; no
+            # partially updated order may leak into reports.
+            forced_failure = {
+                "matched": False,
+                "mismatch_count": 1,
+                "mismatches": [{"path": "order[9001].vat", "expected": "30.00", "actual": "29.99"}],
+            }
+            with patch("app.services.dgtera_sales_sync._strict_reconciliation", return_value=forced_failure):
+                with SessionLocal() as db:
+                    connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
+                    try:
+                        sync_connection(db, connection, sales_date, sales_date, 1)
+                    except DgteraReconciliationError:
+                        pass
+                    else:
+                        raise AssertionError("strict mismatch was accepted")
+                    assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 506
 
             # There is intentionally no user-triggered import endpoint.
             assert client.post("/api/v1/integrations/dgtera/sync", headers=headers, json={}).status_code in {404, 405}

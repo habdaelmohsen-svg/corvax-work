@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import json
 import re
 from datetime import date, timedelta
 from decimal import Decimal
@@ -214,7 +215,7 @@ def save_connection(data: ConnectionIn, user: User = Depends(get_current_user), 
         initial_sync = dgtera_sales_sync.sync_connection(db, row, start_date, end_date, user.id)
     except dgtera_sales_sync.DgteraSyncBusy:
         initial_sync = {"queued": True}
-    except (DgteraRemoteError, ValueError) as exc:
+    except (DgteraRemoteError, ValueError, dgtera_sales_sync.DgteraReconciliationError) as exc:
         raise HTTPException(502, f"Connection verified but the automatic sales import failed: {exc}") from exc
     return {
         **_connection_out(row, data.company_id),
@@ -232,6 +233,29 @@ def _date_window(row: DgteraConnection, start_date: date | None, end_date: date 
     if (end - start).days > 731:
         raise HTTPException(422, "The displayed sales window cannot exceed two years")
     return start, end
+
+
+def _range_coverage(db: Session, connection: DgteraConnection, start: date, end: date) -> dict:
+    """Tell the UI whether a local aggregate is complete, not merely non-zero."""
+    history = dgtera_sales_sync.historical_backfill_status(db, connection)
+    target_end = history["target_end_date"]
+    proof = dgtera_sales_sync.strict_range_coverage_status(db, connection, start, end)
+    future_period = start > target_end
+    return {
+        "complete": bool(proof["complete"] and not future_period),
+        "requested_start_date": start,
+        "requested_end_date": end,
+        "earliest_imported_date": history["earliest_imported_date"],
+        "target_end_date": target_end,
+        "progress_percent": history["progress_percent"],
+        "first_missing_date": proof["first_missing_date"],
+        "covered_days": proof["covered_days"],
+        "required_days": proof["required_days"],
+        "oldest_verified_at": proof.get("oldest_verified_at"),
+        "last_verified_at": proof.get("last_verified_at"),
+        "strict_reconciliation": True,
+        "future_period": future_period,
+    }
 
 
 def _order_conditions(
@@ -460,29 +484,36 @@ def snapshot(
     product_sales.sort(key=lambda row: (money(row["sales"]), row["key"]), reverse=True)
 
     payment_channels = _payment_channel_summary(db, conditions)
-    reconciliation_run = db.scalar(
-        select(DgteraSyncRun)
-        .where(
-            DgteraSyncRun.connection_id == connection.id,
-            DgteraSyncRun.start_date == start,
-            DgteraSyncRun.end_date == end,
-            DgteraSyncRun.status == "COMPLETED",
-        )
-        .order_by(DgteraSyncRun.id.desc())
+    strict_evidence = dgtera_sales_sync.strict_range_reconciliation_evidence(
+        db, connection, start, end
     )
-    base_metrics = _order_metrics(db, _order_conditions(connection.id, start, end))
     reconciliation = {
-        "available": bool(reconciliation_run),
-        "matched": bool(
-            reconciliation_run
-            and int(reconciliation_run.source_orders or 0) == int(base_metrics["orders"])
-            and money(reconciliation_run.source_total) == money(base_metrics["sales"])
-        ),
-        "source_orders": int(reconciliation_run.source_orders or 0) if reconciliation_run else None,
-        "imported_orders": int(base_metrics["orders"]),
-        "source_total": money(reconciliation_run.source_total) if reconciliation_run else None,
-        "imported_total": money(base_metrics["sales"]),
-        "difference": money(base_metrics["sales"] - money(reconciliation_run.source_total)) if reconciliation_run else None,
+        "available": bool(strict_evidence["verified_from_live_source"]),
+        "strict": True,
+        "matched": strict_evidence["matched"],
+        "source_orders": strict_evidence["source"]["orders"],
+        "imported_orders": strict_evidence["corvax"]["orders"],
+        "source_lines": strict_evidence["source"]["lines"],
+        "imported_lines": strict_evidence["corvax"]["lines"],
+        "source_payments": strict_evidence["source"]["payments"],
+        "imported_payments": strict_evidence["corvax"]["payments"],
+        "source_quantity": strict_evidence["source"]["quantity"],
+        "imported_quantity": strict_evidence["corvax"]["quantity"],
+        "source_subtotal": strict_evidence["source"]["subtotal"],
+        "imported_subtotal": strict_evidence["corvax"]["subtotal"],
+        "source_vat": strict_evidence["source"]["vat"],
+        "imported_vat": strict_evidence["corvax"]["vat"],
+        "source_total": strict_evidence["source"]["gross"],
+        "imported_total": strict_evidence["corvax"]["gross"],
+        "difference": strict_evidence["difference"],
+        "checks": strict_evidence["checks"],
+        "mismatch_count": strict_evidence["mismatch_count"],
+        "mismatches": strict_evidence["mismatches"],
+        "verification_hash": strict_evidence["verification_hash"],
+        "oldest_verified_at": strict_evidence["oldest_verified_at"],
+        "last_verified_at": strict_evidence["last_verified_at"],
+        "days_verified": strict_evidence["days_verified"],
+        "orders_verified_individually": strict_evidence["orders_verified_individually"],
     }
 
     order_rows = []
@@ -530,6 +561,7 @@ def snapshot(
         "mode": "SALES_ONLY",
         "window": {"start_date": start, "end_date": end, "day_start": "00:00", "day_end": "23:59:59", "timezone": connection.timezone},
         "filters": {"branch_id": branch_id, "sales_scope": sales_scope, "service_mode": service_mode, "limit": limit},
+        "coverage": _range_coverage(db, connection, start, end),
         "totals": totals,
         "master_counts": {
             "branches": len(branches),
@@ -714,6 +746,20 @@ def analytics(
     else:
         trend = [{"key": sales_date.isoformat(), "orders": int(order_count or 0), "sales": money(sales)} for sales_date, order_count, sales in daily_rows]
 
+    coverage = {
+        key: _range_coverage(db, connection, window[0], window[1])
+        for key, window in windows.items()
+    }
+    reconciliation = {
+        key: dgtera_sales_sync.strict_range_reconciliation_evidence(
+            db, connection, window[0], window[1]
+        )
+        for key, window in windows.items()
+    }
+    for key in windows:
+        coverage[key]["complete"] = bool(
+            coverage[key]["complete"] and reconciliation[key]["matched"]
+        )
     return {
         "period": period,
         "as_of_date": as_of,
@@ -723,6 +769,8 @@ def analytics(
         },
         "filters": {"branch_id": branch_id, "sales_scope": sales_scope, "service_mode": service_mode},
         "metrics": metrics,
+        "coverage": coverage,
+        "reconciliation": reconciliation,
         "comparison": {
             "previous_change_percent": _change_percent(current["subtotal"], previous["subtotal"]),
             "next_change_percent": _change_percent(next_period["subtotal"], current["subtotal"]),
@@ -757,12 +805,24 @@ def executive_summary(
             )
             for key, window in windows.items()
         }
+        coverage = {
+            key: _range_coverage(db, connection, window[0], window[1])
+            for key, window in windows.items()
+        }
+        current_evidence = dgtera_sales_sync.strict_range_reconciliation_evidence(
+            db, connection, windows["current"][0], windows["current"][1]
+        )
+        coverage["current"]["complete"] = bool(
+            coverage["current"]["complete"] and current_evidence["matched"]
+        )
         periods[period] = {
             "windows": {
                 key: {"start_date": window[0], "end_date": window[1]}
                 for key, window in windows.items()
             },
             "metrics": metrics,
+            "coverage": coverage,
+            "reconciliation": current_evidence,
             "comparison": {
                 "previous_change_percent": _change_percent(
                     metrics["current"]["subtotal"], metrics["previous"]["subtotal"]
@@ -808,10 +868,18 @@ def sync_runs(
         "window": row.window_label,
         "status": row.status,
         "source_orders": row.source_orders,
+        "source_lines": row.source_lines,
+        "source_payments": row.source_payments,
+        "source_quantity": row.source_quantity,
+        "source_subtotal": row.source_subtotal,
+        "source_vat": row.source_vat,
         "inserted": row.inserted_orders,
         "updated": row.updated_orders,
         "unchanged": row.unchanged_orders,
         "source_total": row.source_total,
+        "strict_reconciled": row.strict_reconciled,
+        "verification_hash": row.verification_hash,
+        "reconciliation": json.loads(row.reconciliation_details) if row.reconciliation_details else None,
         "error": row.error_message,
         "started_at": row.started_at,
         "completed_at": row.completed_at,

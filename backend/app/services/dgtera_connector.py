@@ -1,7 +1,9 @@
 """Read-only DGTERA/Odoo 14 sales connector.
 
-Only final POS sales and their dimensions are read.  No accounting moves,
-inventory movements or recipes are requested from DGTERA.
+Only POS sales included by DGTERA's Branch Sales report and their dimensions
+are read, including open orders when the report's "include unclosed" option is
+enabled. Cancelled orders are excluded. No accounting moves, inventory
+movements or recipes are requested from DGTERA.
 
 Odoo stores ``Datetime`` values as naive UTC strings and converts them for the
 web client.  CORVAX therefore converts each requested Riyadh business-day
@@ -28,7 +30,10 @@ from app.core.config import settings
 
 MONEY = Decimal("0.01")
 QTY = Decimal("0.0001")
-FINAL_ORDER_STATES = ("paid", "done", "invoiced")
+# DGTERA's attached "Branch Sales" report is explicitly filtered with
+# "include unclosed orders".  Odoo 14 calls that POS state ``draft`` (New).
+# Match the report by including every non-cancelled business state.
+BRANCH_REPORT_ORDER_STATES = ("draft", "paid", "done", "invoiced")
 DAY_START = time(0, 0, 0)
 DAY_END = time(23, 59, 59)
 
@@ -318,8 +323,42 @@ class Odoo14Client:
 
     def test_connection(self) -> dict[str, object]:
         self.authenticate()
-        count = self.execute_kw("pos.order", "search_count", [[("state", "in", list(FINAL_ORDER_STATES))]])
-        return {"connected": True, "final_sales_orders": int(count or 0), "odoo_version": "14", "mode": "SALES_ONLY"}
+        count = self.execute_kw("pos.order", "search_count", [[("state", "in", list(BRANCH_REPORT_ORDER_STATES))]])
+        return {"connected": True, "branch_report_sales_orders": int(count or 0), "odoo_version": "14", "mode": "SALES_ONLY"}
+
+    def changed_sales_dates(
+        self,
+        since_utc: datetime,
+        history_start: date,
+        timezone_name: str,
+    ) -> list[date]:
+        """Return every business date touched since the last poll.
+
+        This query intentionally has no state filter so a newly cancelled old
+        order still causes its original sales day to be reread and cleaned.
+        """
+        zone = ZoneInfo(timezone_name)
+        since = since_utc.astimezone(timezone.utc) if since_utc.tzinfo else since_utc.replace(tzinfo=timezone.utc)
+        history_start_utc = datetime.combine(history_start, DAY_START, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
+        today = datetime.now(timezone.utc).astimezone(zone).date()
+        today_end_utc = datetime.combine(today, DAY_END, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
+        rows = self._search_read_all(
+            "pos.order",
+            [
+                ("write_date", ">=", since.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")),
+                ("date_order", ">=", history_start_utc.strftime("%Y-%m-%d %H:%M:%S")),
+                ("date_order", "<=", today_end_utc.strftime("%Y-%m-%d %H:%M:%S")),
+            ],
+            self._available("pos.order", ["id", "date_order", "write_date", "state"]),
+            order="write_date,id",
+            maximum=settings.dgtera_max_orders_per_sync,
+        )
+        result = set()
+        for row in rows:
+            ordered_local, _ = _odoo_source_local_datetime(row.get("date_order"), zone)
+            if history_start <= ordered_local.date() <= today:
+                result.add(ordered_local.date())
+        return sorted(result)
 
     def daily_sales(self, start_date: date, end_date: date, timezone_name: str) -> list[dict[str, object]]:
         if end_date < start_date:
@@ -333,7 +372,7 @@ class Odoo14Client:
         start_source = datetime.combine(start_date, DAY_START, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
         end_source = datetime.combine(end_date, DAY_END, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
         domain = [
-            ("state", "in", list(FINAL_ORDER_STATES)),
+            ("state", "in", list(BRANCH_REPORT_ORDER_STATES)),
             ("date_order", ">=", start_source.strftime("%Y-%m-%d %H:%M:%S")),
             ("date_order", "<=", end_source.strftime("%Y-%m-%d %H:%M:%S")),
         ]
