@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -52,7 +52,7 @@ from app.services.dgtera_connector import (  # noqa: E402
     classify_sale,
     validate_dgtera_url,
 )
-from app.services.dgtera_sales_sync import sync_connection  # noqa: E402
+from app.services.dgtera_sales_sync import historical_backfill_window, sync_connection  # noqa: E402
 
 
 def ok(response, status=200):
@@ -114,19 +114,19 @@ class StubOdooClient(Odoo14Client):
         orders = [
             {
                 "id": 1, "name": "EXCLUDED-0000", "pos_reference": "EXCLUDED-0000",
-                "date_order": f"{d.isoformat()} 21:00:00", "state": "done",
+                "date_order": f"{d.isoformat()} 00:00:00", "state": "done",
                 "session_id": [501, "S501"], "partner_id": False, "lines": [101],
                 "amount_untaxed": 10, "amount_tax": 1.5, "amount_total": 11.5, "amount_paid": 11.5,
             },
             {
                 "id": 2, "name": "INCLUDED-0001", "pos_reference": "INCLUDED-0001",
-                "date_order": f"{d.isoformat()} 21:01:00", "state": "done",
+                "date_order": f"{d.isoformat()} 00:01:00", "state": "done",
                 "session_id": [501, "S501"], "partner_id": False, "lines": [102],
                 "amount_untaxed": 20, "amount_tax": 3, "amount_total": 23, "amount_paid": 23,
             },
             {
                 "id": 3, "name": "INCLUDED-2359", "pos_reference": "INCLUDED-2359",
-                "date_order": f"{(date.fromordinal(d.toordinal()+1)).isoformat()} 20:59:59", "state": "done",
+                "date_order": f"{d.isoformat()} 23:59:59", "state": "done",
                 "session_id": [501, "S501"], "partner_id": [301, "Keeta"], "lines": [103],
                 "amount_untaxed": 30, "amount_tax": 4.5, "amount_total": 34.5, "amount_paid": 34.5,
             },
@@ -161,10 +161,9 @@ class StubOdooClient(Odoo14Client):
 
 
 def verify_real_connector_window(sales_date: date) -> None:
-    # The stub dates are UTC-naive as Odoo stores them.  Use the previous UTC
-    # date so 21:00/21:01 become 00:00/00:01 on the requested Riyadh date.
-    utc_base = date.fromordinal(sales_date.toordinal() - 1)
-    stub = StubOdooClient(utc_base)
+    # DGTERA's visible branch report treats date_order as a source-local,
+    # database-naive business timestamp.  CORVAX must use the same date split.
+    stub = StubOdooClient(sales_date)
     rows = stub.daily_sales(sales_date, sales_date, "Asia/Riyadh")
     assert [row["order_id"] for row in rows] == ["2", "3"]
     assert rows[0]["date_order_local"].endswith("00:01:00")
@@ -310,6 +309,9 @@ def main() -> None:
                 assert platform_row and platform_row.name_en == "HungerStation"
 
                 connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
+                next_history = historical_backfill_window(db, connection)
+                assert next_history and next_history[1] == date.fromordinal(sales_date.replace(day=1).toordinal() - 1)
+                assert (next_history[1] - next_history[0]).days == 6
                 duplicate = sync_connection(db, connection, sales_date, sales_date, 1)
                 assert duplicate["unchanged"] == 1 and duplicate["inserted"] == 0
 
@@ -339,15 +341,116 @@ def main() -> None:
             assert snap["mode"] == "SALES_ONLY"
             assert snap["window"]["day_start"] == "00:01" and snap["window"]["day_end"] == "23:59"
             assert snap["totals"]["orders"] == 1 and float(snap["totals"]["external_sales"]) == 230
+            assert float(snap["totals"]["quantity"]) == 2
             assert snap["master_counts"] == {"branches": 1, "products": 1, "customers": 1}
+            assert float(snap["branch_sales"][0]["quantity"]) == 2
             assert snap["platform_sales"][0]["key"] == "HungerStation"
             assert snap["product_sales"][0]["key"] == "Classic Burger"
             assert len(snap["orders"][0]["lines"]) == 1 and len(snap["orders"][0]["payments"]) == 1
+            analytics = ok(client.get(
+                f"/api/v1/integrations/dgtera/analytics?company_id=1&as_of_date={sales_date}&period=DAY",
+                headers=headers,
+            ))
+            assert float(analytics["metrics"]["current"]["sales"]) == 230
+            assert float(analytics["metrics"]["current"]["quantity"]) == 2
+            assert analytics["branch_comparison"][0]["branch"] == "Al Aziziyah"
+            assert analytics["history"]["start_date"] == "2025-01-01"
+            connection_status = ok(client.get(
+                "/api/v1/integrations/dgtera/status?company_id=1",
+                headers=headers,
+            ))
+            assert connection_status["history"]["earliest_imported_date"] == sales_date.replace(day=1).isoformat()
             runs = ok(client.get("/api/v1/integrations/dgtera/sync-runs?company_id=1", headers=headers))
             assert len(runs) == 3 and all(row["status"] == "COMPLETED" for row in runs)
 
+            # The holding owns one encrypted connection, while the restaurant
+            # workspace reads the exact same connection-scoped mirror.  This
+            # is inheritance, not a second import, so totals and order counts
+            # must match without adding another DGTERA connection or order.
+            restaurant_status = ok(client.get(
+                "/api/v1/integrations/dgtera/status?company_id=3",
+                headers=headers,
+            ))
+            assert restaurant_status["configured"] and restaurant_status["inherited"]
+            assert restaurant_status["company_id"] == 3
+            assert restaurant_status["connection_company_id"] == 1
+            restaurant_snap = ok(client.get(
+                f"/api/v1/integrations/dgtera/snapshot?company_id=3&start_date={sales_date}&end_date={sales_date}",
+                headers=headers,
+            ))
+            assert restaurant_snap["totals"] == snap["totals"]
+            restaurant_analytics = ok(client.get(
+                f"/api/v1/integrations/dgtera/analytics?company_id=3&as_of_date={sales_date}&period=DAY",
+                headers=headers,
+            ))
+            assert restaurant_analytics["metrics"] == analytics["metrics"]
+            holding_home = ok(client.get(
+                f"/api/v1/integrations/dgtera/executive-summary?company_id=1&as_of_date={sales_date}",
+                headers=headers,
+            ))
+            restaurant_home = ok(client.get(
+                f"/api/v1/integrations/dgtera/executive-summary?company_id=3&as_of_date={sales_date}",
+                headers=headers,
+            ))
+            assert not holding_home["inherited"] and restaurant_home["inherited"]
+            assert holding_home["periods"] == restaurant_home["periods"]
+            assert float(holding_home["periods"]["DAY"]["metrics"]["current"]["sales"]) == 230
+            restaurant_runs = ok(client.get("/api/v1/integrations/dgtera/sync-runs?company_id=3", headers=headers))
+            assert restaurant_runs == runs
+            with SessionLocal() as db:
+                assert db.scalar(select(func.count(DgteraConnection.id))) == 1
+                assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 1
+
+            # KPI aggregates must cover the full selected range even when the
+            # drill-down list is deliberately limited.
+            with SessionLocal() as db:
+                base_order = db.scalar(select(DgteraSalesOrder))
+                assert base_order
+                for index in range(505):
+                    db.add(DgteraSalesOrder(
+                        connection_id=base_order.connection_id,
+                        company_id=base_order.company_id,
+                        external_order_id=f"BULK-{index}",
+                        external_order_name=f"Bulk {index}",
+                        sales_date=sales_date,
+                        ordered_at_local=datetime.combine(sales_date, datetime.min.time()),
+                        ordered_at_utc=datetime.combine(sales_date, datetime.min.time()),
+                        branch_id=base_order.branch_id,
+                        dgtera_branch_id=base_order.dgtera_branch_id,
+                        sales_scope="INTERNAL",
+                        service_mode="TAKEAWAY",
+                        classification_source="TEST",
+                        state="done",
+                        subtotal=1,
+                        vat_amount=0,
+                        total=1,
+                        amount_paid=1,
+                        amount_return=0,
+                        discount_amount=0,
+                        line_total_difference=0,
+                        source_hash=f"{index:064x}"[-64:],
+                        source_payload="{}",
+                    ))
+                db.commit()
+            complete_totals = ok(client.get(
+                f"/api/v1/integrations/dgtera/snapshot?company_id=1&start_date={sales_date}&end_date={sales_date}&limit=1",
+                headers=headers,
+            ))
+            assert complete_totals["totals"]["orders"] == 506
+            assert float(complete_totals["totals"]["sales"]) == 735
+            assert len(complete_totals["orders"]) == 1
+
             # There is intentionally no user-triggered import endpoint.
             assert client.post("/api/v1/integrations/dgtera/sync", headers=headers, json={}).status_code in {404, 405}
+
+            # A completed source window is authoritative: cancelled/moved
+            # records that disappear from DGTERA must not remain in totals.
+            fake.sales_date = date(2024, 1, 1)
+            with SessionLocal() as db:
+                connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
+                cleaned = sync_connection(db, connection, sales_date, sales_date, 1)
+                assert cleaned["removed"] == 506
+                assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 0
 
     print("verify_dgtera_integration: PASSED")
 

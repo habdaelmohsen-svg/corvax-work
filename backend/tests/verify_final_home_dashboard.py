@@ -37,6 +37,7 @@ for endpoint in (
     "/api/v1/subledgers/aging",
     "/api/v1/inventory/stock-summary",
     "/api/v1/governance/summary",
+    "/api/v1/integrations/dgtera/executive-summary",
 ):
     assert endpoint in EXECUTIVE, f"live executive source missing: {endpoint}"
 
@@ -44,6 +45,8 @@ assert "Current Period" in EXECUTIVE
 assert "Last 12 Months" not in EXECUTIVE
 assert "results.some(Boolean)" in EXECUTIVE
 assert "dataQuality" in EXECUTIVE and "controlEffectiveness" in EXECUTIVE
+assert all(label in EXECUTIVE for label in ("مبيعات اليوم", "مبيعات الأسبوع", "مبيعات الشهر", "مبيعات السنة"))
+assert all(target in TARGETS for target in ("dgteraDailySales", "dgteraWeeklySales", "dgteraMonthlySales", "dgteraYearlySales"))
 
 quick_actions = [line for line in EXECUTIVE.splitlines() if "<QuickAction " in line]
 assert len(quick_actions) == 8

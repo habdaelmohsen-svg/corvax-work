@@ -9,7 +9,7 @@ from decimal import Decimal
 from threading import Lock
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.time import utc_now, utc_now_aware
@@ -31,6 +31,9 @@ from app.services.dgtera_connector import DgteraRemoteError, Odoo14Client, money
 
 
 _SYNC_LOCK = Lock()
+HISTORY_START_DATE = date(2025, 1, 1)
+HISTORY_CHUNK_DAYS = 7
+SOURCE_LOCAL_WINDOW_MARKER = "source-local-v2"
 
 
 class DgteraSyncBusy(RuntimeError):
@@ -44,6 +47,10 @@ def client_for(connection: DgteraConnection) -> Odoo14Client:
         login=str(connection.login),
         api_key=str(connection.api_key),
     )
+
+
+def _window_label(connection: DgteraConnection) -> str:
+    return f"00:01-23:59 {connection.timezone} / {SOURCE_LOCAL_WINDOW_MARKER}"
 
 
 def _source_datetime(value: object) -> datetime | None:
@@ -356,6 +363,50 @@ def catchup_window(connection: DgteraConnection) -> tuple[date, date]:
     return start, today
 
 
+def historical_backfill_status(db: Session, connection: DgteraConnection) -> dict:
+    """Return progress for the contiguous source-local history import.
+
+    Runs created before the source-local date correction are intentionally not
+    counted.  Re-reading those dates updates their existing order ids and
+    moves each order to the same business date used by DGTERA's branch report.
+    """
+    zone = ZoneInfo(connection.timezone or "Asia/Riyadh")
+    today = utc_now_aware().astimezone(zone).date()
+    earliest = db.scalar(select(func.min(DgteraSyncRun.start_date)).where(
+        DgteraSyncRun.connection_id == connection.id,
+        DgteraSyncRun.status == "COMPLETED",
+        DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
+    ))
+    total_days = max(1, (today - HISTORY_START_DATE).days + 1)
+    covered_days = 0 if earliest is None else max(0, (today - max(earliest, HISTORY_START_DATE)).days + 1)
+    covered_days = min(total_days, covered_days)
+    completed = bool(earliest and earliest <= HISTORY_START_DATE)
+    return {
+        "start_date": HISTORY_START_DATE,
+        "target_end_date": today,
+        "earliest_imported_date": earliest,
+        "covered_days": covered_days,
+        "total_days": total_days,
+        "progress_percent": round(covered_days * 100 / total_days, 1),
+        "completed": completed,
+    }
+
+
+def historical_backfill_window(db: Session, connection: DgteraConnection) -> tuple[date, date] | None:
+    status = historical_backfill_status(db, connection)
+    if status["completed"]:
+        return None
+    earliest = status["earliest_imported_date"]
+    if earliest is None:
+        end = status["target_end_date"]
+    else:
+        end = earliest - timedelta(days=1)
+    if end < HISTORY_START_DATE:
+        return None
+    start = max(HISTORY_START_DATE, end - timedelta(days=HISTORY_CHUNK_DAYS - 1))
+    return start, end
+
+
 def connection_is_due(connection: DgteraConnection) -> bool:
     if not connection.active or not connection.last_tested_at:
         return False
@@ -371,6 +422,8 @@ def _sync_unlocked(
     start_date: date,
     end_date: date,
     actor_user_id: int,
+    *,
+    mark_current_sync: bool,
 ) -> dict:
     try:
         source_orders = client_for(connection).daily_sales(start_date, end_date, connection.timezone)
@@ -381,7 +434,7 @@ def _sync_unlocked(
             company_id=connection.company_id,
             start_date=start_date,
             end_date=end_date,
-            window_label=f"00:01-23:59 {connection.timezone}",
+            window_label=_window_label(connection),
             status="ERROR",
             error_message=str(exc)[:1000],
             completed_at=utc_now(),
@@ -395,7 +448,7 @@ def _sync_unlocked(
         company_id=connection.company_id,
         start_date=start_date,
         end_date=end_date,
-        window_label=f"00:01-23:59 {connection.timezone}",
+        window_label=_window_label(connection),
         status="RUNNING",
         source_orders=len(source_orders),
         source_total=money(sum((money(row.get("total")) for row in source_orders), Decimal("0"))),
@@ -403,7 +456,24 @@ def _sync_unlocked(
     db.add(run)
     db.flush()
     counts = {"INSERTED": 0, "UPDATED": 0, "UNCHANGED": 0}
+    removed = 0
     try:
+        # A completed range is a source-of-truth snapshot.  Removing records
+        # no longer returned also clears cancelled orders and, importantly,
+        # orders assigned to the wrong day by the former UTC conversion.
+        source_ids = {str(row["order_id"]) for row in source_orders}
+        stale_ids = list(db.scalars(select(DgteraSalesOrder.id).where(
+            DgteraSalesOrder.connection_id == connection.id,
+            DgteraSalesOrder.sales_date >= start_date,
+            DgteraSalesOrder.sales_date <= end_date,
+            *(
+                [DgteraSalesOrder.external_order_id.not_in(source_ids)]
+                if source_ids else []
+            ),
+        )).all())
+        if stale_ids:
+            removed = len(stale_ids)
+            db.execute(delete(DgteraSalesOrder).where(DgteraSalesOrder.id.in_(stale_ids)))
         for source in source_orders:
             counts[_apply_order(db, connection, source)] += 1
         run.inserted_orders = counts["INSERTED"]
@@ -411,7 +481,8 @@ def _sync_unlocked(
         run.unchanged_orders = counts["UNCHANGED"]
         run.status = "COMPLETED"
         run.completed_at = utc_now()
-        connection.last_sync_at = utc_now()
+        if mark_current_sync:
+            connection.last_sync_at = utc_now()
         connection.last_error = None
         write_audit(
             db,
@@ -428,6 +499,7 @@ def _sync_unlocked(
                 "inserted": counts["INSERTED"],
                 "updated": counts["UPDATED"],
                 "unchanged": counts["UNCHANGED"],
+                "removed": removed,
                 "source_total": str(run.source_total),
                 "mode": "SALES_ONLY",
             },
@@ -443,7 +515,10 @@ def _sync_unlocked(
             company_id=connection.company_id if connection else run.company_id,
             start_date=start_date,
             end_date=end_date,
-            window_label=f"00:01-23:59 {connection.timezone if connection else 'Asia/Riyadh'}",
+            window_label=(
+                _window_label(connection)
+                if connection else f"00:01-23:59 Asia/Riyadh / {SOURCE_LOCAL_WINDOW_MARKER}"
+            ),
             status="ERROR",
             source_orders=len(source_orders),
             source_total=money(sum((money(row.get("total")) for row in source_orders), Decimal("0"))),
@@ -462,6 +537,7 @@ def _sync_unlocked(
         "inserted": counts["INSERTED"],
         "updated": counts["UPDATED"],
         "unchanged": counts["UNCHANGED"],
+        "removed": removed,
         "source_total": run.source_total,
         "mode": "SALES_ONLY",
     }
@@ -473,10 +549,19 @@ def sync_connection(
     start_date: date,
     end_date: date,
     actor_user_id: int,
+    *,
+    mark_current_sync: bool = True,
 ) -> dict:
     if not _SYNC_LOCK.acquire(blocking=False):
         raise DgteraSyncBusy("A DGTERA sales synchronization is already running")
     try:
-        return _sync_unlocked(db, connection, start_date, end_date, actor_user_id)
+        return _sync_unlocked(
+            db,
+            connection,
+            start_date,
+            end_date,
+            actor_user_id,
+            mark_current_sync=mark_current_sync,
+        )
     finally:
         _SYNC_LOCK.release()

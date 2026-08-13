@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
-  AlertTriangle, ArrowUpRight, BarChart3, Bell, BookOpenCheck, CheckCircle2,
+  AlertTriangle, ArrowUpRight, BarChart3, Bell, BookOpenCheck, CalendarDays, CheckCircle2,
   CircleDollarSign, ClipboardCheck, CreditCard, FileCheck2, FileText, Landmark,
   LayoutDashboard, ShieldCheck, ShoppingCart, Sparkles, TrendingUp, Users, WalletCards,
 } from 'lucide-react';
@@ -29,15 +30,18 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
       get(`/api/v1/finance/trial-balance?company_id=${apiCompanyId}`),
       companyId === 'restaurant' ? get(`/api/v1/pos/summary?company_id=${apiCompanyId}`) : Promise.resolve(null),
       companyId === 'gym' ? get(`/api/v1/gym/summary?company_id=${apiCompanyId}`) : Promise.resolve(null),
+      companyId === 'holding' || companyId === 'restaurant'
+        ? get(`/api/v1/integrations/dgtera/executive-summary?company_id=${apiCompanyId}`)
+        : Promise.resolve(null),
       get(`/api/v1/subledgers/aging?company_id=${apiCompanyId}&ledger_type=AR&as_of_date=${today}`),
       get(`/api/v1/subledgers/aging?company_id=${apiCompanyId}&ledger_type=AP&as_of_date=${today}`),
       get(`/api/v1/inventory/stock-summary?company_id=${apiCompanyId}`),
       get(`/api/v1/governance/summary?company_id=${apiCompanyId}`),
     ]).then((results) => {
       if (!active) return;
-      const [statements, trialBalance, pos, gym, arAging, apAging, inventory, governance] = results;
+      const [statements, trialBalance, pos, gym, dgtera, arAging, apAging, inventory, governance] = results;
       if (!results.some(Boolean)) { setLoadFailed(true); return; }
-      setLive({ statements, trialBalance, pos, gym, arAging, apAging, inventory, governance });
+      setLive({ statements, trialBalance, pos, gym, dgtera, arAging, apAging, inventory, governance });
     });
     return () => { active = false; };
   }, [apiCompanyId, companyId]);
@@ -167,10 +171,50 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
        [ar?'إجمالي الأصول':'Total Assets', num(position?.total_assets), '', true, 'violet', 'totalAssets'],
        [ar?'النقد والرصيد البنكي':'Cash & Bank Balance', num(cash), '', true, 'amber', 'cashBalance']];
   const icons=[<BarChart3 size={23}/>,<CircleDollarSign size={23}/>,<Landmark size={23}/>,<CreditCard size={23}/>];
+  const showDgteraHome = companyId === 'holding' || companyId === 'restaurant';
+  const dgteraCards: Array<{
+    key: 'DAY' | 'WEEK' | 'MONTH' | 'YEAR';
+    title: string;
+    target: ExecutiveNavigationKey;
+    tone: string;
+    icon: ReactNode;
+  }> = [
+    {key:'DAY', title:ar?'مبيعات اليوم':'Today sales', target:'dgteraDailySales', tone:'blue', icon:<ShoppingCart size={23}/>},
+    {key:'WEEK', title:ar?'مبيعات الأسبوع':'Week-to-date sales', target:'dgteraWeeklySales', tone:'violet', icon:<CalendarDays size={23}/>},
+    {key:'MONTH', title:ar?'مبيعات الشهر':'Month-to-date sales', target:'dgteraMonthlySales', tone:'amber', icon:<BarChart3 size={23}/>},
+    {key:'YEAR', title:ar?'مبيعات السنة':'Year-to-date sales', target:'dgteraYearlySales', tone:'green', icon:<TrendingUp size={23}/>},
+  ];
+  const dgteraTrend = (period: any) => {
+    const change = numeric(period?.comparison?.previous_change_percent);
+    if (change === null) return ar ? 'لا توجد فترة سابقة للمقارنة' : 'No previous-period comparison';
+    const value = `${change > 0 ? '+' : ''}${change.toFixed(1)}%`;
+    return ar ? `${value} عن الفترة السابقة` : `${value} vs previous period`;
+  };
   return <>
         {loadFailed && <div className="kpi-source-note" role="status">{ar ? 'تعذر تحميل الأرقام الحية - لن تُعرض أي أرقام تقديرية.' : 'Live figures unavailable - no estimated numbers are shown.'}</div>}
     {periodLabel && <div className="kpi-source-note">{ar ? `المصدر: دفتر الأستاذ المرحّل · الفترة ${periodLabel}` : `Source: posted general ledger · period ${periodLabel}`}</div>}
     <div className="kpis executive-kpis">{kpis.map(([title,value,trend,good,tone,target],index) => <Kpi key={String(title)} title={String(title)} value={String(value)} trend={String(trend)} good={Boolean(good)} tone={String(tone)} icon={icons[index]} onClick={()=>go(target)}/>)}</div>
+
+    {showDgteraHome && <>
+      <div className="kpi-source-note">
+        {live?.dgtera
+          ? (ar ? 'مبيعات DGTERA — تظهر في القابضة وشركة المطاعم من نفس السجل دون تكرار.' : 'DGTERA sales — shared by holding and restaurant from one non-duplicated record set.')
+          : (ar ? 'مبيعات DGTERA غير متاحة حاليًا؛ افتح بطاقة المبيعات لمراجعة حالة الربط.' : 'DGTERA sales are currently unavailable; open a sales card to review the connection.')}
+      </div>
+      <div className="kpis executive-kpis dgtera-home-kpis">{dgteraCards.map((card) => {
+        const period = live?.dgtera?.periods?.[card.key];
+        return <Kpi
+          key={card.key}
+          title={card.title}
+          value={num(period?.metrics?.current?.sales)}
+          trend={dgteraTrend(period)}
+          good={(numeric(period?.comparison?.previous_change_percent) ?? 0) >= 0}
+          tone={card.tone}
+          icon={card.icon}
+          onClick={()=>go(card.target)}
+        />;
+      })}</div>
+    </>}
 
     <div className="executive-main-grid">
       <Panel title={ar?'الأداء المالي — الفترة الحالية':'Financial Performance — Current Period'} icon={<BarChart3 size={18}/> } className="performance-panel" onOpen={()=>go('financialPerformance')} openLabel={ar?'فتح القوائم المالية':'Open financial statements'}>
