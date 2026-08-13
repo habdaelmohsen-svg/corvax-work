@@ -41,7 +41,7 @@ HISTORY_START_DATE = date(2025, 1, 1)
 HISTORY_CHUNK_DAYS = 31
 LIVE_SYNC_INTERVAL_MINUTES = 2
 HISTORY_RECHECK_INTERVAL_HOURS = 24
-SOURCE_LOCAL_WINDOW_MARKER = "odoo-utc-riyadh-open-orders-strict-v5"
+SOURCE_LOCAL_WINDOW_MARKER = "odoo-utc-riyadh-line-report-strict-v6"
 
 
 class DgteraSyncBusy(RuntimeError):
@@ -279,6 +279,17 @@ def _apply_order(db: Session, connection: DgteraConnection, source: dict) -> str
     )
     customer = _upsert_customer(db, connection, customer_source, is_platform=is_platform)
     platform = _upsert_platform(db, connection, source.get("delivery_platform_name"))
+    # Product masters are shared across every sales date, while a line label
+    # can vary by size/combo.  Refresh the master even when the order payload
+    # itself is unchanged so a historical slice can never leave the global
+    # master in a state that makes the next live-day reconciliation fail.
+    products_by_external_id: dict[str, DgteraProduct] = {}
+    for line_source in source.get("lines", []):
+        product_source = line_source["product"]
+        external_product_id = str(product_source["product_id"])
+        products_by_external_id[external_product_id] = _upsert_product(
+            db, connection, product_source
+        )
     external_id = str(source["order_id"])
     order = db.scalar(select(DgteraSalesOrder).where(
         DgteraSalesOrder.connection_id == connection.id,
@@ -343,12 +354,15 @@ def _apply_order(db: Session, connection: DgteraConnection, source: dict) -> str
     db.flush()
 
     for line_source in source.get("lines", []):
-        product = _upsert_product(db, connection, line_source["product"])
+        product = products_by_external_id[str(line_source["product"]["product_id"])]
         db.add(DgteraSalesOrderLine(
             order_id=order.id,
             external_line_id=str(line_source["line_id"])[:80],
             product_id=product.id,
-            product_name=str(line_source["product"]["name"])[:300],
+            product_name=str(
+                line_source.get("line_product_name")
+                or line_source["product"]["name"]
+            )[:300],
             quantity=quantity(line_source.get("quantity")),
             unit_price=quantity(line_source.get("unit_price")),
             discount_percent=quantity(line_source.get("discount_percent")),
@@ -546,7 +560,12 @@ def _strict_reconciliation(
             line_prefix = f"{prefix}.line[{line_id}]"
             product = product_by_id.get(line.product_id)
             same("products", f"{line_prefix}.product_id", str(source_line["product"]["product_id"]), product.external_product_id if product else None)
-            same("products", f"{line_prefix}.product_name", str(source_line["product"]["name"])[:300], line.product_name)
+            same(
+                "products",
+                f"{line_prefix}.product_name",
+                str(source_line.get("line_product_name") or source_line["product"]["name"])[:300],
+                line.product_name,
+            )
             same("quantity", f"{line_prefix}.quantity", quantity(source_line.get("quantity")), quantity(line.quantity))
             same("lines", f"{line_prefix}.unit_price", quantity(source_line.get("unit_price")), quantity(line.unit_price))
             same("lines", f"{line_prefix}.discount_percent", quantity(source_line.get("discount_percent")), quantity(line.discount_percent))
@@ -1164,7 +1183,18 @@ def _sync_unlocked(
         db.rollback()
         connection = db.get(DgteraConnection, connection.id)
         if connection:
-            connection.last_error = f"Sales mirror failed ({type(exc).__name__})"
+            if isinstance(exc, DgteraReconciliationError):
+                first_paths = [
+                    str(item.get("path") or "")
+                    for item in exc.report.get("mismatches", [])[:3]
+                    if item.get("path")
+                ]
+                detail = f": {exc.report.get('mismatch_count', 0)} differences"
+                if first_paths:
+                    detail += f" [{', '.join(first_paths)}]"
+                connection.last_error = f"Sales mirror failed (DgteraReconciliationError){detail}"[:1000]
+            else:
+                connection.last_error = f"Sales mirror failed ({type(exc).__name__})"
         failed_report = exc.report if isinstance(exc, DgteraReconciliationError) else None
         failed = DgteraSyncRun(
             connection_id=connection.id if connection else run.connection_id,

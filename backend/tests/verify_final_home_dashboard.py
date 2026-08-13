@@ -53,7 +53,8 @@ assert all(target in TARGETS for target in ("dgteraDailySales", "dgteraWeeklySal
 assert "عرض المبيعات" in DGTERA_PAGE and "setAppliedFilters" in DGTERA_PAGE
 assert "reportComplete?" in DGTERA_PAGE and "Totals are hidden until every day is covered" in DGTERA_PAGE
 assert "Strict 100% reconciliation" in DGTERA_PAGE and "verification_hash" in DGTERA_PAGE
-assert "setInterval(()=>load().catch(()=>{}),120000)" in DGTERA_PAGE
+assert "setInterval(()=>load().catch(rejectStale),120000)" in DGTERA_PAGE
+assert "setSnapshot(null);setAnalytics(null)" in DGTERA_PAGE
 
 quick_actions = [line for line in EXECUTIVE.splitlines() if "<QuickAction " in line]
 assert len(quick_actions) == 8

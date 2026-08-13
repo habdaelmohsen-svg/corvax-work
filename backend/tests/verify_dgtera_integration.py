@@ -47,6 +47,7 @@ from app.models import (  # noqa: E402
     Party,
 )
 from app.services.dgtera_connector import (  # noqa: E402
+    BRANCH_REPORT_FINANCIAL_SOURCE,
     BRANCH_REPORT_ORDER_STATES,
     DAY_END,
     DAY_START,
@@ -157,11 +158,15 @@ class StubOdooClient(Odoo14Client):
         if model == "pos.order.line":
             result = []
             for order_row in orders:
-                total = order_row["amount_total"]
+                # Open orders can have a stale header while the Branch Sales
+                # line view already reflects the current sale.  CORVAX must
+                # use the report-line values, never the stale header.
+                total = 22 if order_row["id"] == 2 else order_row["amount_total"]
+                subtotal = 19 if order_row["id"] == 2 else order_row["amount_untaxed"]
                 result.append({
                     "id": 100 + order_row["id"], "order_id": [order_row["id"], order_row["name"]],
-                    "product_id": [2001, "Burger"], "full_product_name": "Burger", "qty": 1,
-                    "price_unit": total, "discount": 0, "price_subtotal": order_row["amount_untaxed"],
+                    "product_id": [2001, "Burger"], "full_product_name": "Burger / Large", "qty": 1,
+                    "price_unit": total, "discount": 0, "price_subtotal": subtotal,
                     "price_subtotal_incl": total, "tax_ids": [15],
                 })
             return result
@@ -189,6 +194,12 @@ def verify_real_connector_window(sales_date: date) -> None:
     assert rows[1]["date_order_local"].endswith("23:59:59")
     assert rows[0]["service_mode"] == "TAKEAWAY"
     assert rows[0]["state"] == "draft"
+    assert rows[0]["source_metadata"]["corvax_financial_source"] == BRANCH_REPORT_FINANCIAL_SOURCE
+    assert rows[0]["total"] == "22.00" and rows[0]["vat_amount"] == "3.00"
+    assert rows[0]["line_total_difference"] == "-1.00"
+    assert rows[0]["source_metadata"]["odoo_order_header"]["total"] == "23.00"
+    assert rows[0]["lines"][0]["product"]["name"] == "Burger"
+    assert rows[0]["lines"][0]["line_product_name"] == "Burger / Large"
     assert rows[1]["sales_scope"] == "EXTERNAL" and rows[1]["delivery_platform_name"] == "Keeta"
     assert set(stub.models_read) == {
         "pos.order", "pos.session", "pos.order.line", "product.product",
@@ -386,8 +397,12 @@ def main() -> None:
                 assert gap_status["completed"] is False and gap_status["no_date_gaps"] is False
                 db.delete(isolated_old_run)
                 db.flush()
+                product = db.scalar(select(DgteraProduct))
+                product.name = "Stale historical line variant"
+                db.commit()
                 duplicate = sync_connection(db, connection, sales_date, sales_date, 1)
                 assert duplicate["unchanged"] == 1 and duplicate["inserted"] == 0
+                assert db.scalar(select(DgteraProduct)).name == "Classic Burger"
 
             source.update({
                 "subtotal": "200.00",
@@ -524,9 +539,11 @@ def main() -> None:
                 f"/api/v1/integrations/dgtera/snapshot?company_id=1&start_date={sales_date}&end_date={sales_date}&limit=1",
                 headers=headers,
             ))
-            assert complete_totals["totals"]["orders"] == 506
-            assert float(complete_totals["totals"]["sales"]) == 735
-            assert len(complete_totals["orders"]) == 1
+            assert complete_totals["trusted_sales"] is False
+            assert complete_totals["totals"] is None
+            assert complete_totals["orders"] == []
+            assert complete_totals["branch_sales"] == []
+            assert complete_totals["product_sales"] == []
             assert complete_totals["reconciliation"]["matched"] is False
             assert complete_totals["reconciliation"]["mismatch_count"] > 0
             assert complete_totals["reconciliation"]["verification_hash"] is None
@@ -548,6 +565,9 @@ def main() -> None:
                     else:
                         raise AssertionError("strict mismatch was accepted")
                     assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 506
+                    db.refresh(connection)
+                    assert "1 differences" in str(connection.last_error)
+                    assert "order[9001].vat" in str(connection.last_error)
 
             # There is intentionally no user-triggered import endpoint.
             assert client.post("/api/v1/integrations/dgtera/sync", headers=headers, json={}).status_code in {404, 405}

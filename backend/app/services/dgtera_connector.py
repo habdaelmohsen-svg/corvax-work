@@ -36,6 +36,9 @@ QTY = Decimal("0.0001")
 BRANCH_REPORT_ORDER_STATES = ("draft", "paid", "done", "invoiced")
 DAY_START = time(0, 0, 0)
 DAY_END = time(23, 59, 59)
+BRANCH_REPORT_FINANCIAL_SOURCE = (
+    "pos.order.line:price_subtotal+price_subtotal_incl"
+)
 
 DELIVERY_TOKENS = (
     "hungerstation", "hunger station", "هنقرستيشن", "هنقر ستيشن",
@@ -525,9 +528,17 @@ class Odoo14Client:
                     raise DgteraRemoteError(f"DGTERA POS line {line.get('id')} has no product")
                 product = product_by_id.get(product_id, {})
                 category_id, category_name = _many2one(product.get("categ_id"))
+                # ``full_product_name`` is a line label and may contain combo,
+                # size or attribute text.  It must not overwrite the shared
+                # product master because the same product can legitimately
+                # have a different line label on another order/day.
                 product_name = str(
-                    line.get("full_product_name") or product.get("display_name")
-                    or line.get("name") or product_display or product_id
+                    product.get("display_name") or product.get("name")
+                    or product_display or product_id
+                )
+                line_product_name = str(
+                    line.get("full_product_name") or line.get("name")
+                    or product_name
                 )
                 qty = quantity(line.get("qty"))
                 unit_price = Decimal(str(line.get("price_unit") or 0)).quantize(QTY, rounding=ROUND_HALF_UP)
@@ -548,6 +559,7 @@ class Odoo14Client:
                         "active": bool(product.get("active", True)),
                         "source_updated_at": product.get("write_date") or None,
                     },
+                    "line_product_name": line_product_name,
                     "quantity": format(qty, "f"),
                     "unit_price": format(unit_price, "f"),
                     "discount_percent": format(discount, "f"),
@@ -557,12 +569,24 @@ class Odoo14Client:
                     "tax_ids": [str(value) for value in _ids(line.get("tax_ids"))],
                 })
 
-            amount_total = money(order.get("amount_total"))
-            amount_tax = money(order.get("amount_tax"))
-            amount_untaxed = money(order.get("amount_untaxed"))
+            # DGTERA's Branch Sales report is a POS-line report (quantity,
+            # sales before tax, tax and sales including tax).  Derive the
+            # canonical financial values from the exact line fields used by
+            # that report instead of trusting a possibly stale order header.
+            # The original header remains in source_metadata as an audit
+            # witness; it is never used for displayed sales.
+            header_total = money(order.get("amount_total"))
+            header_tax = money(order.get("amount_tax"))
+            header_untaxed = money(order.get("amount_untaxed"))
             if "amount_untaxed" not in order:
-                amount_untaxed = money(amount_total - amount_tax)
-            line_total = money(sum((money(line["total"]) for line in canonical_lines), Decimal("0")))
+                header_untaxed = money(header_total - header_tax)
+            amount_untaxed = money(sum(
+                (money(line["subtotal"]) for line in canonical_lines), Decimal("0")
+            ))
+            amount_total = money(sum(
+                (money(line["total"]) for line in canonical_lines), Decimal("0")
+            ))
+            amount_tax = money(amount_total - amount_untaxed)
             ordered_utc = order["_ordered_utc"]
             ordered_local = order["_ordered_local"]
             customer = None
@@ -596,10 +620,18 @@ class Odoo14Client:
                 "amount_paid": format(money(order.get("amount_paid")), "f"),
                 "amount_return": format(money(order.get("amount_return")), "f"),
                 "discount_amount": format(discount_amount, "f"),
-                "line_total_difference": format(money(line_total - amount_total), "f"),
+                "line_total_difference": format(money(amount_total - header_total), "f"),
                 "lines": canonical_lines,
                 "payments": sorted(canonical_payments, key=lambda item: item["payment_id"]),
-                "source_metadata": optional_values,
+                "source_metadata": {
+                    **optional_values,
+                    "corvax_financial_source": BRANCH_REPORT_FINANCIAL_SOURCE,
+                    "odoo_order_header": {
+                        "subtotal": format(header_untaxed, "f"),
+                        "vat_amount": format(header_tax, "f"),
+                        "total": format(header_total, "f"),
+                    },
+                },
                 "source_updated_at": order.get("write_date") or None,
             }
             canonical_json = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

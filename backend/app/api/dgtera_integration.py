@@ -487,6 +487,9 @@ def snapshot(
     strict_evidence = dgtera_sales_sync.strict_range_reconciliation_evidence(
         db, connection, start, end
     )
+    trusted_sales = bool(
+        strict_evidence["verified_from_live_source"] and strict_evidence["matched"]
+    )
     reconciliation = {
         "available": bool(strict_evidence["verified_from_live_source"]),
         "strict": True,
@@ -562,7 +565,12 @@ def snapshot(
         "window": {"start_date": start, "end_date": end, "day_start": "00:00", "day_end": "23:59:59", "timezone": connection.timezone},
         "filters": {"branch_id": branch_id, "sales_scope": sales_scope, "service_mode": service_mode, "limit": limit},
         "coverage": _range_coverage(db, connection, start, end),
-        "totals": totals,
+        # Fail closed at the API boundary.  Old mirror rows can remain in the
+        # database for rollback/recovery, but no consumer may receive their
+        # financial values until this exact date range has a live-source,
+        # zero-difference strict proof.
+        "trusted_sales": trusted_sales,
+        "totals": totals if trusted_sales else None,
         "master_counts": {
             "branches": len(branches),
             "products": db.scalar(select(func.count(DgteraProduct.id)).where(
@@ -575,15 +583,18 @@ def snapshot(
             )) or 0,
         },
         "branches": [{"branch_id": row.branch_id, "external_id": row.external_config_id, "code": row.code, "name": row.name} for row in branches],
-        "branch_sales": branch_sales,
-        "scope_sales": scope_sales,
-        "service_sales": service_sales,
-        "platform_sales": [row for row in platform_sales if row["key"] != "No delivery platform"],
-        "payment_channels": payment_channels,
+        "branch_sales": branch_sales if trusted_sales else [],
+        "scope_sales": scope_sales if trusted_sales else [],
+        "service_sales": service_sales if trusted_sales else [],
+        "platform_sales": (
+            [row for row in platform_sales if row["key"] != "No delivery platform"]
+            if trusted_sales else []
+        ),
+        "payment_channels": payment_channels if trusted_sales else [],
         "reconciliation": reconciliation,
-        "customer_sales": customer_sales,
-        "product_sales": product_sales,
-        "orders": order_rows,
+        "customer_sales": customer_sales if trusted_sales else [],
+        "product_sales": product_sales if trusted_sales else [],
+        "orders": order_rows if trusted_sales else [],
     }
 
 
@@ -760,6 +771,11 @@ def analytics(
         coverage[key]["complete"] = bool(
             coverage[key]["complete"] and reconciliation[key]["matched"]
         )
+    trusted_metrics = {
+        key: metrics[key] if coverage[key]["complete"] else None
+        for key in windows
+    }
+    current_trusted = coverage["current"]["complete"]
     return {
         "period": period,
         "as_of_date": as_of,
@@ -768,16 +784,25 @@ def analytics(
             for key, window in windows.items()
         },
         "filters": {"branch_id": branch_id, "sales_scope": sales_scope, "service_mode": service_mode},
-        "metrics": metrics,
+        "metrics": trusted_metrics,
         "coverage": coverage,
         "reconciliation": reconciliation,
         "comparison": {
-            "previous_change_percent": _change_percent(current["subtotal"], previous["subtotal"]),
-            "next_change_percent": _change_percent(next_period["subtotal"], current["subtotal"]),
-            "prior_year_change_percent": _change_percent(current["subtotal"], prior_year["subtotal"]),
+            "previous_change_percent": (
+                _change_percent(current["subtotal"], previous["subtotal"])
+                if current_trusted and coverage["previous"]["complete"] else None
+            ),
+            "next_change_percent": (
+                _change_percent(next_period["subtotal"], current["subtotal"])
+                if current_trusted and coverage["next"]["complete"] else None
+            ),
+            "prior_year_change_percent": (
+                _change_percent(current["subtotal"], prior_year["subtotal"])
+                if current_trusted and coverage["prior_year"]["complete"] else None
+            ),
         },
-        "branch_comparison": branch_comparison,
-        "trend": trend,
+        "branch_comparison": branch_comparison if current_trusted else [],
+        "trend": trend if current_trusted else [],
         "history": dgtera_sales_sync.historical_backfill_status(db, connection),
     }
 
@@ -809,29 +834,46 @@ def executive_summary(
             key: _range_coverage(db, connection, window[0], window[1])
             for key, window in windows.items()
         }
-        current_evidence = dgtera_sales_sync.strict_range_reconciliation_evidence(
-            db, connection, windows["current"][0], windows["current"][1]
-        )
-        coverage["current"]["complete"] = bool(
-            coverage["current"]["complete"] and current_evidence["matched"]
-        )
+        # The home page consumes only the current and previous windows.  Keep
+        # this endpoint lightweight while still proving every value it sends;
+        # the full next/prior-year matrix remains available on /analytics.
+        evidence = {
+            key: dgtera_sales_sync.strict_range_reconciliation_evidence(
+                db, connection, window[0], window[1]
+            )
+            for key, window in windows.items()
+            if key in {"current", "previous"}
+        }
+        for key in windows:
+            coverage[key]["complete"] = bool(
+                coverage[key]["complete"]
+                and key in evidence
+                and evidence[key]["matched"]
+            )
+        trusted_metrics = {
+            key: metrics[key] if coverage[key]["complete"] else None
+            for key in windows
+        }
         periods[period] = {
             "windows": {
                 key: {"start_date": window[0], "end_date": window[1]}
                 for key, window in windows.items()
             },
-            "metrics": metrics,
+            "metrics": trusted_metrics,
             "coverage": coverage,
-            "reconciliation": current_evidence,
+            "reconciliation": evidence["current"],
             "comparison": {
-                "previous_change_percent": _change_percent(
-                    metrics["current"]["subtotal"], metrics["previous"]["subtotal"]
+                "previous_change_percent": (
+                    _change_percent(metrics["current"]["subtotal"], metrics["previous"]["subtotal"])
+                    if coverage["current"]["complete"] and coverage["previous"]["complete"] else None
                 ),
-                "next_change_percent": _change_percent(
-                    metrics["next"]["subtotal"], metrics["current"]["subtotal"]
+                "next_change_percent": (
+                    _change_percent(metrics["next"]["subtotal"], metrics["current"]["subtotal"])
+                    if coverage["current"]["complete"] and coverage["next"]["complete"] else None
                 ),
-                "prior_year_change_percent": _change_percent(
-                    metrics["current"]["subtotal"], metrics["prior_year"]["subtotal"]
+                "prior_year_change_percent": (
+                    _change_percent(metrics["current"]["subtotal"], metrics["prior_year"]["subtotal"])
+                    if coverage["current"]["complete"] and coverage["prior_year"]["complete"] else None
                 ),
             },
         }

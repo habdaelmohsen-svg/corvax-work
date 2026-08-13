@@ -13,7 +13,8 @@ type DgteraOrder={
   subtotal:number;vat:number;total:number;payments:Array<{method:string;amount:number}>;
 };
 type Snapshot={
-  totals:{orders:number;quantity:number;subtotal:number;vat:number;sales:number};
+  trusted_sales?:boolean;
+  totals:{orders:number;quantity:number;subtotal:number;vat:number;sales:number}|null;
   product_sales:ProductRow[];platform_sales:SummaryRow[];payment_channels:SummaryRow[];
   orders:DgteraOrder[];reconciliation?:{available:boolean;matched:boolean;source_total:number|null;imported_total:number;difference:number|null};
 };
@@ -50,11 +51,16 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [message,setMessage]=useState('');
 
   const load=async()=>{
-    const currentStatus=await json(`/api/v1/integrations/dgtera/status?company_id=${companyId}`).catch(()=>({configured:false}));
-    setStatus(currentStatus);
-    if(!currentStatus.configured){setSnapshot(null);return;}
-    const data=await json(`/api/v1/integrations/dgtera/snapshot?company_id=${companyId}&start_date=${salesDate}&end_date=${salesDate}&limit=1000`);
-    setSnapshot(data);setMessage('');
+    try{
+      const currentStatus=await json(`/api/v1/integrations/dgtera/status?company_id=${companyId}`).catch(()=>({configured:false}));
+      setStatus(currentStatus);
+      if(!currentStatus.configured){setSnapshot(null);return;}
+      const data=await json(`/api/v1/integrations/dgtera/snapshot?company_id=${companyId}&start_date=${salesDate}&end_date=${salesDate}&limit=1000`);
+      setSnapshot(data);setMessage('');
+    }catch(error){
+      setSnapshot(null);
+      throw error;
+    }
   };
   useEffect(()=>{load().catch(e=>setMessage(String(e.message||e)))},[companyId,salesDate]);
   useEffect(()=>{
@@ -85,6 +91,9 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
       {ar?'لم يتم العثور على ربط DGTERA في القابضة أو شركة المطاعم. افتح تبويب «الربط» لإكمال الإعداد.':'No DGTERA connection was found in the holding or restaurant company. Open Integration to configure it.'}
     </div>}
     {message&&<div style={{padding:12,borderRadius:10,background:'#fee2e2',color:'#991b1b'}}>{message}</div>}
+    {status.configured&&snapshot&&!snapshot.trusted_sales&&<div style={{padding:12,borderRadius:10,background:'#fee2e2',color:'#991b1b',lineHeight:1.8}}>
+      {ar?'تم إيقاف عرض المبيعات لأن الفترة لم تجتز المطابقة الصارمة مع DGTERA دون أي فرق. لا يتم استخدام أرقام نقطة البيع المحلية أو أرقام محفوظة قديمة كبديل.':'Sales are hidden because this period has not passed zero-difference strict reconciliation with DGTERA. Local POS or stale cached figures are never used as a fallback.'}
+    </div>}
 
     {status.configured&&snapshot?.reconciliation?.available&&<div style={{padding:12,marginBottom:12,borderRadius:10,background:snapshot.reconciliation.matched?'#dcfce7':'#fee2e2',color:snapshot.reconciliation.matched?'#166534':'#991b1b',lineHeight:1.8}}>
       <b>{snapshot.reconciliation.matched?(ar?'✓ مبيعات اليوم مطابقة مع DGTERA':'✓ Day sales reconciled with DGTERA'):(ar?'⚠ يوجد فرق مطابقة':'⚠ Reconciliation difference')}</b>

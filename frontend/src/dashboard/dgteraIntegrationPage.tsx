@@ -23,7 +23,7 @@ type Order={
   lines:OrderLine[];payments:Payment[];
 };
 type Snapshot={
-  mode:string;window:any;totals:any;master_counts:any;branches:any[];
+  mode:string;window:any;trusted_sales:boolean;totals:any|null;master_counts:any;branches:any[];
   branch_sales:SummaryRow[];scope_sales:SummaryRow[];service_sales:SummaryRow[];
   platform_sales:SummaryRow[];payment_channels:SummaryRow[];customer_sales:SummaryRow[];product_sales:ProductRow[];orders:Order[];
   coverage:Coverage;
@@ -41,7 +41,7 @@ type Period='DAY'|'WEEK'|'MONTH'|'YEAR';
 type Metrics={orders:number;quantity:number;subtotal:number;vat:number;sales:number;refunds:number};
 type Analytics={
   period:Period;as_of_date:string;windows:Record<'current'|'previous'|'next'|'prior_year',{start_date:string;end_date:string}>;
-  metrics:Record<'current'|'previous'|'next'|'prior_year',Metrics>;
+  metrics:Record<'current'|'previous'|'next'|'prior_year',Metrics|null>;
   coverage:Record<'current'|'previous'|'next'|'prior_year',Coverage>;
   comparison:{previous_change_percent:number|null;next_change_percent:number|null;prior_year_change_percent:number|null};
   branch_comparison:Array<{branch_id:number;branch:string;orders:number;quantity:number;subtotal:number;vat:number;sales:number;previous_sales:number;previous_change_percent:number|null;next_sales:number;next_change_percent:number|null;prior_year_sales:number;prior_year_change_percent:number|null}>;
@@ -128,9 +128,10 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
     }finally{setReportLoading(false)}
   };
 
-  useEffect(()=>{load().catch(e=>{setMsg(String(e.message||e));setIsError(true)})},[companyId,appliedFilters,filterRevision,compareDate,period]);
+  const rejectStale=(e:any)=>{setSnapshot(null);setAnalytics(null);setMsg(String(e.message||e));setIsError(true)};
+  useEffect(()=>{load().catch(rejectStale)},[companyId,appliedFilters,filterRevision,compareDate,period]);
   useEffect(()=>{
-    const timer=window.setInterval(()=>load().catch(()=>{}),120000);
+    const timer=window.setInterval(()=>load().catch(rejectStale),120000);
     return()=>window.clearInterval(timer);
   },[companyId,appliedFilters,compareDate,period]);
 
@@ -169,7 +170,7 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
   const nextMetrics=analytics?.metrics.next;
   const priorYearMetrics=analytics?.metrics.prior_year;
   const periodComplete=(key:'current'|'previous'|'next'|'prior_year')=>analytics?.coverage?.[key]?.complete===true;
-  const metricNet=(key:'current'|'previous'|'next'|'prior_year',metrics:Metrics|undefined)=>periodComplete(key)?Number(metrics?.subtotal||0):0;
+  const metricNet=(key:'current'|'previous'|'next'|'prior_year',metrics:Metrics|null|undefined)=>periodComplete(key)?Number(metrics?.subtotal||0):0;
   const metricMoney=(key:'current'|'previous'|'next'|'prior_year',value:number|undefined)=>periodComplete(key)?money2(Number(value||0),ar):'—';
   const metricCount=(key:'current'|'previous'|'next'|'prior_year',value:number|undefined)=>periodComplete(key)?String(value||0):'—';
   const comparisonMax=Math.max(1,metricNet('current',currentMetrics),metricNet('previous',previousMetrics),metricNet('next',nextMetrics),metricNet('prior_year',priorYearMetrics));
