@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -111,24 +111,31 @@ class StubOdooClient(Odoo14Client):
     def _search_read_all(self, model, domain, fields, *, order="id", maximum):
         self.models_read.append(model)
         d = self.sales_date
+        previous_day = d - timedelta(days=1)
         orders = [
             {
-                "id": 1, "name": "EXCLUDED-0000", "pos_reference": "EXCLUDED-0000",
-                "date_order": f"{d.isoformat()} 00:00:00", "state": "done",
+                "id": 1, "name": "EXCLUDED-PREVIOUS", "pos_reference": "EXCLUDED-PREVIOUS",
+                "date_order": f"{previous_day.isoformat()} 20:59:59", "state": "done",
                 "session_id": [501, "S501"], "partner_id": False, "lines": [101],
                 "amount_untaxed": 10, "amount_tax": 1.5, "amount_total": 11.5, "amount_paid": 11.5,
             },
             {
-                "id": 2, "name": "INCLUDED-0001", "pos_reference": "INCLUDED-0001",
-                "date_order": f"{d.isoformat()} 00:01:00", "state": "done",
+                "id": 2, "name": "INCLUDED-0000", "pos_reference": "INCLUDED-0000",
+                "date_order": f"{previous_day.isoformat()} 21:00:00", "state": "done",
                 "session_id": [501, "S501"], "partner_id": False, "lines": [102],
                 "amount_untaxed": 20, "amount_tax": 3, "amount_total": 23, "amount_paid": 23,
             },
             {
                 "id": 3, "name": "INCLUDED-2359", "pos_reference": "INCLUDED-2359",
-                "date_order": f"{d.isoformat()} 23:59:59", "state": "done",
+                "date_order": f"{d.isoformat()} 20:59:59", "state": "done",
                 "session_id": [501, "S501"], "partner_id": [301, "Keeta"], "lines": [103],
                 "amount_untaxed": 30, "amount_tax": 4.5, "amount_total": 34.5, "amount_paid": 34.5,
+            },
+            {
+                "id": 4, "name": "EXCLUDED-NEXT", "pos_reference": "EXCLUDED-NEXT",
+                "date_order": f"{d.isoformat()} 21:00:00", "state": "done",
+                "session_id": [501, "S501"], "partner_id": False, "lines": [104],
+                "amount_untaxed": 40, "amount_tax": 6, "amount_total": 46, "amount_paid": 46,
             },
         ]
         if model == "pos.order":
@@ -161,12 +168,12 @@ class StubOdooClient(Odoo14Client):
 
 
 def verify_real_connector_window(sales_date: date) -> None:
-    # DGTERA's visible branch report treats date_order as a source-local,
-    # database-naive business timestamp.  CORVAX must use the same date split.
+    # Odoo RPC Datetime strings are UTC. Riyadh's business day therefore maps
+    # to 21:00 UTC on the previous date through 20:59:59 UTC on the date.
     stub = StubOdooClient(sales_date)
     rows = stub.daily_sales(sales_date, sales_date, "Asia/Riyadh")
     assert [row["order_id"] for row in rows] == ["2", "3"]
-    assert rows[0]["date_order_local"].endswith("00:01:00")
+    assert rows[0]["date_order_local"].endswith("00:00:00")
     assert rows[1]["date_order_local"].endswith("23:59:59")
     assert rows[0]["service_mode"] == "TAKEAWAY"
     assert rows[1]["sales_scope"] == "EXTERNAL" and rows[1]["delivery_platform_name"] == "Keeta"
@@ -178,7 +185,7 @@ def verify_real_connector_window(sales_date: date) -> None:
 
 
 def main() -> None:
-    assert str(DAY_START) == "00:01:00"
+    assert str(DAY_START) == "00:00:00"
     assert str(DAY_END) == "23:59:59"
     assert validate_dgtera_url("https://cheesehouse.dgtera.com/") == "https://cheesehouse.dgtera.com"
     for unsafe in ("http://cheesehouse.dgtera.com", "https://example.com", "https://user:pass@cheesehouse.dgtera.com"):
@@ -281,9 +288,10 @@ def main() -> None:
                 },
             ))
             assert saved["connected"] and saved["mode"] == "SALES_ONLY"
-            assert saved["day_window"] == "00:01-23:59 Asia/Riyadh"
-            assert saved["sync_interval_minutes"] == 5
+            assert saved["day_window"] == "00:00-23:59:59 Asia/Riyadh"
+            assert saved["sync_interval_minutes"] == 2
             assert saved["initial_sync"]["inserted"] == 1
+            assert saved["initial_sync"]["reconciled"] is True
             assert all(secret not in str(saved) for secret in secrets)
 
             with SessionLocal() as db:
@@ -311,7 +319,7 @@ def main() -> None:
                 connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
                 next_history = historical_backfill_window(db, connection)
                 assert next_history and next_history[1] == date.fromordinal(sales_date.replace(day=1).toordinal() - 1)
-                assert (next_history[1] - next_history[0]).days == 6
+                assert (next_history[1] - next_history[0]).days == 30
                 duplicate = sync_connection(db, connection, sales_date, sales_date, 1)
                 assert duplicate["unchanged"] == 1 and duplicate["inserted"] == 0
 
@@ -339,12 +347,14 @@ def main() -> None:
                 headers=headers,
             ))
             assert snap["mode"] == "SALES_ONLY"
-            assert snap["window"]["day_start"] == "00:01" and snap["window"]["day_end"] == "23:59"
+            assert snap["window"]["day_start"] == "00:00" and snap["window"]["day_end"] == "23:59:59"
             assert snap["totals"]["orders"] == 1 and float(snap["totals"]["external_sales"]) == 230
             assert float(snap["totals"]["quantity"]) == 2
             assert snap["master_counts"] == {"branches": 1, "products": 1, "customers": 1}
             assert float(snap["branch_sales"][0]["quantity"]) == 2
             assert snap["platform_sales"][0]["key"] == "HungerStation"
+            assert snap["payment_channels"][0]["key"] == "PLATFORM_CREDIT"
+            assert snap["reconciliation"]["matched"] is True
             assert snap["product_sales"][0]["key"] == "Classic Burger"
             assert len(snap["orders"][0]["lines"]) == 1 and len(snap["orders"][0]["payments"]) == 1
             analytics = ok(client.get(
@@ -353,6 +363,7 @@ def main() -> None:
             ))
             assert float(analytics["metrics"]["current"]["sales"]) == 230
             assert float(analytics["metrics"]["current"]["quantity"]) == 2
+            assert "next" in analytics["metrics"] and "next_change_percent" in analytics["comparison"]
             assert analytics["branch_comparison"][0]["branch"] == "Al Aziziyah"
             assert analytics["history"]["start_date"] == "2025-01-01"
             connection_status = ok(client.get(

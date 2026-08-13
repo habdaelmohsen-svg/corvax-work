@@ -24,16 +24,17 @@ type Order={
 type Snapshot={
   mode:string;window:any;totals:any;master_counts:any;branches:any[];
   branch_sales:SummaryRow[];scope_sales:SummaryRow[];service_sales:SummaryRow[];
-  platform_sales:SummaryRow[];customer_sales:SummaryRow[];product_sales:ProductRow[];orders:Order[];
+  platform_sales:SummaryRow[];payment_channels:SummaryRow[];customer_sales:SummaryRow[];product_sales:ProductRow[];orders:Order[];
+  reconciliation:{available:boolean;matched:boolean;source_orders:number|null;imported_orders:number;source_total:number|null;imported_total:number;difference:number|null};
 };
 type SyncRun={id:number;start_date:string;end_date:string;window:string;status:string;source_orders:number;inserted:number;updated:number;unchanged:number;source_total:number;error?:string|null;completed_at?:string|null};
 type Period='DAY'|'WEEK'|'MONTH'|'YEAR';
 type Metrics={orders:number;quantity:number;subtotal:number;vat:number;sales:number;refunds:number};
 type Analytics={
-  period:Period;as_of_date:string;windows:Record<'current'|'previous'|'prior_year',{start_date:string;end_date:string}>;
-  metrics:Record<'current'|'previous'|'prior_year',Metrics>;
-  comparison:{previous_change_percent:number|null;prior_year_change_percent:number|null};
-  branch_comparison:Array<{branch_id:number;branch:string;orders:number;quantity:number;subtotal:number;vat:number;sales:number;previous_sales:number;previous_change_percent:number|null;prior_year_sales:number;prior_year_change_percent:number|null}>;
+  period:Period;as_of_date:string;windows:Record<'current'|'previous'|'next'|'prior_year',{start_date:string;end_date:string}>;
+  metrics:Record<'current'|'previous'|'next'|'prior_year',Metrics>;
+  comparison:{previous_change_percent:number|null;next_change_percent:number|null;prior_year_change_percent:number|null};
+  branch_comparison:Array<{branch_id:number;branch:string;orders:number;quantity:number;subtotal:number;vat:number;sales:number;previous_sales:number;previous_change_percent:number|null;next_sales:number;next_change_percent:number|null;prior_year_sales:number;prior_year_change_percent:number|null}>;
   trend:Array<{key:string;orders:number;sales:number}>;history:HistoryStatus;
 };
 
@@ -66,6 +67,13 @@ const serviceLabel=(value:string,ar:boolean)=>({
   DINE_IN:ar?'داخل المطعم':'Dine-in',
   TAKEAWAY:ar?'سفري / استلام':'Takeaway',
   DELIVERY:ar?'تطبيقات التوصيل':'Delivery apps',
+}[value]||value);
+const paymentLabel=(value:string,ar:boolean)=>({
+  CASH:ar?'نقدي':'Cash',
+  CARD:ar?'بطاقات / شبكة':'Card / POS',
+  PLATFORM_CREDIT:ar?'آجل — ذمم تطبيقات التوصيل':'On account — delivery apps',
+  OTHER:ar?'طريقة دفع أخرى':'Other payment method',
+  UNCLASSIFIED:ar?'غير مصنف في DGTERA':'Unclassified in DGTERA',
 }[value]||value);
 const syncLabel=(value:string,ar:boolean)=>({
   COMPLETED:ar?'مكتملة':'Completed',
@@ -106,7 +114,7 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
 
   useEffect(()=>{load().catch(e=>{setMsg(String(e.message||e));setIsError(true)})},[companyId,startDate,endDate,compareDate,period,branchId,scope,service]);
   useEffect(()=>{
-    const timer=window.setInterval(()=>load().catch(()=>{}),60000);
+    const timer=window.setInterval(()=>load().catch(()=>{}),120000);
     return()=>window.clearInterval(timer);
   },[companyId,startDate,endDate,compareDate,period,branchId,scope,service]);
 
@@ -125,7 +133,7 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
       const result=await json('/api/v1/integrations/dgtera/connection',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       setApiKey('');
       const imported=result.initial_sync?.inserted||0,updated=result.initial_sync?.updated||0;
-      say(ar?`تم التحقق والربط تلقائيًا: أضيف ${imported} طلب وحُدّث ${updated}. ستتجدد البيانات كل 5 دقائق.`:`Connected and synchronized automatically: ${imported} inserted, ${updated} updated. Refresh runs every 5 minutes.`);
+      say(ar?`تم التحقق والربط والمطابقة: أضيف ${imported} طلب وحُدّث ${updated}. ستتجدد البيانات كل دقيقتين.`:`Connected, synchronized and reconciled: ${imported} inserted, ${updated} updated. Refresh runs every 2 minutes.`);
       await load();
     }catch(e:any){say(String(e.message||e),true)}finally{setBusy(false)}
   };
@@ -134,18 +142,19 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
   const counts=snapshot?.master_counts||{};
   const currentMetrics=analytics?.metrics.current;
   const previousMetrics=analytics?.metrics.previous;
+  const nextMetrics=analytics?.metrics.next;
   const priorYearMetrics=analytics?.metrics.prior_year;
-  const comparisonMax=Math.max(1,Number(currentMetrics?.sales||0),Number(previousMetrics?.sales||0),Number(priorYearMetrics?.sales||0));
+  const comparisonMax=Math.max(1,Number(currentMetrics?.subtotal||0),Number(previousMetrics?.subtotal||0),Number(nextMetrics?.subtotal||0),Number(priorYearMetrics?.subtotal||0));
   const periodLabel=(value:Period)=>({DAY:ar?'يومي':'Daily',WEEK:ar?'أسبوعي':'Weekly',MONTH:ar?'شهري':'Monthly',YEAR:ar?'سنوي':'Yearly'}[value]);
-  const windowText=(key:'current'|'previous'|'prior_year')=>{
+  const windowText=(key:'current'|'previous'|'next'|'prior_year')=>{
     const w=analytics?.windows[key];if(!w)return '—';return w.start_date===w.end_date?w.start_date:`${w.start_date} → ${w.end_date}`;
   };
   return <>
     <div className="kpis">
-      <Kpi title={ar?'إجمالي المبيعات':'Total sales'} value={snapshot?money2(Number(totals.sales||0),ar):'—'} trend={ar?'مطابق ليوم DGTERA المحلي':'DGTERA local business date'} good icon={<Receipt size={22}/>} tone="blue"/>
-      <Kpi title={ar?'المبيعات الداخلية':'Internal sales'} value={snapshot?money2(Number(totals.internal_sales||0),ar):'—'} trend={ar?'مطعم + سفري':'Dine-in + takeaway'} good icon={<Store size={22}/>} tone="violet"/>
-      <Kpi title={ar?'المبيعات الخارجية':'External sales'} value={snapshot?money2(Number(totals.external_sales||0),ar):'—'} trend={ar?'منصات التوصيل':'Delivery platforms'} good icon={<Bike size={22}/>} tone="amber"/>
-      <Kpi title={ar?'عدد الطلبات':'Orders'} value={String(totals.orders||0)} trend="00:01–23:59" good icon={<DatabaseZap size={22}/>} tone="green"/>
+      <Kpi title={ar?'صافي المبيعات':'Net sales'} value={snapshot?money2(Number(totals.subtotal||0),ar):'—'} trend={ar?'دون الضريبة — الرقم الأساسي للتقارير':'Excluding VAT — primary report value'} good icon={<Receipt size={22}/>} tone="blue"/>
+      <Kpi title={ar?'ضريبة المبيعات':'Sales VAT'} value={snapshot?money2(Number(totals.vat||0),ar):'—'} trend={ar?'كما وردت من DGTERA':'As received from DGTERA'} good icon={<Store size={22}/>} tone="violet"/>
+      <Kpi title={ar?'إجمالي المبيعات':'Gross sales'} value={snapshot?money2(Number(totals.sales||0),ar):'—'} trend={ar?'شامل الضريبة':'Including VAT'} good icon={<Bike size={22}/>} tone="amber"/>
+      <Kpi title={ar?'عدد الطلبات':'Orders'} value={String(totals.orders||0)} trend="00:00–23:59:59" good icon={<DatabaseZap size={22}/>} tone="green"/>
     </div>
 
     {msg&&<div style={{padding:11,margin:'12px 0',borderRadius:9,lineHeight:1.8,background:isError?'#fee2e2':'#dcfce7',color:isError?'#991b1b':'#166534'}}>{msg}</div>}
@@ -169,7 +178,7 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
       <div style={{display:'flex',gap:12,padding:'0 12px 14px',alignItems:'center',flexWrap:'wrap'}}>
         {!status.inherited&&<button style={{...btn,opacity:busy?.6:1}} disabled={busy} onClick={saveConnection}>{ar?'حفظ وتفعيل الربط الآلي':'Save & activate automatic sync'}</button>}
         <span style={{fontSize:13,lineHeight:1.8}}>
-          <Clock3 size={16}/> {ar?'يوم المبيعات: 00:01 إلى 23:59 بتوقيت الرياض — تحديث تلقائي كل 5 دقائق.':'Sales day: 00:01–23:59 Asia/Riyadh — automatic refresh every 5 minutes.'}
+          <Clock3 size={16}/> {ar?'يوم المبيعات: 00:00 إلى 23:59:59 بتوقيت الرياض — تحديث ومطابقة تلقائية كل دقيقتين.':'Sales day: 00:00–23:59:59 Asia/Riyadh — automatic refresh and reconciliation every 2 minutes.'}
         </span>
       </div>
       {status.configured&&<div style={{padding:'0 12px 14px',fontSize:13,lineHeight:1.8}}>
@@ -189,6 +198,13 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
     </Panel>
 
     {status.configured&&<>
+      {snapshot?.reconciliation?.available&&<div style={{padding:12,margin:'12px 0',borderRadius:10,background:snapshot.reconciliation.matched?'#dcfce7':'#fee2e2',color:snapshot.reconciliation.matched?'#166534':'#991b1b',fontSize:13,lineHeight:1.9}}>
+        <b>{snapshot.reconciliation.matched?(ar?'✓ الفترة مطابقة مع DGTERA':'✓ Period reconciled with DGTERA'):(ar?'⚠ يوجد فرق يحتاج مراجعة':'⚠ Reconciliation difference')}</b>
+        {' — '}{ar?'إجمالي المصدر':'Source total'}: {money2(Number(snapshot.reconciliation.source_total||0),ar)}
+        {' — '}{ar?'إجمالي CORVAX':'CORVAX total'}: {money2(Number(snapshot.reconciliation.imported_total||0),ar)}
+        {' — '}{ar?'الفرق':'Difference'}: {money2(Number(snapshot.reconciliation.difference||0),ar)}
+        {' — '}{ar?'الطلبات':'Orders'}: {snapshot.reconciliation.imported_orders}/{snapshot.reconciliation.source_orders}
+      </div>}
       <Panel title={ar?'فترة عرض المبيعات':'Sales display period'} icon={<Clock3 size={18}/>}>
         <div style={grid}>
           <label>{ar?'من':'From'}<input type="date" min="2025-01-01" style={field} value={startDate} onChange={e=>setStartDate(e.target.value)}/></label>
@@ -208,26 +224,27 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
         </div>
         {analytics&&<>
           <div className="kpis" style={{padding:'0 12px 12px'}}>
-            <Kpi title={`${periodLabel(period)} — ${ar?'الحالي':'Current'}`} value={money2(Number(currentMetrics?.sales||0),ar)} trend={windowText('current')} good icon={<Receipt size={22}/>} tone="blue"/>
-            <Kpi title={ar?'الفترة السابقة':'Previous period'} value={money2(Number(previousMetrics?.sales||0),ar)} trend={`${windowText('previous')} • ${pct(analytics.comparison.previous_change_percent,ar)}`} good={(analytics.comparison.previous_change_percent||0)>=0} icon={<Clock3 size={22}/>} tone="violet"/>
-            <Kpi title={ar?'نفس الفترة العام السابق':'Same period last year'} value={money2(Number(priorYearMetrics?.sales||0),ar)} trend={`${windowText('prior_year')} • ${pct(analytics.comparison.prior_year_change_percent,ar)}`} good={(analytics.comparison.prior_year_change_percent||0)>=0} icon={<Clock3 size={22}/>} tone="amber"/>
-            <Kpi title={ar?'الكمية الحالية':'Current quantity'} value={money2(Number(currentMetrics?.quantity||0),ar)} trend={`${ar?'الطلبات':'Orders'}: ${currentMetrics?.orders||0}`} good icon={<PackageSearch size={22}/>} tone="green"/>
+            <Kpi title={`${periodLabel(period)} — ${ar?'صافي الحالي':'Current net'}`} value={money2(Number(currentMetrics?.subtotal||0),ar)} trend={windowText('current')} good icon={<Receipt size={22}/>} tone="blue"/>
+            <Kpi title={ar?'صافي الفترة السابقة':'Previous period net'} value={money2(Number(previousMetrics?.subtotal||0),ar)} trend={`${windowText('previous')} • ${pct(analytics.comparison.previous_change_percent,ar)}`} good={(analytics.comparison.previous_change_percent||0)>=0} icon={<Clock3 size={22}/>} tone="violet"/>
+            <Kpi title={ar?'صافي الفترة اللاحقة':'Next period net'} value={money2(Number(nextMetrics?.subtotal||0),ar)} trend={`${windowText('next')} • ${pct(analytics.comparison.next_change_percent,ar)}`} good={(analytics.comparison.next_change_percent||0)>=0} icon={<Clock3 size={22}/>} tone="green"/>
+            <Kpi title={ar?'نفس الفترة من 2025':'Same period in 2025'} value={money2(Number(priorYearMetrics?.subtotal||0),ar)} trend={`${windowText('prior_year')} • ${pct(analytics.comparison.prior_year_change_percent,ar)}`} good={(analytics.comparison.prior_year_change_percent||0)>=0} icon={<Clock3 size={22}/>} tone="amber"/>
           </div>
           <div style={{padding:'2px 14px 16px',display:'grid',gap:10}}>
             {[
-              {label:ar?'الحالي':'Current',value:Number(currentMetrics?.sales||0),color:'#2563eb'},
-              {label:ar?'الفترة السابقة':'Previous',value:Number(previousMetrics?.sales||0),color:'#7c3aed'},
-              {label:ar?'العام السابق':'Last year',value:Number(priorYearMetrics?.sales||0),color:'#d97706'},
+              {label:ar?'صافي الحالي':'Current net',value:Number(currentMetrics?.subtotal||0),color:'#2563eb'},
+              {label:ar?'صافي الفترة السابقة':'Previous net',value:Number(previousMetrics?.subtotal||0),color:'#7c3aed'},
+              {label:ar?'صافي الفترة اللاحقة':'Next net',value:Number(nextMetrics?.subtotal||0),color:'#16a34a'},
+              {label:ar?'صافي 2025':'2025 net',value:Number(priorYearMetrics?.subtotal||0),color:'#d97706'},
             ].map(item=><div key={item.label} style={{display:'grid',gridTemplateColumns:'minmax(90px,150px) 1fr minmax(100px,150px)',gap:10,alignItems:'center',fontSize:13}}>
               <span>{item.label}</span><div style={{height:18,borderRadius:5,background:'#e5e7eb',overflow:'hidden'}}><div style={{height:'100%',width:`${Math.max(item.value?2:0,item.value/comparisonMax*100)}%`,background:item.color}}/></div><b>{money2(item.value,ar)}</b>
             </div>)}
           </div>
-          <DataTable headers={[ar?'المقياس':'Metric',ar?'الحالي':'Current',ar?'الفترة السابقة':'Previous',ar?'العام السابق':'Last year']} rows={[
-            [ar?'المبيعات دون الضريبة':'Sales excl. VAT',money2(Number(currentMetrics?.subtotal||0),ar),money2(Number(previousMetrics?.subtotal||0),ar),money2(Number(priorYearMetrics?.subtotal||0),ar)],
-            [ar?'الضريبة':'VAT',money2(Number(currentMetrics?.vat||0),ar),money2(Number(previousMetrics?.vat||0),ar),money2(Number(priorYearMetrics?.vat||0),ar)],
-            [ar?'إجمالي المبيعات':'Total sales',money2(Number(currentMetrics?.sales||0),ar),money2(Number(previousMetrics?.sales||0),ar),money2(Number(priorYearMetrics?.sales||0),ar)],
-            [ar?'عدد الطلبات':'Orders',String(currentMetrics?.orders||0),String(previousMetrics?.orders||0),String(priorYearMetrics?.orders||0)],
-            [ar?'الكمية':'Quantity',money2(Number(currentMetrics?.quantity||0),ar),money2(Number(previousMetrics?.quantity||0),ar),money2(Number(priorYearMetrics?.quantity||0),ar)],
+          <DataTable headers={[ar?'المقياس':'Metric',ar?'الحالي':'Current',ar?'الفترة السابقة':'Previous',ar?'الفترة اللاحقة':'Next',ar?'2025':'2025']} rows={[
+            [ar?'صافي المبيعات دون الضريبة':'Net sales excl. VAT',money2(Number(currentMetrics?.subtotal||0),ar),money2(Number(previousMetrics?.subtotal||0),ar),money2(Number(nextMetrics?.subtotal||0),ar),money2(Number(priorYearMetrics?.subtotal||0),ar)],
+            [ar?'الضريبة':'VAT',money2(Number(currentMetrics?.vat||0),ar),money2(Number(previousMetrics?.vat||0),ar),money2(Number(nextMetrics?.vat||0),ar),money2(Number(priorYearMetrics?.vat||0),ar)],
+            [ar?'الإجمالي شامل الضريبة':'Gross incl. VAT',money2(Number(currentMetrics?.sales||0),ar),money2(Number(previousMetrics?.sales||0),ar),money2(Number(nextMetrics?.sales||0),ar),money2(Number(priorYearMetrics?.sales||0),ar)],
+            [ar?'عدد الطلبات':'Orders',String(currentMetrics?.orders||0),String(previousMetrics?.orders||0),String(nextMetrics?.orders||0),String(priorYearMetrics?.orders||0)],
+            [ar?'الكمية':'Quantity',money2(Number(currentMetrics?.quantity||0),ar),money2(Number(previousMetrics?.quantity||0),ar),money2(Number(nextMetrics?.quantity||0),ar),money2(Number(priorYearMetrics?.quantity||0),ar)],
           ]}/>
         </>}
       </Panel>
@@ -239,9 +256,9 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
         <Kpi title={ar?'ضريبة المبيعات':'Sales VAT'} value={snapshot?money2(Number(totals.vat||0),ar):'—'} trend={ar?'كما وردت من DGTERA':'As received from DGTERA'} good icon={<Receipt size={22}/>} tone="amber"/>
       </div>
 
-      {analytics&&<Panel title={ar?`مقارنة الفروع — ${periodLabel(period)}`:`Branch comparison — ${periodLabel(period)}`} icon={<Store size={18}/> }>
-        <DataTable headers={[ar?'الفرع':'Branch',ar?'الكمية':'Qty',ar?'دون الضريبة':'Excl. VAT',ar?'الضريبة':'VAT',ar?'الإجمالي الحالي':'Current total',ar?'الفترة السابقة':'Previous',ar?'التغير':'Change',ar?'العام السابق':'Last year',ar?'التغير السنوي':'YoY change']} rows={analytics.branch_comparison.map(x=>[
-          x.branch,money2(Number(x.quantity||0),ar),money2(Number(x.subtotal||0),ar),money2(Number(x.vat||0),ar),money2(Number(x.sales||0),ar),money2(Number(x.previous_sales||0),ar),pct(x.previous_change_percent,ar),money2(Number(x.prior_year_sales||0),ar),pct(x.prior_year_change_percent,ar),
+      {analytics&&<Panel title={ar?`مقارنة صافي الفروع — ${periodLabel(period)}`:`Branch net comparison — ${periodLabel(period)}`} icon={<Store size={18}/> }>
+        <DataTable headers={[ar?'الفرع':'Branch',ar?'الكمية':'Qty',ar?'صافي الحالي':'Current net',ar?'الضريبة':'VAT',ar?'السابق':'Previous',ar?'التغير':'Change',ar?'اللاحق':'Next',ar?'2025':'2025',ar?'التغير السنوي':'YoY change']} rows={analytics.branch_comparison.map(x=>[
+          x.branch,money2(Number(x.quantity||0),ar),money2(Number(x.subtotal||0),ar),money2(Number(x.vat||0),ar),money2(Number(x.previous_sales||0),ar),pct(x.previous_change_percent,ar),money2(Number(x.next_sales||0),ar),money2(Number(x.prior_year_sales||0),ar),pct(x.prior_year_change_percent,ar),
         ])}/>
       </Panel>}
 
@@ -256,7 +273,13 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
         ]}/>
       </Panel>
 
-      <Panel title={ar?'شركات ومنصات التوصيل':'Delivery companies and platforms'} icon={<Bike size={18}/>}>
+      <Panel title={ar?'تصنيف التحصيل: نقدي وبطاقات وآجل التطبيقات':'Collection classification: cash, card and app receivables'} icon={<DatabaseZap size={18}/> }>
+        <DataTable headers={[ar?'التصنيف':'Classification',ar?'الطلبات':'Orders',ar?'صافي المبيعات':'Net sales',ar?'الضريبة':'VAT',ar?'الإجمالي شامل الضريبة':'Gross incl. VAT']} rows={(snapshot?.payment_channels||[]).map(x=>[
+          paymentLabel(x.key,ar),String(x.orders),money2(Number(x.subtotal),ar),money2(Number(x.vat),ar),money2(Number(x.sales),ar),
+        ])}/>
+      </Panel>
+
+      <Panel title={ar?'شركات ومنصات التوصيل':'Delivery companies and platforms'} icon={<Bike size={18}/>}> 
         <DataTable headers={[ar?'المنصة / العميل':'Platform / customer',ar?'الطلبات':'Orders',ar?'الصافي':'Net',ar?'الضريبة':'VAT',ar?'المبيعات':'Sales']} rows={(snapshot?.platform_sales||[]).map(x=>[x.key,String(x.orders),money2(Number(x.subtotal),ar),money2(Number(x.vat),ar),money2(Number(x.sales),ar)])}/>
       </Panel>
 

@@ -1,7 +1,7 @@
 """In-process automatic DGTERA sales scheduler.
 
-Every active connection is refreshed at five-minute intervals.  The source
-query itself enforces each Riyadh sales day as 00:01 through 23:59, so the
+Every active connection is refreshed at two-minute intervals.  The source
+query itself enforces each Riyadh sales day as 00:00 through 23:59:59, so the
 scheduler time never changes which day owns an order.
 """
 from __future__ import annotations
@@ -67,8 +67,8 @@ def run_due_syncs() -> None:
             if not current_ok:
                 continue
 
-            # Import one seven-day historical slice on every poll.  This runs
-            # independently of the five-minute live refresh, so the 2025
+            # Import one 31-day historical slice on every poll.  This runs
+            # independently of the two-minute live refresh, so the 2025
             # history progresses without delaying today's sales updates.
             history_window = historical_backfill_window(db, connection)
             if history_window is None:

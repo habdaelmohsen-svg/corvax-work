@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -107,8 +108,8 @@ def _connection_out(row: DgteraConnection | None, company_id: int) -> dict:
             "configured": False,
             "connected": False,
             "mode": "SALES_ONLY",
-            "day_window": "00:01-23:59 Asia/Riyadh",
-            "sync_interval_minutes": 5,
+            "day_window": "00:00-23:59:59 Asia/Riyadh",
+            "sync_interval_minutes": 2,
             "inherited": False,
         }
     return {
@@ -117,14 +118,17 @@ def _connection_out(row: DgteraConnection | None, company_id: int) -> dict:
         "connection_company_id": row.company_id,
         "inherited": row.company_id != company_id,
         "configured": True,
-        "connected": bool(row.last_tested_at and not row.last_error),
+        # A completed credential test defines connectivity.  A later history
+        # slice warning must not incorrectly label the live connection offline.
+        "connected": bool(row.last_tested_at),
+        "sync_healthy": bool(row.last_sync_at and not row.last_error),
         "name": row.name,
         "base_url": row.base_url,
         "credentials_configured": bool(row.database_name and row.login and row.api_key),
         "active": row.active,
         "mode": "SALES_ONLY",
-        "day_window": f"00:01-23:59 {row.timezone}",
-        "sync_interval_minutes": row.sync_interval_minutes,
+        "day_window": f"00:00-23:59:59 {row.timezone}",
+        "sync_interval_minutes": 2,
         "timezone": row.timezone,
         "last_tested_at": row.last_tested_at,
         "last_sync_at": row.last_sync_at,
@@ -163,7 +167,7 @@ def save_connection(data: ConnectionIn, user: User = Depends(get_current_user), 
         row.api_key = data.api_key.strip()
     row.active = data.active
     row.import_mode = "SALES_ONLY"
-    row.sync_interval_minutes = 5
+    row.sync_interval_minutes = 2
     row.timezone = data.timezone
     row.last_tested_at = None
     row.last_error = None
@@ -196,8 +200,8 @@ def save_connection(data: ConnectionIn, user: User = Depends(get_current_user), 
             "base_url": row.base_url,
             "active": row.active,
             "mode": "SALES_ONLY",
-            "day_window": f"00:01-23:59 {row.timezone}",
-            "sync_interval_minutes": 5,
+            "day_window": f"00:00-23:59:59 {row.timezone}",
+            "sync_interval_minutes": 2,
             "credentials": "REDACTED",
             "automatic_test": test_result,
         },
@@ -302,6 +306,68 @@ def _summary_from_group(rows: list[tuple], labels: dict | None = None, empty_lab
     return sorted(result, key=lambda item: (money(item["sales"]), str(item["key"])), reverse=True)
 
 
+_CASH_PAYMENT_TOKENS = ("cash", "نقد")
+_CARD_PAYMENT_TOKENS = (
+    "card", "mada", "visa", "mastercard", "bank", "credit", "debit", "pos",
+    "مدى", "شبكة", "بطاقة",
+)
+
+
+def _payment_channel_name(method_name: str) -> str:
+    normalized = re.sub(r"[^\w\u0600-\u06ff]+", " ", (method_name or "").casefold()).strip()
+    if any(token in normalized for token in _CASH_PAYMENT_TOKENS):
+        return "CASH"
+    if any(token in normalized for token in _CARD_PAYMENT_TOKENS):
+        return "CARD"
+    return "OTHER"
+
+
+def _payment_channel_summary(db: Session, conditions: list) -> list[dict]:
+    """Classify collections without changing the DGTERA source totals.
+
+    Delivery-app orders are receivables (on-account).  Restaurant payments
+    are split between cash/card using the source payment lines; split tenders
+    receive a proportional share of net and VAT.
+    """
+    orders = db.scalars(
+        select(DgteraSalesOrder)
+        .where(*conditions)
+        .options(selectinload(DgteraSalesOrder.payments))
+    ).all()
+    buckets: dict[str, dict] = {}
+
+    def add(key: str, order: DgteraSalesOrder, ratio: Decimal) -> None:
+        row = buckets.setdefault(key, {
+            "key": key, "orders": set(), "subtotal": Decimal("0"),
+            "vat": Decimal("0"), "sales": Decimal("0"),
+        })
+        row["orders"].add(order.id)
+        row["subtotal"] += Decimal(str(order.subtotal or 0)) * ratio
+        row["vat"] += Decimal(str(order.vat_amount or 0)) * ratio
+        row["sales"] += Decimal(str(order.total or 0)) * ratio
+
+    for order in orders:
+        if order.sales_scope == "EXTERNAL" or order.service_mode == "DELIVERY":
+            add("PLATFORM_CREDIT", order, Decimal("1"))
+            continue
+        valid = [payment for payment in order.payments if Decimal(str(payment.amount or 0)) != 0]
+        paid = sum((abs(Decimal(str(payment.amount or 0))) for payment in valid), Decimal("0"))
+        if not valid or paid == 0:
+            add("UNCLASSIFIED", order, Decimal("1"))
+            continue
+        for payment in valid:
+            ratio = abs(Decimal(str(payment.amount or 0))) / paid
+            add(_payment_channel_name(payment.method_name), order, ratio)
+    result = [{
+        "key": key,
+        "orders": len(row["orders"]),
+        "subtotal": money(row["subtotal"]),
+        "vat": money(row["vat"]),
+        "sales": money(row["sales"]),
+    } for key, row in buckets.items()]
+    return sorted(result, key=lambda item: (money(item["sales"]), item["key"]), reverse=True)
+
+
 @router.get("/snapshot")
 def snapshot(
     company_id: int,
@@ -393,6 +459,32 @@ def snapshot(
         })
     product_sales.sort(key=lambda row: (money(row["sales"]), row["key"]), reverse=True)
 
+    payment_channels = _payment_channel_summary(db, conditions)
+    reconciliation_run = db.scalar(
+        select(DgteraSyncRun)
+        .where(
+            DgteraSyncRun.connection_id == connection.id,
+            DgteraSyncRun.start_date == start,
+            DgteraSyncRun.end_date == end,
+            DgteraSyncRun.status == "COMPLETED",
+        )
+        .order_by(DgteraSyncRun.id.desc())
+    )
+    base_metrics = _order_metrics(db, _order_conditions(connection.id, start, end))
+    reconciliation = {
+        "available": bool(reconciliation_run),
+        "matched": bool(
+            reconciliation_run
+            and int(reconciliation_run.source_orders or 0) == int(base_metrics["orders"])
+            and money(reconciliation_run.source_total) == money(base_metrics["sales"])
+        ),
+        "source_orders": int(reconciliation_run.source_orders or 0) if reconciliation_run else None,
+        "imported_orders": int(base_metrics["orders"]),
+        "source_total": money(reconciliation_run.source_total) if reconciliation_run else None,
+        "imported_total": money(base_metrics["sales"]),
+        "difference": money(base_metrics["sales"] - money(reconciliation_run.source_total)) if reconciliation_run else None,
+    }
+
     order_rows = []
     for order in orders:
         customer = customer_by_id.get(order.customer_id)
@@ -436,7 +528,7 @@ def snapshot(
 
     return {
         "mode": "SALES_ONLY",
-        "window": {"start_date": start, "end_date": end, "day_start": "00:01", "day_end": "23:59", "timezone": connection.timezone},
+        "window": {"start_date": start, "end_date": end, "day_start": "00:00", "day_end": "23:59:59", "timezone": connection.timezone},
         "filters": {"branch_id": branch_id, "sales_scope": sales_scope, "service_mode": service_mode, "limit": limit},
         "totals": totals,
         "master_counts": {
@@ -455,6 +547,8 @@ def snapshot(
         "scope_sales": scope_sales,
         "service_sales": service_sales,
         "platform_sales": [row for row in platform_sales if row["key"] != "No delivery platform"],
+        "payment_channels": payment_channels,
+        "reconciliation": reconciliation,
         "customer_sales": customer_sales,
         "product_sales": product_sales,
         "orders": order_rows,
@@ -483,21 +577,26 @@ def _comparison_windows(as_of: date, period: str) -> dict[str, tuple[date, date]
     if period == "DAY":
         current = (as_of, as_of)
         previous = (as_of - timedelta(days=1), as_of - timedelta(days=1))
+        next_period = (as_of + timedelta(days=1), as_of + timedelta(days=1))
         prior_year = (_shift_year(as_of, -1), _shift_year(as_of, -1))
     elif period == "WEEK":
         current = (as_of - timedelta(days=as_of.weekday()), as_of)
         previous = (current[0] - timedelta(days=7), current[1] - timedelta(days=7))
+        next_period = (current[0] + timedelta(days=7), current[1] + timedelta(days=7))
         prior_year = (current[0] - timedelta(days=364), current[1] - timedelta(days=364))
     elif period == "MONTH":
         current = (as_of.replace(day=1), as_of)
         previous_end = _shift_month(as_of, -1)
         previous = (previous_end.replace(day=1), previous_end)
+        next_end = _shift_month(as_of, 1)
+        next_period = (next_end.replace(day=1), next_end)
         prior_year = (_shift_year(current[0], -1), _shift_year(current[1], -1))
     else:
         current = (as_of.replace(month=1, day=1), as_of)
         previous = (_shift_year(current[0], -1), _shift_year(current[1], -1))
+        next_period = (_shift_year(current[0], 1), _shift_year(current[1], 1))
         prior_year = previous
-    return {"current": current, "previous": previous, "prior_year": prior_year}
+    return {"current": current, "previous": previous, "next": next_period, "prior_year": prior_year}
 
 
 def _change_percent(current: object, reference: object) -> Decimal | None:
@@ -559,7 +658,9 @@ def analytics(
         )
 
     metrics = {key: _order_metrics(db, conditions_for(window)) for key, window in windows.items()}
-    current, previous, prior_year = metrics["current"], metrics["previous"], metrics["prior_year"]
+    current, previous, next_period, prior_year = (
+        metrics["current"], metrics["previous"], metrics["next"], metrics["prior_year"]
+    )
 
     branches = db.scalars(select(DgteraBranch).where(
         DgteraBranch.connection_id == connection.id,
@@ -572,10 +673,12 @@ def analytics(
     for current_branch_id in branch_ids:
         current_row = branch_maps["current"].get(current_branch_id, {})
         previous_row = branch_maps["previous"].get(current_branch_id, {})
+        next_row = branch_maps["next"].get(current_branch_id, {})
         prior_row = branch_maps["prior_year"].get(current_branch_id, {})
-        current_sales = money(current_row.get("sales", 0))
-        previous_sales = money(previous_row.get("sales", 0))
-        prior_sales = money(prior_row.get("sales", 0))
+        current_sales = money(current_row.get("subtotal", 0))
+        previous_sales = money(previous_row.get("subtotal", 0))
+        next_sales = money(next_row.get("subtotal", 0))
+        prior_sales = money(prior_row.get("subtotal", 0))
         branch_comparison.append({
             "branch_id": current_branch_id,
             "branch": branch_names.get(current_branch_id, f"Branch #{current_branch_id}"),
@@ -586,6 +689,8 @@ def analytics(
             "sales": current_sales,
             "previous_sales": previous_sales,
             "previous_change_percent": _change_percent(current_sales, previous_sales),
+            "next_sales": next_sales,
+            "next_change_percent": _change_percent(next_sales, current_sales),
             "prior_year_sales": prior_sales,
             "prior_year_change_percent": _change_percent(current_sales, prior_sales),
         })
@@ -595,7 +700,7 @@ def analytics(
     daily_rows = db.execute(select(
         DgteraSalesOrder.sales_date,
         func.count(DgteraSalesOrder.id),
-        func.coalesce(func.sum(DgteraSalesOrder.total), 0),
+        func.coalesce(func.sum(DgteraSalesOrder.subtotal), 0),
     ).where(*current_conditions).group_by(DgteraSalesOrder.sales_date).order_by(DgteraSalesOrder.sales_date)).all()
     trend: list[dict] = []
     if period == "YEAR":
@@ -619,8 +724,9 @@ def analytics(
         "filters": {"branch_id": branch_id, "sales_scope": sales_scope, "service_mode": service_mode},
         "metrics": metrics,
         "comparison": {
-            "previous_change_percent": _change_percent(current["sales"], previous["sales"]),
-            "prior_year_change_percent": _change_percent(current["sales"], prior_year["sales"]),
+            "previous_change_percent": _change_percent(current["subtotal"], previous["subtotal"]),
+            "next_change_percent": _change_percent(next_period["subtotal"], current["subtotal"]),
+            "prior_year_change_percent": _change_percent(current["subtotal"], prior_year["subtotal"]),
         },
         "branch_comparison": branch_comparison,
         "trend": trend,
@@ -659,10 +765,13 @@ def executive_summary(
             "metrics": metrics,
             "comparison": {
                 "previous_change_percent": _change_percent(
-                    metrics["current"]["sales"], metrics["previous"]["sales"]
+                    metrics["current"]["subtotal"], metrics["previous"]["subtotal"]
+                ),
+                "next_change_percent": _change_percent(
+                    metrics["next"]["subtotal"], metrics["current"]["subtotal"]
                 ),
                 "prior_year_change_percent": _change_percent(
-                    metrics["current"]["sales"], metrics["prior_year"]["sales"]
+                    metrics["current"]["subtotal"], metrics["prior_year"]["subtotal"]
                 ),
             },
         }

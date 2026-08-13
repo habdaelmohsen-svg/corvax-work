@@ -45,7 +45,9 @@ assert "Current Period" in EXECUTIVE
 assert "Last 12 Months" not in EXECUTIVE
 assert "results.some(Boolean)" in EXECUTIVE
 assert "dataQuality" in EXECUTIVE and "controlEffectiveness" in EXECUTIVE
-assert all(label in EXECUTIVE for label in ("مبيعات اليوم", "مبيعات الأسبوع", "مبيعات الشهر", "مبيعات السنة"))
+assert all(label in EXECUTIVE for label in ("صافي مبيعات اليوم", "صافي مبيعات الأسبوع", "صافي مبيعات الشهر", "صافي مبيعات السنة"))
+assert "metrics?.current?.subtotal" in EXECUTIVE
+assert "إجمالي الإيرادات (صافي)" in EXECUTIVE
 assert all(target in TARGETS for target in ("dgteraDailySales", "dgteraWeeklySales", "dgteraMonthlySales", "dgteraYearlySales"))
 
 quick_actions = [line for line in EXECUTIVE.splitlines() if "<QuickAction " in line]

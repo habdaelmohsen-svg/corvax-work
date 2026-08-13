@@ -32,8 +32,9 @@ from app.services.dgtera_connector import DgteraRemoteError, Odoo14Client, money
 
 _SYNC_LOCK = Lock()
 HISTORY_START_DATE = date(2025, 1, 1)
-HISTORY_CHUNK_DAYS = 7
-SOURCE_LOCAL_WINDOW_MARKER = "source-local-v2"
+HISTORY_CHUNK_DAYS = 31
+LIVE_SYNC_INTERVAL_MINUTES = 2
+SOURCE_LOCAL_WINDOW_MARKER = "odoo-utc-riyadh-v3"
 
 
 class DgteraSyncBusy(RuntimeError):
@@ -50,7 +51,7 @@ def client_for(connection: DgteraConnection) -> Odoo14Client:
 
 
 def _window_label(connection: DgteraConnection) -> str:
-    return f"00:01-23:59 {connection.timezone} / {SOURCE_LOCAL_WINDOW_MARKER}"
+    return f"00:00-23:59:59 {connection.timezone} / {SOURCE_LOCAL_WINDOW_MARKER}"
 
 
 def _source_datetime(value: object) -> datetime | None:
@@ -413,7 +414,7 @@ def connection_is_due(connection: DgteraConnection) -> bool:
     if not connection.last_sync_at:
         return True
     elapsed = utc_now() - connection.last_sync_at
-    return elapsed >= timedelta(minutes=max(1, connection.sync_interval_minutes or 5))
+    return elapsed >= timedelta(minutes=LIVE_SYNC_INTERVAL_MINUTES)
 
 
 def _sync_unlocked(
@@ -476,6 +477,20 @@ def _sync_unlocked(
             db.execute(delete(DgteraSalesOrder).where(DgteraSalesOrder.id.in_(stale_ids)))
         for source in source_orders:
             counts[_apply_order(db, connection, source)] += 1
+        db.flush()
+        imported_orders, imported_total = db.execute(select(
+            func.count(DgteraSalesOrder.id),
+            func.coalesce(func.sum(DgteraSalesOrder.total), 0),
+        ).where(
+            DgteraSalesOrder.connection_id == connection.id,
+            DgteraSalesOrder.sales_date >= start_date,
+            DgteraSalesOrder.sales_date <= end_date,
+        )).one()
+        imported_total = money(imported_total)
+        if int(imported_orders or 0) != len(source_orders) or imported_total != money(run.source_total):
+            raise RuntimeError(
+                "DGTERA reconciliation failed: source and CORVAX order count/total differ"
+            )
         run.inserted_orders = counts["INSERTED"]
         run.updated_orders = counts["UPDATED"]
         run.unchanged_orders = counts["UNCHANGED"]
@@ -517,7 +532,7 @@ def _sync_unlocked(
             end_date=end_date,
             window_label=(
                 _window_label(connection)
-                if connection else f"00:01-23:59 Asia/Riyadh / {SOURCE_LOCAL_WINDOW_MARKER}"
+                if connection else f"00:00-23:59:59 Asia/Riyadh / {SOURCE_LOCAL_WINDOW_MARKER}"
             ),
             status="ERROR",
             source_orders=len(source_orders),
@@ -539,6 +554,8 @@ def _sync_unlocked(
         "unchanged": counts["UNCHANGED"],
         "removed": removed,
         "source_total": run.source_total,
+        "imported_total": imported_total,
+        "reconciled": True,
         "mode": "SALES_ONLY",
     }
 

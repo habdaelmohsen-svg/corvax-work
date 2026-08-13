@@ -3,11 +3,11 @@
 Only final POS sales and their dimensions are read.  No accounting moves,
 inventory movements or recipes are requested from DGTERA.
 
-DGTERA's branch-sales report applies its date filter to ``date_order`` as a
-Riyadh-local, database-naive value.  Treating that value as UTC moves the last
-three hours of the previous business day into the selected day and makes the
-CORVAX total disagree with the source report.  This connector deliberately
-uses the same source-local calendar semantics as that report.
+Odoo stores ``Datetime`` values as naive UTC strings and converts them for the
+web client.  CORVAX therefore converts each requested Riyadh business-day
+boundary to UTC for the RPC domain, then converts every returned timestamp
+back to Riyadh before assigning its sales date.  This is the same calendar
+semantics as DGTERA's visible date filter.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from app.core.config import settings
 MONEY = Decimal("0.01")
 QTY = Decimal("0.0001")
 FINAL_ORDER_STATES = ("paid", "done", "invoiced")
-DAY_START = time(0, 1, 0)
+DAY_START = time(0, 0, 0)
 DAY_END = time(23, 59, 59)
 
 DELIVERY_TOKENS = (
@@ -106,12 +106,7 @@ def _ids(value: object) -> list[int]:
 
 
 def _odoo_source_local_datetime(value: object, zone: ZoneInfo) -> tuple[datetime, datetime]:
-    """Return DGTERA's source-local and derived UTC timestamps.
-
-    DGTERA/Odoo returns a naive value.  For this tenant it is the business
-    timestamp used verbatim by the branch-sales report, not a UTC value that
-    should be shifted before the sales date is chosen.
-    """
+    """Return a DGTERA/Odoo UTC timestamp and its business-local value."""
     raw = str(value or "").strip()
     if not raw:
         raise ValueError("DGTERA order has no date_order")
@@ -119,10 +114,12 @@ def _odoo_source_local_datetime(value: object, zone: ZoneInfo) -> tuple[datetime
         parsed = datetime.fromisoformat(raw)
     except ValueError:
         parsed = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(zone).replace(tzinfo=None)
-    ordered_local = parsed.replace(tzinfo=zone)
-    ordered_utc = ordered_local.astimezone(timezone.utc)
+    ordered_utc = (
+        parsed.astimezone(timezone.utc)
+        if parsed.tzinfo is not None
+        else parsed.replace(tzinfo=timezone.utc)
+    )
+    ordered_local = ordered_utc.astimezone(zone)
     return ordered_local, ordered_utc
 
 
@@ -330,11 +327,11 @@ class Odoo14Client:
         if (end_date - start_date).days > 31:
             raise ValueError("A DGTERA sales window cannot exceed 32 days")
         zone = ZoneInfo(timezone_name)
-        # Match DGTERA's visible branch-sales report exactly: its date domain
-        # is built from the source-local naive value.  Converting these bounds
-        # to UTC would shift the report by three hours for Asia/Riyadh.
-        start_source = datetime.combine(start_date, DAY_START)
-        end_source = datetime.combine(end_date, DAY_END)
+        # Odoo Datetime strings are UTC.  Convert the requested Riyadh calendar
+        # boundaries to UTC before building the RPC domain, exactly as the web
+        # client's date filter does.
+        start_source = datetime.combine(start_date, DAY_START, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
+        end_source = datetime.combine(end_date, DAY_END, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
         domain = [
             ("state", "in", list(FINAL_ORDER_STATES)),
             ("date_order", ">=", start_source.strftime("%Y-%m-%d %H:%M:%S")),
@@ -358,9 +355,8 @@ class Odoo14Client:
             "pos.order", domain, order_fields, order="date_order,id",
             maximum=settings.dgtera_max_orders_per_sync,
         )
-        # Enforce 00:01..23:59 for every local day, including intermediate days
-        # in a backfill window.  A combined UTC domain alone would include the
-        # 00:00 minute of intermediate dates.
+        # Enforce the converted local calendar range again after reading so a
+        # custom source timezone or offset can never leak an adjacent day.
         filtered_orders = []
         for row in orders:
             ordered_local, ordered_utc = _odoo_source_local_datetime(row.get("date_order"), zone)

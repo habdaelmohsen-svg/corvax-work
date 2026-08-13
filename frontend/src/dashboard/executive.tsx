@@ -155,6 +155,7 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
     { key: 'financing', value: numeric(cashFlows?.net_financing), tone: 'red' },
   ];
   const cashBarMax = Math.max(1, ...cashBars.map((item) => Math.abs(item.value ?? 0)));
+  const dgteraYear = live?.dgtera?.periods?.YEAR?.metrics?.current;
 
   const kpis: Array<[string, string | number, string, boolean, string, ExecutiveNavigationKey]> = companyId === 'gym'
     ? [[ar?'الأعضاء النشطون':'Active members', live?.gym?.active_members ?? dash, '', true, 'blue', 'gymMembers'],
@@ -162,11 +163,11 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
        [ar?'مجمل الربح':'Gross profit', num(income?.gross_profit), '', true, 'violet', 'grossProfit'],
        [ar?'إجمالي الأصول':'Total assets', num(position?.total_assets), '', true, 'amber', 'totalAssets']]
     : companyId === 'restaurant'
-    ? [[ar?'صافي المبيعات':'Net sales', num(live?.pos?.net_sales), '', true, 'blue', 'restaurantSales'],
-       [ar?'نسبة تكلفة الطعام':'Food cost', percent(live?.pos?.food_cost_percent), '', false, 'green', 'foodCost'],
-       [ar?'مجمل الربح':'Gross profit', num(live?.pos?.gross_profit), '', true, 'violet', 'grossProfit'],
-       [ar?'عدد الطلبات':'Orders', live?.pos?.orders ?? dash, '', true, 'amber', 'restaurantOrders']]
-    : [[ar?'إجمالي الإيرادات':'Total Revenue', num(income?.revenue), '', true, 'blue', 'revenue'],
+    ? [[ar?'صافي إيرادات المبيعات':'Net sales revenue', num(dgteraYear?.subtotal), ar?'دون الضريبة — منذ بداية السنة':'Excluding VAT — year to date', true, 'blue', 'restaurantSales'],
+       [ar?'ضريبة المبيعات':'Sales VAT', num(dgteraYear?.vat), ar?'من DGTERA':'From DGTERA', true, 'green', 'restaurantSales'],
+       [ar?'إجمالي المبيعات':'Gross sales', num(dgteraYear?.sales), ar?'شامل الضريبة':'Including VAT', true, 'violet', 'restaurantSales'],
+       [ar?'عدد الطلبات':'Orders', dgteraYear?.orders ?? dash, ar?'منذ بداية السنة':'Year to date', true, 'amber', 'restaurantOrders']]
+    : [[ar?'إجمالي الإيرادات (صافي)':'Total Revenue (Net)', num(dgteraYear?.subtotal), ar?'مبيعات المطاعم دون الضريبة':'Restaurant sales excluding VAT', true, 'blue', 'revenue'],
        [ar?'صافي الربح':'Net Profit', num(income?.net_profit ?? income?.operating_profit), '', true, 'green', 'netProfit'],
        [ar?'إجمالي الأصول':'Total Assets', num(position?.total_assets), '', true, 'violet', 'totalAssets'],
        [ar?'النقد والرصيد البنكي':'Cash & Bank Balance', num(cash), '', true, 'amber', 'cashBalance']];
@@ -179,10 +180,10 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
     tone: string;
     icon: ReactNode;
   }> = [
-    {key:'DAY', title:ar?'مبيعات اليوم':'Today sales', target:'dgteraDailySales', tone:'blue', icon:<ShoppingCart size={23}/>},
-    {key:'WEEK', title:ar?'مبيعات الأسبوع':'Week-to-date sales', target:'dgteraWeeklySales', tone:'violet', icon:<CalendarDays size={23}/>},
-    {key:'MONTH', title:ar?'مبيعات الشهر':'Month-to-date sales', target:'dgteraMonthlySales', tone:'amber', icon:<BarChart3 size={23}/>},
-    {key:'YEAR', title:ar?'مبيعات السنة':'Year-to-date sales', target:'dgteraYearlySales', tone:'green', icon:<TrendingUp size={23}/>},
+    {key:'DAY', title:ar?'صافي مبيعات اليوم':'Today net sales', target:'dgteraDailySales', tone:'blue', icon:<ShoppingCart size={23}/>},
+    {key:'WEEK', title:ar?'صافي مبيعات الأسبوع':'Week-to-date net sales', target:'dgteraWeeklySales', tone:'violet', icon:<CalendarDays size={23}/>},
+    {key:'MONTH', title:ar?'صافي مبيعات الشهر':'Month-to-date net sales', target:'dgteraMonthlySales', tone:'amber', icon:<BarChart3 size={23}/>},
+    {key:'YEAR', title:ar?'صافي مبيعات السنة':'Year-to-date net sales', target:'dgteraYearlySales', tone:'green', icon:<TrendingUp size={23}/>},
   ];
   const dgteraTrend = (period: any) => {
     const change = numeric(period?.comparison?.previous_change_percent);
@@ -198,7 +199,7 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
     {showDgteraHome && <>
       <div className="kpi-source-note">
         {live?.dgtera
-          ? (ar ? 'مبيعات DGTERA — تظهر في القابضة وشركة المطاعم من نفس السجل دون تكرار.' : 'DGTERA sales — shared by holding and restaurant from one non-duplicated record set.')
+          ? (ar ? 'صافي مبيعات DGTERA دون الضريبة — تظهر في القابضة وشركة المطاعم من نفس السجل دون تكرار.' : 'DGTERA net sales excluding VAT — shared by holding and restaurant from one non-duplicated record set.')
           : (ar ? 'مبيعات DGTERA غير متاحة حاليًا؛ افتح بطاقة المبيعات لمراجعة حالة الربط.' : 'DGTERA sales are currently unavailable; open a sales card to review the connection.')}
       </div>
       <div className="kpis executive-kpis dgtera-home-kpis">{dgteraCards.map((card) => {
@@ -206,7 +207,7 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
         return <Kpi
           key={card.key}
           title={card.title}
-          value={num(period?.metrics?.current?.sales)}
+          value={num(period?.metrics?.current?.subtotal)}
           trend={dgteraTrend(period)}
           good={(numeric(period?.comparison?.previous_change_percent) ?? 0) >= 0}
           tone={card.tone}
