@@ -1,8 +1,8 @@
 """In-process automatic DGTERA sales scheduler.
 
 Every active connection is refreshed at two-minute intervals.  The source
-query itself enforces each Riyadh sales day as 00:00 through 23:59:59, so the
-scheduler time never changes which day owns an order.
+query enforces each DGTERA Branch Sales source date as 00:00 through 23:59:59,
+so CORVAX uses the exact same report-day ownership without a timezone shift.
 """
 from __future__ import annotations
 

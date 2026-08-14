@@ -109,7 +109,7 @@ def _connection_out(row: DgteraConnection | None, company_id: int) -> dict:
             "configured": False,
             "connected": False,
             "mode": "SALES_ONLY",
-            "day_window": "00:00-23:59:59 Asia/Riyadh",
+            "day_window": "00:00-23:59:59 DGTERA source report date",
             "sync_interval_minutes": 2,
             "inherited": False,
         }
@@ -128,7 +128,7 @@ def _connection_out(row: DgteraConnection | None, company_id: int) -> dict:
         "credentials_configured": bool(row.database_name and row.login and row.api_key),
         "active": row.active,
         "mode": "SALES_ONLY",
-        "day_window": f"00:00-23:59:59 {row.timezone}",
+        "day_window": "00:00-23:59:59 DGTERA source report date",
         "sync_interval_minutes": 2,
         "timezone": row.timezone,
         "last_tested_at": row.last_tested_at,
@@ -201,7 +201,7 @@ def save_connection(data: ConnectionIn, user: User = Depends(get_current_user), 
             "base_url": row.base_url,
             "active": row.active,
             "mode": "SALES_ONLY",
-            "day_window": f"00:00-23:59:59 {row.timezone}",
+            "day_window": "00:00-23:59:59 DGTERA source report date",
             "sync_interval_minutes": 2,
             "credentials": "REDACTED",
             "automatic_test": test_result,
@@ -562,7 +562,14 @@ def snapshot(
 
     return {
         "mode": "SALES_ONLY",
-        "window": {"start_date": start, "end_date": end, "day_start": "00:00", "day_end": "23:59:59", "timezone": connection.timezone},
+        "window": {
+            "start_date": start,
+            "end_date": end,
+            "day_start": "00:00",
+            "day_end": "23:59:59",
+            "date_basis": "DGTERA_SOURCE_REPORT_DATE",
+            "display_timezone": connection.timezone,
+        },
         "filters": {"branch_id": branch_id, "sales_scope": sales_scope, "service_mode": service_mode, "limit": limit},
         "coverage": _range_coverage(db, connection, start, end),
         # Fail closed at the API boundary.  Old mirror rows can remain in the

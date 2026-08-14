@@ -5,11 +5,11 @@ are read, including open orders when the report's "include unclosed" option is
 enabled. Cancelled orders are excluded. No accounting moves, inventory
 movements or recipes are requested from DGTERA.
 
-Odoo stores ``Datetime`` values as naive UTC strings and converts them for the
-web client.  CORVAX therefore converts each requested Riyadh business-day
-boundary to UTC for the RPC domain, then converts every returned timestamp
-back to Riyadh before assigning its sales date.  This is the same calendar
-semantics as DGTERA's visible date filter.
+DGTERA's custom Branch Sales report applies its visible From/To dates directly
+to the source ``pos.order.date_order`` value.  Odoo exposes that value over RPC
+as a naive UTC string.  The report day must therefore remain the source date
+(``00:00:00`` through ``23:59:59``) rather than a Riyadh-shifted window.  A
+separate local timestamp is retained only for display and audit.
 """
 from __future__ import annotations
 
@@ -66,6 +66,24 @@ CUSTOM_FIELD_HINTS = (
 
 class DgteraRemoteError(RuntimeError):
     """Safe remote error which never contains credentials or response bodies."""
+
+
+class DgteraResultLimitExceeded(DgteraRemoteError):
+    """A complete source window is too large for one safe in-memory read.
+
+    The caller may split the date range and retry.  A single-day failure is
+    still fatal so CORVAX never truncates a busy day silently.
+    """
+
+    def __init__(self, model: str, total: int, maximum: int):
+        self.model = model
+        self.total = int(total)
+        self.maximum = int(maximum)
+        super().__init__(
+            f"DGTERA returned {self.total} {self.model} records; safety limit is "
+            f"{self.maximum}. CORVAX splits multi-day windows automatically and "
+            "rejects a single oversized business day."
+        )
 
 
 def money(value: object) -> Decimal:
@@ -302,10 +320,7 @@ class Odoo14Client:
     ) -> list[dict[str, object]]:
         total = int(self.execute_kw(model, "search_count", [domain]) or 0)
         if total > maximum:
-            raise DgteraRemoteError(
-                f"DGTERA returned {total} {model} records; safety limit is {maximum}. "
-                "Use a shorter date window instead of accepting truncated sales."
-            )
+            raise DgteraResultLimitExceeded(model, total, maximum)
         rows: list[dict[str, object]] = []
         offset = 0
         page_size = min(500, maximum)
@@ -342,15 +357,15 @@ class Odoo14Client:
         """
         zone = ZoneInfo(timezone_name)
         since = since_utc.astimezone(timezone.utc) if since_utc.tzinfo else since_utc.replace(tzinfo=timezone.utc)
-        history_start_utc = datetime.combine(history_start, DAY_START, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
+        history_start_source = datetime.combine(history_start, DAY_START)
         today = datetime.now(timezone.utc).astimezone(zone).date()
-        today_end_utc = datetime.combine(today, DAY_END, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
+        today_end_source = datetime.combine(today, DAY_END)
         rows = self._search_read_all(
             "pos.order",
             [
                 ("write_date", ">=", since.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")),
-                ("date_order", ">=", history_start_utc.strftime("%Y-%m-%d %H:%M:%S")),
-                ("date_order", "<=", today_end_utc.strftime("%Y-%m-%d %H:%M:%S")),
+                ("date_order", ">=", history_start_source.strftime("%Y-%m-%d %H:%M:%S")),
+                ("date_order", "<=", today_end_source.strftime("%Y-%m-%d %H:%M:%S")),
             ],
             self._available("pos.order", ["id", "date_order", "write_date", "state"]),
             order="write_date,id",
@@ -358,9 +373,10 @@ class Odoo14Client:
         )
         result = set()
         for row in rows:
-            ordered_local, _ = _odoo_source_local_datetime(row.get("date_order"), zone)
-            if history_start <= ordered_local.date() <= today:
-                result.add(ordered_local.date())
+            _, ordered_utc = _odoo_source_local_datetime(row.get("date_order"), zone)
+            report_date = ordered_utc.date()
+            if history_start <= report_date <= today:
+                result.add(report_date)
         return sorted(result)
 
     def daily_sales(self, start_date: date, end_date: date, timezone_name: str) -> list[dict[str, object]]:
@@ -369,11 +385,11 @@ class Odoo14Client:
         if (end_date - start_date).days > 31:
             raise ValueError("A DGTERA sales window cannot exceed 32 days")
         zone = ZoneInfo(timezone_name)
-        # Odoo Datetime strings are UTC.  Convert the requested Riyadh calendar
-        # boundaries to UTC before building the RPC domain, exactly as the web
-        # client's date filter does.
-        start_source = datetime.combine(start_date, DAY_START, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
-        end_source = datetime.combine(end_date, DAY_END, tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
+        # Match DGTERA's custom Branch Sales report literally: its From/To
+        # values are applied to the naive source date_order field without a
+        # Riyadh boundary shift.
+        start_source = datetime.combine(start_date, DAY_START)
+        end_source = datetime.combine(end_date, DAY_END)
         domain = [
             ("state", "in", list(BRANCH_REPORT_ORDER_STATES)),
             ("date_order", ">=", start_source.strftime("%Y-%m-%d %H:%M:%S")),
@@ -397,17 +413,21 @@ class Odoo14Client:
             "pos.order", domain, order_fields, order="date_order,id",
             maximum=settings.dgtera_max_orders_per_sync,
         )
-        # Enforce the converted local calendar range again after reading so a
-        # custom source timezone or offset can never leak an adjacent day.
+        # Enforce the source-report date again after reading.  The Riyadh value
+        # is display metadata only and must not decide which DGTERA report day
+        # owns the sale.
         filtered_orders = []
         for row in orders:
             ordered_local, ordered_utc = _odoo_source_local_datetime(row.get("date_order"), zone)
-            if not (start_date <= ordered_local.date() <= end_date):
+            report_date = ordered_utc.date()
+            if not (start_date <= report_date <= end_date):
                 continue
-            if ordered_local.time().replace(tzinfo=None) < DAY_START or ordered_local.time().replace(tzinfo=None) > DAY_END:
+            report_time = ordered_utc.time().replace(tzinfo=None)
+            if report_time < DAY_START or report_time > DAY_END:
                 continue
             row["_ordered_utc"] = ordered_utc
             row["_ordered_local"] = ordered_local
+            row["_report_date"] = report_date
             filtered_orders.append(row)
         orders = filtered_orders
         if not orders:
@@ -605,7 +625,7 @@ class Odoo14Client:
                 "state": str(order.get("state") or ""),
                 "date_order_utc": ordered_utc.replace(tzinfo=None).isoformat(sep=" "),
                 "date_order_local": ordered_local.replace(tzinfo=None).isoformat(sep=" "),
-                "sales_date": ordered_local.date().isoformat(),
+                "sales_date": order["_report_date"].isoformat(),
                 "session_id": session_id or None,
                 "session_name": str(session.get("name") or session_display or "") or None,
                 "branch": {"config_id": config_id, "config_name": config_name},

@@ -30,6 +30,7 @@ from app.services.audit import write_audit
 from app.services.dgtera_connector import (
     BRANCH_REPORT_ORDER_STATES,
     DgteraRemoteError,
+    DgteraResultLimitExceeded,
     Odoo14Client,
     money,
     quantity,
@@ -41,7 +42,7 @@ HISTORY_START_DATE = date(2025, 1, 1)
 HISTORY_CHUNK_DAYS = 31
 LIVE_SYNC_INTERVAL_MINUTES = 2
 HISTORY_RECHECK_INTERVAL_HOURS = 24
-SOURCE_LOCAL_WINDOW_MARKER = "odoo-utc-riyadh-line-report-strict-v6"
+SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v8"
 
 
 class DgteraSyncBusy(RuntimeError):
@@ -71,7 +72,7 @@ def client_for(connection: DgteraConnection) -> Odoo14Client:
 
 
 def _window_label(connection: DgteraConnection) -> str:
-    return f"00:00-23:59:59 {connection.timezone} / {SOURCE_LOCAL_WINDOW_MARKER}"
+    return f"00:00-23:59:59 DGTERA source date / {SOURCE_LOCAL_WINDOW_MARKER}"
 
 
 def _source_datetime(value: object) -> datetime | None:
@@ -970,11 +971,11 @@ def strict_range_reconciliation_evidence(
 
 
 def historical_backfill_status(db: Session, connection: DgteraConnection) -> dict:
-    """Return progress for the contiguous source-local history import.
+    """Return progress for the contiguous DGTERA report-date history import.
 
-    Runs created before the source-local date correction are intentionally not
-    counted.  Re-reading those dates updates their existing order ids and
-    moves each order to the same business date used by DGTERA's branch report.
+    Runs created before the V8 source-report date correction are intentionally
+    not counted. Re-reading those dates updates their existing order ids and
+    moves each order to the exact date used by DGTERA's Branch Sales report.
     """
     zone = ZoneInfo(connection.timezone or "Asia/Riyadh")
     today = utc_now_aware().astimezone(zone).date()
@@ -1077,6 +1078,10 @@ def _sync_unlocked(
 ) -> dict:
     try:
         source_orders = client_for(connection).daily_sales(start_date, end_date, connection.timezone)
+    except DgteraResultLimitExceeded:
+        # Nothing has been changed locally yet.  Let the outer orchestrator
+        # split this source range without recording a false failed sync run.
+        raise
     except (DgteraRemoteError, ValueError) as exc:
         connection.last_error = str(exc)
         run = DgteraSyncRun(
@@ -1203,7 +1208,7 @@ def _sync_unlocked(
             end_date=end_date,
             window_label=(
                 _window_label(connection)
-                if connection else f"00:00-23:59:59 Asia/Riyadh / {SOURCE_LOCAL_WINDOW_MARKER}"
+                if connection else f"00:00-23:59:59 DGTERA source date / {SOURCE_LOCAL_WINDOW_MARKER}"
             ),
             status="ERROR",
             source_orders=len(source_orders),
@@ -1247,6 +1252,89 @@ def _sync_unlocked(
     }
 
 
+def _merge_split_sync_results(
+    start_date: date,
+    end_date: date,
+    results: list[dict],
+) -> dict:
+    """Combine independently reconciled child windows without losing proof."""
+    if not results:
+        raise RuntimeError("DGTERA split synchronization produced no verified windows")
+    source_metrics = {
+        "orders": 0, "lines": 0, "payments": 0, "quantity": Decimal("0"),
+        "subtotal": Decimal("0"), "vat": Decimal("0"), "gross": Decimal("0"),
+        "paid": Decimal("0"), "returns": Decimal("0"), "discounts": Decimal("0"),
+    }
+    local_metrics = dict(source_metrics)
+    checks = {name: True for name in _STRICT_CHECKS}
+    daily: dict[str, dict] = {}
+    verification_parts: list[str] = []
+    for result in results:
+        report = result["reconciliation"]
+        if not report.get("matched"):
+            raise DgteraReconciliationError(report)
+        for name in checks:
+            checks[name] = bool(checks[name] and report.get("checks", {}).get(name, False))
+        for destination, shown in (
+            (source_metrics, report.get("source", {})),
+            (local_metrics, report.get("corvax", {})),
+        ):
+            for key in ("orders", "lines", "payments"):
+                destination[key] += int(shown.get(key) or 0)
+            for key in ("quantity", "subtotal", "vat", "gross", "paid", "returns", "discounts"):
+                destination[key] += Decimal(str(shown.get(key) or 0))
+        daily.update(report.get("daily") or {})
+        verification_parts.append(
+            f"{result['start_date']}:{result['end_date']}:{result.get('verification_hash') or ''}"
+        )
+    verification_hash = hashlib.sha256("\n".join(verification_parts).encode("utf-8")).hexdigest()
+    reconciliation = {
+        "strict": True,
+        "matched": all(checks.values()) and source_metrics == local_metrics,
+        "mismatch_count": 0,
+        "checks": checks,
+        "source": _shown_metrics(source_metrics),
+        "corvax": _shown_metrics(local_metrics),
+        "difference": format(money(local_metrics["gross"] - source_metrics["gross"]), "f"),
+        "verification_hash": verification_hash,
+        "daily": daily,
+        "mismatches": [],
+    }
+    if not reconciliation["matched"]:
+        reconciliation["mismatch_count"] = 1
+        reconciliation["mismatches"] = [{
+            "category": "source_hashes",
+            "path": "split.aggregate",
+            "expected": "all child proofs and aggregate metrics equal",
+            "actual": "aggregate proof mismatch",
+        }]
+        raise DgteraReconciliationError(reconciliation)
+    return {
+        "run_id": results[-1]["run_id"],
+        "run_ids": [result["run_id"] for result in results],
+        "start_date": start_date,
+        "end_date": end_date,
+        "window": f"{results[0]['window']} / adaptive-safe-split",
+        "split_windows": len(results),
+        "source_orders": sum(int(result.get("source_orders") or 0) for result in results),
+        "inserted": sum(int(result.get("inserted") or 0) for result in results),
+        "updated": sum(int(result.get("updated") or 0) for result in results),
+        "unchanged": sum(int(result.get("unchanged") or 0) for result in results),
+        "removed": sum(int(result.get("removed") or 0) for result in results),
+        "source_total": money(sum(
+            (Decimal(str(result.get("source_total") or 0)) for result in results), Decimal("0")
+        )),
+        "imported_total": money(sum(
+            (Decimal(str(result.get("imported_total") or 0)) for result in results), Decimal("0")
+        )),
+        "reconciled": True,
+        "strict_reconciled": True,
+        "verification_hash": verification_hash,
+        "reconciliation": reconciliation,
+        "mode": "SALES_ONLY",
+    }
+
+
 def sync_connection(
     db: Session,
     connection: DgteraConnection,
@@ -1259,13 +1347,48 @@ def sync_connection(
     if not _SYNC_LOCK.acquire(blocking=False):
         raise DgteraSyncBusy("A DGTERA sales synchronization is already running")
     try:
-        return _sync_unlocked(
-            db,
-            connection,
-            start_date,
-            end_date,
-            actor_user_id,
-            mark_current_sync=mark_current_sync,
-        )
+        try:
+            return _sync_unlocked(
+                db,
+                connection,
+                start_date,
+                end_date,
+                actor_user_id,
+                mark_current_sync=mark_current_sync,
+            )
+        except DgteraResultLimitExceeded:
+            if start_date >= end_date:
+                # A complete business day is the minimum auditable unit.  It
+                # must never be accepted partially, even on an unusually busy
+                # day.
+                raise
+
+        leaf_results: list[dict] = []
+
+        def sync_split(window_start: date, window_end: date) -> None:
+            try:
+                leaf_results.append(_sync_unlocked(
+                    db,
+                    connection,
+                    window_start,
+                    window_end,
+                    actor_user_id,
+                    mark_current_sync=False,
+                ))
+            except DgteraResultLimitExceeded:
+                if window_start >= window_end:
+                    raise
+                midpoint = window_start + timedelta(days=(window_end - window_start).days // 2)
+                sync_split(window_start, midpoint)
+                sync_split(midpoint + timedelta(days=1), window_end)
+
+        midpoint = start_date + timedelta(days=(end_date - start_date).days // 2)
+        sync_split(start_date, midpoint)
+        sync_split(midpoint + timedelta(days=1), end_date)
+        if mark_current_sync:
+            connection.last_sync_at = utc_now()
+            connection.last_error = None
+            db.commit()
+        return _merge_split_sync_results(start_date, end_date, leaf_results)
     finally:
         _SYNC_LOCK.release()

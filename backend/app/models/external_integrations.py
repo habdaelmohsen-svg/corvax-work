@@ -201,7 +201,7 @@ class DgteraSyncRun(Base):
     company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
     start_date = Column(Date, nullable=False, index=True)
     end_date = Column(Date, nullable=False, index=True)
-    window_label = Column(String(100), nullable=False, default="00:00-23:59:59 Asia/Riyadh")
+    window_label = Column(String(100), nullable=False, default="00:00-23:59:59 DGTERA source date")
     status = Column(String(30), nullable=False, default="RUNNING", index=True)
     source_orders = Column(Integer, nullable=False, default=0)
     inserted_orders = Column(Integer, nullable=False, default=0)

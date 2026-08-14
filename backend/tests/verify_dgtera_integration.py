@@ -51,6 +51,7 @@ from app.services.dgtera_connector import (  # noqa: E402
     BRANCH_REPORT_ORDER_STATES,
     DAY_END,
     DAY_START,
+    DgteraResultLimitExceeded,
     Odoo14Client,
     classify_sale,
     validate_dgtera_url,
@@ -125,28 +126,29 @@ class StubOdooClient(Odoo14Client):
             self.order_domains.append(domain)
         d = self.sales_date
         previous_day = d - timedelta(days=1)
+        next_day = d + timedelta(days=1)
         orders = [
             {
                 "id": 1, "name": "EXCLUDED-PREVIOUS", "pos_reference": "EXCLUDED-PREVIOUS",
-                "date_order": f"{previous_day.isoformat()} 20:59:59", "state": "done",
+                "date_order": f"{previous_day.isoformat()} 23:59:59", "state": "done",
                 "session_id": [501, "S501"], "partner_id": False, "lines": [101],
                 "amount_untaxed": 10, "amount_tax": 1.5, "amount_total": 11.5, "amount_paid": 11.5,
             },
             {
                 "id": 2, "name": "INCLUDED-0000", "pos_reference": "INCLUDED-0000",
-                "date_order": f"{previous_day.isoformat()} 21:00:00", "state": "draft",
+                "date_order": f"{d.isoformat()} 00:00:00", "state": "draft",
                 "session_id": [501, "S501"], "partner_id": False, "lines": [102],
                 "amount_untaxed": 20, "amount_tax": 3, "amount_total": 23, "amount_paid": 23,
             },
             {
                 "id": 3, "name": "INCLUDED-2359", "pos_reference": "INCLUDED-2359",
-                "date_order": f"{d.isoformat()} 20:59:59", "state": "done",
+                "date_order": f"{d.isoformat()} 23:59:59", "state": "done",
                 "session_id": [501, "S501"], "partner_id": [301, "Keeta"], "lines": [103],
                 "amount_untaxed": 30, "amount_tax": 4.5, "amount_total": 34.5, "amount_paid": 34.5,
             },
             {
                 "id": 4, "name": "EXCLUDED-NEXT", "pos_reference": "EXCLUDED-NEXT",
-                "date_order": f"{d.isoformat()} 21:00:00", "state": "done",
+                "date_order": f"{next_day.isoformat()} 00:00:00", "state": "done",
                 "session_id": [501, "S501"], "partner_id": False, "lines": [104],
                 "amount_untaxed": 40, "amount_tax": 6, "amount_total": 46, "amount_paid": 46,
             },
@@ -185,13 +187,18 @@ class StubOdooClient(Odoo14Client):
 
 
 def verify_real_connector_window(sales_date: date) -> None:
-    # Odoo RPC Datetime strings are UTC. Riyadh's business day therefore maps
-    # to 21:00 UTC on the previous date through 20:59:59 UTC on the date.
+    # DGTERA's custom Branch Sales report applies 00:00:00..23:59:59 to
+    # date_order as exposed by the source. Do not shift that report window by
+    # three hours merely because the display timestamp is shown in Riyadh.
     stub = StubOdooClient(sales_date)
     rows = stub.daily_sales(sales_date, sales_date, "Asia/Riyadh")
     assert [row["order_id"] for row in rows] == ["2", "3"]
-    assert rows[0]["date_order_local"].endswith("00:00:00")
-    assert rows[1]["date_order_local"].endswith("23:59:59")
+    assert rows[0]["date_order_utc"].endswith("00:00:00")
+    assert rows[1]["date_order_utc"].endswith("23:59:59")
+    assert rows[0]["date_order_local"].endswith("03:00:00")
+    assert rows[1]["date_order_local"].startswith((sales_date + timedelta(days=1)).isoformat())
+    assert rows[1]["date_order_local"].endswith("02:59:59")
+    assert {row["sales_date"] for row in rows} == {sales_date.isoformat()}
     assert rows[0]["service_mode"] == "TAKEAWAY"
     assert rows[0]["state"] == "draft"
     assert rows[0]["source_metadata"]["corvax_financial_source"] == BRANCH_REPORT_FINANCIAL_SOURCE
@@ -209,6 +216,9 @@ def verify_real_connector_window(sales_date: date) -> None:
     state_condition = next(condition for condition in stub.order_domains[0] if condition[0] == "state")
     assert state_condition == ("state", "in", list(BRANCH_REPORT_ORDER_STATES))
     assert "draft" in state_condition[2] and "cancel" not in state_condition[2]
+    date_domain = stub.order_domains[0]
+    assert ("date_order", ">=", f"{sales_date.isoformat()} 00:00:00") in date_domain
+    assert ("date_order", "<=", f"{sales_date.isoformat()} 23:59:59") in date_domain
     changed_dates = stub.changed_sales_dates(
         datetime.now(timezone.utc) - timedelta(minutes=5),
         sales_date - timedelta(days=365),
@@ -232,11 +242,150 @@ def verify_attached_report_reference_totals() -> None:
     assert day_net + day_vat == day_gross
     year_net, year_vat, year_gross = Decimal("6464308.29"), Decimal("969636.26"), Decimal("7433944.55")
     assert year_net + year_vat == year_gross
+    # Latest authoritative 13-Aug-2026 DGTERA Branch Sales footer supplied by
+    # the user. Branch rows are display-rounded and can differ by one halala;
+    # the report footer is the controlling financial total.
+    current_qty = sum(map(Decimal, ("67", "38", "9", "53", "21", "1", "4")))
+    current_net = Decimal("3793.06")
+    current_vat = Decimal("568.94")
+    current_gross = Decimal("4362.00")
+    assert current_qty == Decimal("193")
+    assert current_net + current_vat == current_gross
+    assert sum(map(Decimal, (
+        "1266.00", "910.00", "226.00", "1312.00", "506.00", "26.00", "116.00",
+    ))) == current_gross
+
+
+def verify_adaptive_safe_split() -> None:
+    """A large source response is split, fully read and proved—not truncated."""
+    range_start = date(2026, 8, 10)
+    range_end = date(2026, 8, 13)
+    calls: list[tuple[date, date, bool]] = []
+
+    class DummyDb:
+        def __init__(self):
+            self.commits = 0
+
+        def commit(self):
+            self.commits += 1
+
+    class DummyConnection:
+        id = 1
+        company_id = 1
+        timezone = "Asia/Riyadh"
+        last_sync_at = None
+        last_error = "old result-limit error"
+
+    checks = {
+        name: True for name in (
+            "order_ids", "order_headers", "branches", "customers", "products",
+            "lines", "payments", "states", "quantity", "net", "vat", "gross",
+            "paid", "returns", "discounts", "source_hashes",
+        )
+    }
+
+    def result_for(day: date) -> dict:
+        source = {
+            "orders": 100,
+            "lines": 193,
+            "payments": 100,
+            "quantity": "193.0000",
+            "subtotal": "3793.06",
+            "vat": "568.94",
+            "gross": "4362.00",
+            "paid": "4362.00",
+            "returns": "0.00",
+            "discounts": "0.00",
+        }
+        proof_hash = f"{day.toordinal():064x}"[-64:]
+        report = {
+            "strict": True,
+            "matched": True,
+            "mismatch_count": 0,
+            "checks": dict(checks),
+            "source": dict(source),
+            "corvax": dict(source),
+            "difference": "0.00",
+            "verification_hash": proof_hash,
+            "daily": {day.isoformat(): {"matched": True, "verification_hash": proof_hash}},
+            "mismatches": [],
+        }
+        return {
+            "run_id": day.toordinal(),
+            "start_date": day,
+            "end_date": day,
+            "window": "00:00-23:59:59 DGTERA source date / strict-v8",
+            "source_orders": 100,
+            "inserted": 100,
+            "updated": 0,
+            "unchanged": 0,
+            "removed": 0,
+            "source_total": Decimal("4362.00"),
+            "imported_total": Decimal("4362.00"),
+            "reconciled": True,
+            "strict_reconciled": True,
+            "verification_hash": proof_hash,
+            "reconciliation": report,
+            "mode": "SALES_ONLY",
+        }
+
+    def fake_sync(db, connection, start_date, end_date, actor_user_id, *, mark_current_sync):
+        calls.append((start_date, end_date, mark_current_sync))
+        if start_date != end_date:
+            raise DgteraResultLimitExceeded("pos.order", 15911, 10000)
+        return result_for(start_date)
+
+    db = DummyDb()
+    connection = DummyConnection()
+    with patch("app.services.dgtera_sales_sync._sync_unlocked", side_effect=fake_sync):
+        merged = sync_connection(db, connection, range_start, range_end, 1)
+
+    assert calls[0] == (range_start, range_end, True)
+    leaf_calls = [item for item in calls[1:] if item[0] == item[1]]
+    assert [item[0] for item in leaf_calls] == [
+        date(2026, 8, 10), date(2026, 8, 11), date(2026, 8, 12), date(2026, 8, 13)
+    ]
+    assert all(mark_current_sync is False for _, _, mark_current_sync in calls[1:])
+    assert merged["split_windows"] == 4
+    assert merged["source_orders"] == 400
+    assert merged["source_total"] == merged["imported_total"] == Decimal("17448.00")
+    assert merged["reconciliation"]["matched"] is True
+    assert merged["reconciliation"]["difference"] == "0.00"
+    assert set(merged["reconciliation"]["daily"]) == {
+        "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13"
+    }
+    assert all(merged["reconciliation"]["checks"].values())
+    assert db.commits == 1
+    assert connection.last_sync_at is not None and connection.last_error is None
+
+    # A single business day cannot be split further.  It must fail closed
+    # instead of accepting a capped/truncated response as complete sales.
+    single_day_db = DummyDb()
+    single_day_connection = DummyConnection()
+    with patch(
+        "app.services.dgtera_sales_sync._sync_unlocked",
+        side_effect=DgteraResultLimitExceeded("pos.order", 10001, 10000),
+    ):
+        try:
+            sync_connection(
+                single_day_db,
+                single_day_connection,
+                range_start,
+                range_start,
+                1,
+            )
+        except DgteraResultLimitExceeded:
+            pass
+        else:
+            raise AssertionError("a truncated single DGTERA business day was accepted")
+    assert single_day_db.commits == 0
+    assert single_day_connection.last_sync_at is None
 
 
 def main() -> None:
     assert str(DAY_START) == "00:00:00"
     assert str(DAY_END) == "23:59:59"
+    assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v8"
     assert BRANCH_REPORT_ORDER_STATES == ("draft", "paid", "done", "invoiced")
     assert HISTORY_CHUNKS_PER_CYCLE == 24
     assert _date_windows([
@@ -262,6 +411,7 @@ def main() -> None:
     assert classify_sale(partner_name="", payment_method_names=["Cash"], optional_values={})[:2] == ("INTERNAL", "TAKEAWAY")
     verify_real_connector_window(date.today())
     verify_attached_report_reference_totals()
+    verify_adaptive_safe_split()
 
     sales_date = date.today()
     source = {
@@ -344,7 +494,7 @@ def main() -> None:
                 },
             ))
             assert saved["connected"] and saved["mode"] == "SALES_ONLY"
-            assert saved["day_window"] == "00:00-23:59:59 Asia/Riyadh"
+            assert saved["day_window"] == "00:00-23:59:59 DGTERA source report date"
             assert saved["sync_interval_minutes"] == 2
             assert saved["initial_sync"]["inserted"] == 1
             assert saved["initial_sync"]["reconciled"] is True
@@ -430,6 +580,7 @@ def main() -> None:
             assert snap["mode"] == "SALES_ONLY"
             assert snap["coverage"]["complete"] is True
             assert snap["window"]["day_start"] == "00:00" and snap["window"]["day_end"] == "23:59:59"
+            assert snap["window"]["date_basis"] == "DGTERA_SOURCE_REPORT_DATE"
             assert snap["totals"]["orders"] == 1 and float(snap["totals"]["external_sales"]) == 230
             assert float(snap["totals"]["quantity"]) == 2
             assert snap["master_counts"] == {"branches": 1, "products": 1, "customers": 1}

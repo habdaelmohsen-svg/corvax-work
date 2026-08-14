@@ -7,6 +7,7 @@
 - Version: `1.0.0-agreement-completion-rc27.4-r9.4`
 - Migration head: `e20100000001`
 - DGTERA daily sales runbook: `docs/DGTERA_DAILY_SALES_INTEGRATION.md`
+- DGTERA V8 uses the exact Branch Sales source-report date without the former Riyadh boundary shift; V6/V7 proofs are invalidated and history is reverified from `2025-01-01`.
 - Frontend production build: `2,035` modules — PASSED
 - Backend compilation: PASSED
 - Security, branch scope, health, RC20, RC21 and RC25 verification: PASSED in the RC27.2 execution round
@@ -28,7 +29,7 @@ Apply migrations through `e20100000001`. The transaction/value reset is availabl
 - Fixed-asset cards remain with zero cost/depreciation/NBV and can receive a new opening value from the Fixed Assets screen.
 - Requires the `SUPER_ADMIN` role, `data.reset`, backup acknowledgement, exact phrase, safe preview and a signed 10-minute authorization.
 - Focused gate: `backend/tests/verify_uat_full_reset.py`.
-- Full release verification: `51/51` maintained verification scripts passed.
+- Full release verification: `53/53` maintained verification gates passed.
 
 ## R9.3 usability and reporting
 

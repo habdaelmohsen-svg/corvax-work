@@ -195,8 +195,8 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
             ? 'هذا هو ربط DGTERA المشترك بين الشركة القابضة وشركة المطاعم. تظهر المبيعات في الشركتين من السجل نفسه دون نسخ الطلبات أو مضاعفة الإجماليات.'
             : 'This DGTERA connection is shared by the holding and restaurant companies. Both workspaces read the same records without copying orders or doubling totals.')
           : (ar
-            ? 'يحفظ CORVAX بيانات الاتصال مشفرة ويطابق يوم المبيعات مع تقرير DGTERA المحلي. يبدأ من اليوم ثم يستكمل تاريخ المبيعات تلقائيًا حتى 1 يناير 2025.'
-            : 'CORVAX encrypts the connection and matches DGTERA local report dates. It imports today first, then automatically backfills sales to 1 January 2025.')}
+            ? 'يحفظ CORVAX بيانات الاتصال مشفرة ويطابق اليوم مع تاريخ تقرير مبيعات الفروع في DGTERA كما هو، دون إزاحة زمنية. يبدأ من اليوم ثم يستكمل التاريخ تلقائيًا حتى 1 يناير 2025.'
+            : 'CORVAX encrypts the connection and matches the DGTERA Branch Sales source-report date without a time-zone shift. It imports today first, then automatically backfills sales to 1 January 2025.')}
       </div>
       {!status.inherited&&<div style={grid}>
         <label>{ar?'رابط DGTERA':'DGTERA URL'}<input style={field} value={baseUrl} onChange={e=>setBaseUrl(e.target.value)}/></label>
@@ -207,7 +207,7 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
       <div style={{display:'flex',gap:12,padding:'0 12px 14px',alignItems:'center',flexWrap:'wrap'}}>
         {!status.inherited&&<button style={{...btn,opacity:busy?.6:1}} disabled={busy} onClick={saveConnection}>{ar?'حفظ وتفعيل الربط الآلي':'Save & activate automatic sync'}</button>}
         <span style={{fontSize:13,lineHeight:1.8}}>
-          <Clock3 size={16}/> {ar?'يوم المبيعات: 00:00 إلى 23:59:59 بتوقيت الرياض — تحديث ومطابقة تلقائية كل دقيقتين.':'Sales day: 00:00–23:59:59 Asia/Riyadh — automatic refresh and reconciliation every 2 minutes.'}
+          <Clock3 size={16}/> {ar?'يوم المبيعات: 00:00 إلى 23:59:59 حسب تاريخ تقرير DGTERA — تحديث ومطابقة تلقائية كل دقيقتين.':'Sales day: 00:00–23:59:59 by DGTERA source-report date — automatic refresh and reconciliation every 2 minutes.'}
         </span>
       </div>
       {status.configured&&<div style={{padding:'0 12px 14px',fontSize:13,lineHeight:1.8}}>
