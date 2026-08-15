@@ -13,6 +13,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -114,6 +115,7 @@ class DgteraSalesOrder(Base):
     __tablename__ = "dgtera_sales_orders"
     __table_args__ = (
         UniqueConstraint("connection_id", "external_order_id", name="uq_dgtera_sales_order_external"),
+        Index("ix_dgtera_sales_orders_connection_sales_date", "connection_id", "sales_date"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -195,6 +197,12 @@ class DgteraSalesPayment(Base):
 
 class DgteraSyncRun(Base):
     __tablename__ = "dgtera_sync_runs"
+    __table_args__ = (
+        Index(
+            "ix_dgtera_sync_runs_connection_dates_status",
+            "connection_id", "start_date", "end_date", "status", "strict_reconciled",
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
     connection_id = Column(Integer, ForeignKey("dgtera_connections.id", ondelete="CASCADE"), nullable=False, index=True)
