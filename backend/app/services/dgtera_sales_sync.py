@@ -10,7 +10,8 @@ from threading import Lock
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session, defer, selectinload
 
 from app.core.time import utc_now, utc_now_aware
 from app.models import (
@@ -39,10 +40,18 @@ from app.services.dgtera_connector import (
 
 _SYNC_LOCK = Lock()
 HISTORY_START_DATE = date(2025, 1, 1)
-HISTORY_CHUNK_DAYS = 31
+# A single DGTERA business day is the smallest auditable and operationally
+# safe transaction.  Committing each day separately prevents the 2025
+# backfill from holding one large PostgreSQL transaction while live reports
+# are being read.
+HISTORY_CHUNK_DAYS = 1
 LIVE_SYNC_INTERVAL_MINUTES = 2
 HISTORY_RECHECK_INTERVAL_HOURS = 24
 SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v8"
+_TRANSIENT_DB_SQLSTATES = {
+    "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
+    "40001", "40P01", "53300", "53400", "55P03", "57P01", "57P02", "57P03",
+}
 
 
 class DgteraSyncBusy(RuntimeError):
@@ -60,6 +69,40 @@ class DgteraReconciliationError(RuntimeError):
             f"strict reconciliation failed ({report.get('mismatch_count', 0)} differences)"
             + (f": {preview}" if preview else "")
         )
+
+
+def _operational_error_code(exc: OperationalError) -> str | None:
+    original = getattr(exc, "orig", None)
+    return (
+        getattr(original, "sqlstate", None)
+        or getattr(original, "pgcode", None)
+    )
+
+
+def _is_transient_operational_error(exc: OperationalError) -> bool:
+    code = _operational_error_code(exc)
+    if code in _TRANSIENT_DB_SQLSTATES or (code and code.startswith("08")):
+        return True
+    message = str(getattr(exc, "orig", exc)).casefold()
+    return any(token in message for token in (
+        "connection reset",
+        "connection refused",
+        "connection is closed",
+        "connection has been closed",
+        "server closed the connection",
+        "terminating connection",
+        "timeout expired",
+        "remaining connection slots",
+    ))
+
+
+def _safe_sync_error(exc: Exception) -> str:
+    """Return actionable diagnostics without SQL text, parameters or secrets."""
+    if isinstance(exc, OperationalError):
+        code = _operational_error_code(exc) or "unknown"
+        original = type(getattr(exc, "orig", exc)).__name__
+        return f"OperationalError[{code}] ({original})"
+    return f"{type(exc).__name__}: {str(exc)[:850]}"
 
 
 def client_for(connection: DgteraConnection) -> Odoo14Client:
@@ -102,13 +145,20 @@ def _normalized_name(value: str) -> str:
     return re.sub(r"[^\w\u0600-\u06ff]+", "", (value or "").casefold())
 
 
-def _upsert_branch(db: Session, connection: DgteraConnection, source: dict) -> DgteraBranch:
+def _upsert_branch(
+    db: Session,
+    connection: DgteraConnection,
+    source: dict,
+    cache: dict[str, DgteraBranch] | None = None,
+) -> DgteraBranch:
     external_id = str(source["config_id"])
     name = str(source.get("config_name") or f"DGTERA branch {external_id}")[:250]
-    row = db.scalar(select(DgteraBranch).where(
-        DgteraBranch.connection_id == connection.id,
-        DgteraBranch.external_config_id == external_id,
-    ))
+    row = cache.get(external_id) if cache is not None else None
+    if row is None:
+        row = db.scalar(select(DgteraBranch).where(
+            DgteraBranch.connection_id == connection.id,
+            DgteraBranch.external_config_id == external_id,
+        ))
     if row is None:
         code = _generated_code("DGT-B-", external_id, 30)
         branch = db.scalar(select(Branch).where(
@@ -135,6 +185,7 @@ def _upsert_branch(db: Session, connection: DgteraConnection, source: dict) -> D
             active=True,
         )
         db.add(row)
+        db.flush()
     else:
         branch = db.get(Branch, row.branch_id)
         if branch:
@@ -143,16 +194,24 @@ def _upsert_branch(db: Session, connection: DgteraConnection, source: dict) -> D
             branch.active = True
         row.name = name
         row.active = True
-    db.flush()
+    if cache is not None:
+        cache[external_id] = row
     return row
 
 
-def _upsert_product(db: Session, connection: DgteraConnection, source: dict) -> DgteraProduct:
+def _upsert_product(
+    db: Session,
+    connection: DgteraConnection,
+    source: dict,
+    cache: dict[str, DgteraProduct] | None = None,
+) -> DgteraProduct:
     external_id = str(source["product_id"])
-    row = db.scalar(select(DgteraProduct).where(
-        DgteraProduct.connection_id == connection.id,
-        DgteraProduct.external_product_id == external_id,
-    ))
+    row = cache.get(external_id) if cache is not None else None
+    if row is None:
+        row = db.scalar(select(DgteraProduct).where(
+            DgteraProduct.connection_id == connection.id,
+            DgteraProduct.external_product_id == external_id,
+        ))
     if row is None:
         row = DgteraProduct(
             connection_id=connection.id,
@@ -162,6 +221,7 @@ def _upsert_product(db: Session, connection: DgteraConnection, source: dict) -> 
             name=str(source.get("name") or external_id)[:300],
         )
         db.add(row)
+        db.flush()
     row.code = str(source.get("code") or row.code)[:80]
     row.barcode = (str(source.get("barcode"))[:120] if source.get("barcode") else None)
     row.name = str(source.get("name") or row.name)[:300]
@@ -170,7 +230,8 @@ def _upsert_product(db: Session, connection: DgteraConnection, source: dict) -> 
     row.list_price = money(source.get("list_price"))
     row.active = bool(source.get("active", True))
     row.source_updated_at = _source_datetime(source.get("source_updated_at"))
-    db.flush()
+    if cache is not None:
+        cache[external_id] = row
     return row
 
 
@@ -180,15 +241,18 @@ def _upsert_customer(
     source: dict | None,
     *,
     is_platform: bool,
+    cache: dict[str, DgteraCustomer] | None = None,
 ) -> DgteraCustomer | None:
     if not source:
         return None
     external_id = str(source["partner_id"])
     name = str(source.get("name") or f"DGTERA customer {external_id}")[:300]
-    row = db.scalar(select(DgteraCustomer).where(
-        DgteraCustomer.connection_id == connection.id,
-        DgteraCustomer.external_partner_id == external_id,
-    ))
+    row = cache.get(external_id) if cache is not None else None
+    if row is None:
+        row = db.scalar(select(DgteraCustomer).where(
+            DgteraCustomer.connection_id == connection.id,
+            DgteraCustomer.external_partner_id == external_id,
+        ))
     if row is None:
         party_code = _generated_code("DGT-C-", external_id, 30)
         party = db.scalar(select(Party).where(
@@ -217,6 +281,7 @@ def _upsert_customer(
             active=True,
         )
         db.add(row)
+        db.flush()
     party = db.get(Party, row.party_id)
     if party:
         party.name_ar = name[:250]
@@ -228,26 +293,37 @@ def _upsert_customer(
         row.customer_kind = "DELIVERY_PLATFORM"
     row.active = bool(source.get("active", True))
     row.source_updated_at = _source_datetime(source.get("source_updated_at"))
-    db.flush()
+    if cache is not None:
+        cache[external_id] = row
     return row
 
 
-def _upsert_platform(db: Session, connection: DgteraConnection, name: str | None) -> DeliveryPlatform | None:
+def _upsert_platform(
+    db: Session,
+    connection: DgteraConnection,
+    name: str | None,
+    cache: dict[str, DeliveryPlatform] | None = None,
+) -> DeliveryPlatform | None:
     clean_name = str(name or "").strip()
     if not clean_name:
         return None
     normalized = _normalized_name(clean_name)
-    platforms = db.scalars(select(DeliveryPlatform).where(
-        DeliveryPlatform.company_id == connection.company_id,
-    )).all()
-    for platform in platforms:
-        if normalized in {
-            _normalized_name(platform.code),
-            _normalized_name(platform.name_ar),
-            _normalized_name(platform.name_en),
-        }:
-            platform.active = True
-            return platform
+    if cache is not None and normalized in cache:
+        platform = cache[normalized]
+        platform.active = True
+        return platform
+    if cache is None:
+        platforms = db.scalars(select(DeliveryPlatform).where(
+            DeliveryPlatform.company_id == connection.company_id,
+        )).all()
+        for platform in platforms:
+            if normalized in {
+                _normalized_name(platform.code),
+                _normalized_name(platform.name_ar),
+                _normalized_name(platform.name_en),
+            }:
+                platform.active = True
+                return platform
     digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12].upper()
     code = f"DGT-{digest}"[:30]
     platform = db.scalar(select(DeliveryPlatform).where(
@@ -265,12 +341,20 @@ def _upsert_platform(db: Session, connection: DgteraConnection, name: str | None
         )
         db.add(platform)
         db.flush()
+    if cache is not None:
+        cache[normalized] = platform
     return platform
 
 
-def _apply_order(db: Session, connection: DgteraConnection, source: dict) -> str:
+def _apply_order(
+    db: Session,
+    connection: DgteraConnection,
+    source: dict,
+    caches: dict[str, dict] | None = None,
+) -> str:
+    caches = caches or {}
     branch_source = source["branch"]
-    dgtera_branch = _upsert_branch(db, connection, branch_source)
+    dgtera_branch = _upsert_branch(db, connection, branch_source, caches.get("branches"))
     customer_source = source.get("customer")
     platform_name = str(source.get("delivery_platform_name") or "")
     is_platform = bool(
@@ -278,8 +362,14 @@ def _apply_order(db: Session, connection: DgteraConnection, source: dict) -> str
         and platform_name
         and _normalized_name(str(customer_source.get("name") or "")) == _normalized_name(platform_name)
     )
-    customer = _upsert_customer(db, connection, customer_source, is_platform=is_platform)
-    platform = _upsert_platform(db, connection, source.get("delivery_platform_name"))
+    customer = _upsert_customer(
+        db, connection, customer_source,
+        is_platform=is_platform,
+        cache=caches.get("customers"),
+    )
+    platform = _upsert_platform(
+        db, connection, source.get("delivery_platform_name"), caches.get("platforms")
+    )
     # Product masters are shared across every sales date, while a line label
     # can vary by size/combo.  Refresh the master even when the order payload
     # itself is unchanged so a historical slice can never leave the global
@@ -289,13 +379,16 @@ def _apply_order(db: Session, connection: DgteraConnection, source: dict) -> str
         product_source = line_source["product"]
         external_product_id = str(product_source["product_id"])
         products_by_external_id[external_product_id] = _upsert_product(
-            db, connection, product_source
+            db, connection, product_source, caches.get("products")
         )
     external_id = str(source["order_id"])
-    order = db.scalar(select(DgteraSalesOrder).where(
-        DgteraSalesOrder.connection_id == connection.id,
-        DgteraSalesOrder.external_order_id == external_id,
-    ))
+    order_cache = caches.get("orders")
+    order = order_cache.get(external_id) if order_cache is not None else None
+    if order is None and order_cache is None:
+        order = db.scalar(select(DgteraSalesOrder).where(
+            DgteraSalesOrder.connection_id == connection.id,
+            DgteraSalesOrder.external_order_id == external_id,
+        ))
     if order is not None and order.source_hash == source["source_hash"]:
         return "UNCHANGED"
     outcome = "INSERTED" if order is None else "UPDATED"
@@ -317,9 +410,15 @@ def _apply_order(db: Session, connection: DgteraConnection, source: dict) -> str
         )
         db.add(order)
         db.flush()
+        if order_cache is not None:
+            order_cache[external_id] = order
     else:
         db.execute(delete(DgteraSalesOrderLine).where(DgteraSalesOrderLine.order_id == order.id))
         db.execute(delete(DgteraSalesPayment).where(DgteraSalesPayment.order_id == order.id))
+        # Direct child deletes bypass ORM relationship bookkeeping.  Expire
+        # the collections so the strict verifier reloads the replacement
+        # lines/payments instead of reusing an identity-map snapshot.
+        db.expire(order, ["lines", "payments"])
 
     order.external_order_name = str(source["order_name"])[:150]
     order.pos_reference = (str(source.get("pos_reference"))[:180] if source.get("pos_reference") else None)
@@ -1067,6 +1166,63 @@ def historical_recheck_window(
     return start_date, end_date
 
 
+def _sync_caches(
+    db: Session,
+    connection: DgteraConnection,
+    source_orders: list[dict],
+) -> dict[str, dict]:
+    """Prefetch reusable mirror rows for one transaction.
+
+    The former implementation queried and flushed branch, product, customer,
+    platform and order rows repeatedly for every order line.  A normal sales
+    day therefore produced thousands of PostgreSQL round trips, and the 2025
+    backfill could exhaust the live database connection.  These maps retain
+    the same idempotent keys while reducing each entity to one lookup.
+    """
+    branches = {
+        row.external_config_id: row
+        for row in db.scalars(select(DgteraBranch).where(
+            DgteraBranch.connection_id == connection.id,
+        )).all()
+    }
+    products = {
+        row.external_product_id: row
+        for row in db.scalars(select(DgteraProduct).where(
+            DgteraProduct.connection_id == connection.id,
+        )).all()
+    }
+    customers = {
+        row.external_partner_id: row
+        for row in db.scalars(select(DgteraCustomer).where(
+            DgteraCustomer.connection_id == connection.id,
+        )).all()
+    }
+    platforms: dict[str, DeliveryPlatform] = {}
+    for row in db.scalars(select(DeliveryPlatform).where(
+        DeliveryPlatform.company_id == connection.company_id,
+    )).all():
+        for value in (row.code, row.name_ar, row.name_en):
+            normalized = _normalized_name(str(value or ""))
+            if normalized:
+                platforms[normalized] = row
+    source_ids = sorted({str(row["order_id"]) for row in source_orders})
+    order_rows = db.scalars(
+        select(DgteraSalesOrder)
+        .where(
+            DgteraSalesOrder.connection_id == connection.id,
+            DgteraSalesOrder.external_order_id.in_(source_ids),
+        )
+        .options(defer(DgteraSalesOrder.source_payload))
+    ).all() if source_ids else []
+    return {
+        "branches": branches,
+        "products": products,
+        "customers": customers,
+        "platforms": platforms,
+        "orders": {row.external_order_id: row for row in order_rows},
+    }
+
+
 def _sync_unlocked(
     db: Session,
     connection: DgteraConnection,
@@ -1119,6 +1275,7 @@ def _sync_unlocked(
     )
     db.add(run)
     db.flush()
+    caches = _sync_caches(db, connection, source_orders)
     counts = {"INSERTED": 0, "UPDATED": 0, "UNCHANGED": 0}
     removed = 0
     try:
@@ -1139,7 +1296,7 @@ def _sync_unlocked(
             removed = len(stale_ids)
             db.execute(delete(DgteraSalesOrder).where(DgteraSalesOrder.id.in_(stale_ids)))
         for source in source_orders:
-            counts[_apply_order(db, connection, source)] += 1
+            counts[_apply_order(db, connection, source, caches)] += 1
         db.flush()
         reconciliation = _strict_reconciliation(
             db, connection, start_date, end_date, source_orders
@@ -1199,7 +1356,7 @@ def _sync_unlocked(
                     detail += f" [{', '.join(first_paths)}]"
                 connection.last_error = f"Sales mirror failed (DgteraReconciliationError){detail}"[:1000]
             else:
-                connection.last_error = f"Sales mirror failed ({type(exc).__name__})"
+                connection.last_error = f"Sales mirror failed — {_safe_sync_error(exc)}"[:1000]
         failed_report = exc.report if isinstance(exc, DgteraReconciliationError) else None
         failed = DgteraSyncRun(
             connection_id=connection.id if connection else run.connection_id,
@@ -1226,7 +1383,7 @@ def _sync_unlocked(
                 json.dumps(failed_report, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                 if failed_report else None
             ),
-            error_message=f"{type(exc).__name__}: {str(exc)[:900]}",
+            error_message=_safe_sync_error(exc),
             completed_at=utc_now(),
         )
         db.add(failed)
@@ -1346,11 +1503,15 @@ def sync_connection(
 ) -> dict:
     if not _SYNC_LOCK.acquire(blocking=False):
         raise DgteraSyncBusy("A DGTERA sales synchronization is already running")
-    try:
+
+    connection_id = connection.id
+
+    def sync_attempt(current_connection: DgteraConnection) -> dict:
+        """Run one complete, auditable attempt for the requested date range."""
         try:
             return _sync_unlocked(
                 db,
-                connection,
+                current_connection,
                 start_date,
                 end_date,
                 actor_user_id,
@@ -1369,7 +1530,7 @@ def sync_connection(
             try:
                 leaf_results.append(_sync_unlocked(
                     db,
-                    connection,
+                    current_connection,
                     window_start,
                     window_end,
                     actor_user_id,
@@ -1386,9 +1547,28 @@ def sync_connection(
         sync_split(start_date, midpoint)
         sync_split(midpoint + timedelta(days=1), end_date)
         if mark_current_sync:
-            connection.last_sync_at = utc_now()
-            connection.last_error = None
+            current_connection.last_sync_at = utc_now()
+            current_connection.last_error = None
             db.commit()
         return _merge_split_sync_results(start_date, end_date, leaf_results)
+
+    try:
+        current_connection = connection
+        for attempt in range(2):
+            try:
+                return sync_attempt(current_connection)
+            except OperationalError as exc:
+                # A managed database may briefly recycle a connection.  Retry
+                # the *whole* auditable range once after a clean rollback; do
+                # not continue from a half-written transaction.
+                if attempt or not _is_transient_operational_error(exc):
+                    raise
+                db.rollback()
+                db.expire_all()
+                refreshed = db.get(DgteraConnection, connection_id)
+                if refreshed is None:
+                    raise RuntimeError("DGTERA connection disappeared during database retry") from exc
+                current_connection = refreshed
+        raise RuntimeError("DGTERA synchronization retry loop ended unexpectedly")
     finally:
         _SYNC_LOCK.release()

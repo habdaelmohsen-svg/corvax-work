@@ -29,6 +29,7 @@ os.environ.update(
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import func, select, text  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
 
 from app.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
@@ -58,6 +59,7 @@ from app.services.dgtera_connector import (  # noqa: E402
 )
 from app.services.dgtera_sales_sync import (  # noqa: E402
     DgteraReconciliationError,
+    HISTORY_CHUNK_DAYS,
     SOURCE_LOCAL_WINDOW_MARKER,
     historical_backfill_status,
     historical_backfill_window,
@@ -242,18 +244,16 @@ def verify_attached_report_reference_totals() -> None:
     assert day_net + day_vat == day_gross
     year_net, year_vat, year_gross = Decimal("6464308.29"), Decimal("969636.26"), Decimal("7433944.55")
     assert year_net + year_vat == year_gross
-    # Latest authoritative 13-Aug-2026 DGTERA Branch Sales footer supplied by
-    # the user. Branch rows are display-rounded and can differ by one halala;
-    # the report footer is the controlling financial total.
-    current_qty = sum(map(Decimal, ("67", "38", "9", "53", "21", "1", "4")))
-    current_net = Decimal("3793.06")
-    current_vat = Decimal("568.94")
-    current_gross = Decimal("4362.00")
-    assert current_qty == Decimal("193")
-    assert current_net + current_vat == current_gross
-    assert sum(map(Decimal, (
-        "1266.00", "910.00", "226.00", "1312.00", "506.00", "26.00", "116.00",
-    ))) == current_gross
+    # An intraday 13-Aug screenshot is retained only as an arithmetic fixture,
+    # never as a closed-day acceptance total: DGTERA continued receiving sales
+    # later that day.  Closed-day reconciliation must use a source report run
+    # after the business window has ended.
+    intraday_qty = sum(map(Decimal, ("67", "38", "9", "53", "21", "1", "4")))
+    intraday_net = Decimal("3793.06")
+    intraday_vat = Decimal("568.94")
+    intraday_gross = Decimal("4362.00")
+    assert intraday_qty == Decimal("193")
+    assert intraday_net + intraday_vat == intraday_gross
 
 
 def verify_adaptive_safe_split() -> None:
@@ -381,13 +381,59 @@ def verify_adaptive_safe_split() -> None:
     assert single_day_db.commits == 0
     assert single_day_connection.last_sync_at is None
 
+    # A transient managed-database disconnect retries the complete auditable
+    # range exactly once after rollback.  Partial work is never resumed.
+    class RetryDb(DummyDb):
+        def __init__(self, refreshed_connection):
+            super().__init__()
+            self.refreshed_connection = refreshed_connection
+            self.rollbacks = 0
+            self.expirations = 0
+            self.gets = 0
+
+        def rollback(self):
+            self.rollbacks += 1
+
+        def expire_all(self):
+            self.expirations += 1
+
+        def get(self, model, object_id):
+            assert model is DgteraConnection and object_id == self.refreshed_connection.id
+            self.gets += 1
+            return self.refreshed_connection
+
+    retry_connection = DummyConnection()
+    retry_db = RetryDb(retry_connection)
+    retry_result = result_for(range_start)
+    transient = OperationalError(
+        "SELECT redacted",
+        {},
+        ConnectionResetError("server closed the connection"),
+    )
+    with patch(
+        "app.services.dgtera_sales_sync._sync_unlocked",
+        side_effect=[transient, retry_result],
+    ) as mocked_sync:
+        retried = sync_connection(
+            retry_db,
+            retry_connection,
+            range_start,
+            range_start,
+            1,
+        )
+    assert mocked_sync.call_count == 2
+    assert retry_db.rollbacks == retry_db.expirations == retry_db.gets == 1
+    assert retried["strict_reconciled"] is True
+    assert retried["source_total"] == retried["imported_total"] == Decimal("4362.00")
+
 
 def main() -> None:
     assert str(DAY_START) == "00:00:00"
     assert str(DAY_END) == "23:59:59"
     assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v8"
     assert BRANCH_REPORT_ORDER_STATES == ("draft", "paid", "done", "invoiced")
-    assert HISTORY_CHUNKS_PER_CYCLE == 24
+    assert HISTORY_CHUNK_DAYS == 1
+    assert HISTORY_CHUNKS_PER_CYCLE == 4
     assert _date_windows([
         date(2025, 1, 1), date(2025, 1, 2), date(2025, 2, 10)
     ]) == [(date(2025, 1, 1), date(2025, 1, 2)), (date(2025, 2, 10), date(2025, 2, 10))]
@@ -529,7 +575,7 @@ def main() -> None:
                 connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
                 next_history = historical_backfill_window(db, connection)
                 assert next_history and next_history[1] == date.fromordinal(sales_date.replace(day=1).toordinal() - 1)
-                assert (next_history[1] - next_history[0]).days == 30
+                assert next_history[1] == next_history[0]
                 isolated_old_run = DgteraSyncRun(
                     connection_id=connection.id,
                     company_id=connection.company_id,

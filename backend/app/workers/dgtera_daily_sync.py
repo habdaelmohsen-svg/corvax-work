@@ -29,7 +29,7 @@ from app.core.time import utc_now
 
 
 logger = logging.getLogger("corvax.dgtera.scheduler")
-HISTORY_CHUNKS_PER_CYCLE = 24
+HISTORY_CHUNKS_PER_CYCLE = max(1, min(31, settings.dgtera_history_days_per_cycle))
 
 
 def _date_windows(dates: list) -> list[tuple]:
@@ -128,9 +128,9 @@ def run_due_syncs() -> None:
                         )
                         break
 
-            # Drain the complete 2025+ history in bounded 31-day slices during
-            # the same background cycle.  Partial totals must not remain on the
-            # executive dashboard for twenty separate scheduler polls.
+            # Drain history in separately committed business-day slices.  This
+            # keeps live dashboard reads responsive and avoids exhausting a
+            # modest PostgreSQL service with one long import transaction.
             for _ in range(HISTORY_CHUNKS_PER_CYCLE):
                 history_window = historical_backfill_window(db, connection)
                 if history_window is None:

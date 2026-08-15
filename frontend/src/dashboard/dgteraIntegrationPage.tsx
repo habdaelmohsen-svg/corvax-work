@@ -67,10 +67,19 @@ function riyadhToday(){
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
+const REQUEST_TIMEOUT_MS=30000;
 async function json(url:string,init?:RequestInit){
-  const r=await apiFetch(url,init);const x=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(typeof x.detail==='string'?x.detail:JSON.stringify(x.detail||x));
-  return x;
+  const controller=new AbortController();
+  const timer=window.setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
+  try{
+    const r=await apiFetch(url,{...(init||{}),signal:controller.signal});
+    const x=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(typeof x.detail==='string'?x.detail:JSON.stringify(x.detail||x));
+    return x;
+  }catch(error:any){
+    if(controller.signal.aborted)throw new Error(`DGTERA API request timed out after ${REQUEST_TIMEOUT_MS/1000} seconds`);
+    throw error;
+  }finally{window.clearTimeout(timer)}
 }
 
 const scopeLabel=(value:string,ar:boolean)=>value==='INTERNAL'?(ar?'مبيعات داخلية':'Internal sales'):(ar?'مبيعات خارجية':'External sales');
@@ -105,31 +114,38 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
   const [compareDate,setCompareDate]=useState(today);const [period,setPeriod]=useState<Period>('DAY');
   const [branchId,setBranchId]=useState('');const [scope,setScope]=useState('');const [service,setService]=useState('');
   const [appliedFilters,setAppliedFilters]=useState<DisplayFilters>({startDate:today,endDate:today,branchId:'',scope:'',service:''});
-  const [filterRevision,setFilterRevision]=useState(0);
   const [selectedOrder,setSelectedOrder]=useState<Order|null>(null);
   const [busy,setBusy]=useState(false);const [reportLoading,setReportLoading]=useState(false);const [msg,setMsg]=useState('');const [isError,setIsError]=useState(false);
 
   const load=async()=>{
     setReportLoading(true);
     try{
-      const st=await json(`/api/v1/integrations/dgtera/status?company_id=${companyId}`).catch(()=>({configured:false}));
+      const st=await json(`/api/v1/integrations/dgtera/status?company_id=${companyId}`);
       setStatus(st);if(st.base_url)setBaseUrl(st.base_url);
       if(!st.configured){setSnapshot(null);setAnalytics(null);setRuns([]);return;}
       const params=new URLSearchParams({company_id:String(companyId),start_date:appliedFilters.startDate,end_date:appliedFilters.endDate});
       if(appliedFilters.branchId)params.set('branch_id',appliedFilters.branchId);if(appliedFilters.scope)params.set('sales_scope',appliedFilters.scope);if(appliedFilters.service)params.set('service_mode',appliedFilters.service);
       const analyticsParams=new URLSearchParams({company_id:String(companyId),as_of_date:compareDate,period});
       if(appliedFilters.branchId)analyticsParams.set('branch_id',appliedFilters.branchId);if(appliedFilters.scope)analyticsParams.set('sales_scope',appliedFilters.scope);if(appliedFilters.service)analyticsParams.set('service_mode',appliedFilters.service);
-      const [snap,comparison,history]=await Promise.all([
+      const [snapResult,comparisonResult,historyResult]=await Promise.allSettled([
         json(`/api/v1/integrations/dgtera/snapshot?${params.toString()}`),
         json(`/api/v1/integrations/dgtera/analytics?${analyticsParams.toString()}`),
-        json(`/api/v1/integrations/dgtera/sync-runs?company_id=${companyId}&limit=30`).catch(()=>[]),
+        json(`/api/v1/integrations/dgtera/sync-runs?company_id=${companyId}&limit=30`),
       ]);
-      setSnapshot(snap);setAnalytics(comparison);setRuns(history);setSelectedOrder(current=>current? snap.orders.find((x:Order)=>x.id===current.id)||null:null);
+      if(historyResult.status==='fulfilled')setRuns(historyResult.value);else setRuns([]);
+      if(snapResult.status==='fulfilled'){
+        const snap=snapResult.value;
+        setSnapshot(snap);
+        setSelectedOrder(current=>current?snap.orders.find((x:Order)=>x.id===current.id)||null:null);
+      }else{setSnapshot(null);setSelectedOrder(null)}
+      if(comparisonResult.status==='fulfilled')setAnalytics(comparisonResult.value);else setAnalytics(null);
+      const failures=[snapResult,comparisonResult,historyResult].filter(result=>result.status==='rejected') as PromiseRejectedResult[];
+      if(failures.length)throw failures[0].reason;
     }finally{setReportLoading(false)}
   };
 
   const rejectStale=(e:any)=>{setSnapshot(null);setAnalytics(null);setMsg(String(e.message||e));setIsError(true)};
-  useEffect(()=>{load().catch(rejectStale)},[companyId,appliedFilters,filterRevision,compareDate,period]);
+  useEffect(()=>{load().catch(rejectStale)},[companyId,appliedFilters,compareDate,period]);
   useEffect(()=>{
     const timer=window.setInterval(()=>load().catch(rejectStale),120000);
     return()=>window.clearInterval(timer);
@@ -141,7 +157,6 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
     if(endDate<startDate){say(ar?'تاريخ النهاية لا يمكن أن يسبق تاريخ البداية.':'End date cannot be before start date.',true);return;}
     setMsg('');setIsError(false);
     setAppliedFilters({startDate,endDate,branchId,scope,service});
-    setFilterRevision(value=>value+1);
   };
   const saveConnection=async()=>{
     if(status.inherited){

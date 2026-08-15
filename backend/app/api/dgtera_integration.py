@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, defer, selectinload
 
 from app.core.time import utc_now, utc_now_aware
 from app.db import get_db
@@ -24,6 +24,7 @@ from app.models import (
     DgteraProduct,
     DgteraSalesOrder,
     DgteraSalesOrderLine,
+    DgteraSalesPayment,
     DgteraSyncRun,
     User,
 )
@@ -353,35 +354,63 @@ def _payment_channel_summary(db: Session, conditions: list) -> list[dict]:
     are split between cash/card using the source payment lines; split tenders
     receive a proportional share of net and VAT.
     """
-    orders = db.scalars(
-        select(DgteraSalesOrder)
-        .where(*conditions)
-        .options(selectinload(DgteraSalesOrder.payments))
-    ).all()
+    # Read only the columns needed for classification.  Loading complete order
+    # entities here also decrypted every stored source payload, which made
+    # monthly/yearly reports unnecessarily slow while history was importing.
+    payment_rows = db.execute(select(
+        DgteraSalesOrder.id,
+        DgteraSalesOrder.sales_scope,
+        DgteraSalesOrder.service_mode,
+        DgteraSalesOrder.subtotal,
+        DgteraSalesOrder.vat_amount,
+        DgteraSalesOrder.total,
+        DgteraSalesPayment.id,
+        DgteraSalesPayment.method_name,
+        DgteraSalesPayment.amount,
+    ).outerjoin(
+        DgteraSalesPayment,
+        DgteraSalesPayment.order_id == DgteraSalesOrder.id,
+    ).where(*conditions)).all()
+    orders: dict[int, dict] = {}
+    for (
+        order_id, sales_scope_value, service_mode_value, subtotal_value,
+        vat_value, total_value, payment_id, method_name, payment_amount,
+    ) in payment_rows:
+        order = orders.setdefault(int(order_id), {
+            "id": int(order_id),
+            "sales_scope": sales_scope_value,
+            "service_mode": service_mode_value,
+            "subtotal": subtotal_value,
+            "vat_amount": vat_value,
+            "total": total_value,
+            "payments": [],
+        })
+        if payment_id is not None:
+            order["payments"].append({"method_name": method_name, "amount": payment_amount})
     buckets: dict[str, dict] = {}
 
-    def add(key: str, order: DgteraSalesOrder, ratio: Decimal) -> None:
+    def add(key: str, order: dict, ratio: Decimal) -> None:
         row = buckets.setdefault(key, {
             "key": key, "orders": set(), "subtotal": Decimal("0"),
             "vat": Decimal("0"), "sales": Decimal("0"),
         })
-        row["orders"].add(order.id)
-        row["subtotal"] += Decimal(str(order.subtotal or 0)) * ratio
-        row["vat"] += Decimal(str(order.vat_amount or 0)) * ratio
-        row["sales"] += Decimal(str(order.total or 0)) * ratio
+        row["orders"].add(order["id"])
+        row["subtotal"] += Decimal(str(order["subtotal"] or 0)) * ratio
+        row["vat"] += Decimal(str(order["vat_amount"] or 0)) * ratio
+        row["sales"] += Decimal(str(order["total"] or 0)) * ratio
 
-    for order in orders:
-        if order.sales_scope == "EXTERNAL" or order.service_mode == "DELIVERY":
+    for order in orders.values():
+        if order["sales_scope"] == "EXTERNAL" or order["service_mode"] == "DELIVERY":
             add("PLATFORM_CREDIT", order, Decimal("1"))
             continue
-        valid = [payment for payment in order.payments if Decimal(str(payment.amount or 0)) != 0]
-        paid = sum((abs(Decimal(str(payment.amount or 0))) for payment in valid), Decimal("0"))
+        valid = [payment for payment in order["payments"] if Decimal(str(payment["amount"] or 0)) != 0]
+        paid = sum((abs(Decimal(str(payment["amount"] or 0))) for payment in valid), Decimal("0"))
         if not valid or paid == 0:
             add("UNCLASSIFIED", order, Decimal("1"))
             continue
         for payment in valid:
-            ratio = abs(Decimal(str(payment.amount or 0))) / paid
-            add(_payment_channel_name(payment.method_name), order, ratio)
+            ratio = abs(Decimal(str(payment["amount"] or 0))) / paid
+            add(_payment_channel_name(str(payment["method_name"] or "")), order, ratio)
     result = [{
         "key": key,
         "orders": len(row["orders"]),
@@ -419,6 +448,7 @@ def snapshot(
         select(DgteraSalesOrder)
         .where(*conditions)
         .options(
+            defer(DgteraSalesOrder.source_payload),
             selectinload(DgteraSalesOrder.lines),
             selectinload(DgteraSalesOrder.payments),
         )

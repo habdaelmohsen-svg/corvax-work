@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     dgtera_max_payments_per_sync: int = 50000
     dgtera_scheduler_enabled: bool = True
     dgtera_scheduler_poll_seconds: int = 60
+    # Historical imports are intentionally drained in small, independently
+    # committed business-day units.  A web process must remain responsive
+    # while the 2025 backfill is running on a modest PostgreSQL instance.
+    dgtera_history_days_per_cycle: int = 4
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
