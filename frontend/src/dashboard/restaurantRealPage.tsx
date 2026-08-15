@@ -20,10 +20,18 @@ type Snapshot={
 };
 type Status={configured:boolean;connected?:boolean;inherited?:boolean;last_error?:string|null};
 
+const REQUEST_TIMEOUT_MS=30000;
 async function json(url:string){
-  const response=await apiFetch(url);const body=await response.json().catch(()=>({}));
-  if(!response.ok)throw new Error(typeof body.detail==='string'?body.detail:JSON.stringify(body.detail||body));
-  return body;
+  const controller=new AbortController();
+  const timer=window.setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
+  try{
+    const response=await apiFetch(url,{signal:controller.signal});const body=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(typeof body.detail==='string'?body.detail:JSON.stringify(body.detail||body));
+    return body;
+  }catch(error){
+    if(controller.signal.aborted)throw new Error(`DGTERA API request timed out after ${REQUEST_TIMEOUT_MS/1000} seconds`);
+    throw error;
+  }finally{window.clearTimeout(timer)}
 }
 function riyadhToday(){
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
@@ -47,13 +55,15 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
   const [tab,setTab]=useState<Tab>('sell');
   const [salesDate,setSalesDate]=useState(today);
   const [status,setStatus]=useState<Status>({configured:false});
+  const [statusReady,setStatusReady]=useState(false);
   const [snapshot,setSnapshot]=useState<Snapshot|null>(null);
   const [message,setMessage]=useState('');
 
   const load=async()=>{
     try{
-      const currentStatus=await json(`/api/v1/integrations/dgtera/status?company_id=${companyId}`).catch(()=>({configured:false}));
+      const currentStatus=await json(`/api/v1/integrations/dgtera/status?company_id=${companyId}`);
       setStatus(currentStatus);
+      setStatusReady(true);
       if(!currentStatus.configured){setSnapshot(null);return;}
       const data=await json(`/api/v1/integrations/dgtera/snapshot?company_id=${companyId}&start_date=${salesDate}&end_date=${salesDate}&limit=1000`);
       setSnapshot(data);setMessage('');
@@ -62,7 +72,12 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
       throw error;
     }
   };
-  useEffect(()=>{load().catch(e=>setMessage(String(e.message||e)))},[companyId,salesDate]);
+  useEffect(()=>{
+    setStatusReady(false);setMessage('');
+    load().catch(e=>setMessage(ar
+      ? `تعذر تحميل بيانات DGTERA: ${String(e.message||e)}. لم يُعامل هذا الخطأ كعدم وجود ربط.`
+      : `DGTERA data could not be loaded: ${String(e.message||e)}. This error was not treated as a missing connection.`));
+  },[companyId,salesDate]);
   useEffect(()=>{
     const timer=window.setInterval(()=>load().catch(()=>{}),120000);
     return()=>window.clearInterval(timer);
@@ -87,7 +102,7 @@ export function RestaurantPage({ar,companyId}:{ar:boolean;companyId:number}){
       {tabs.map(([key,label])=><button key={key} type="button" onClick={()=>setTab(key)} style={{...btn,background:tab===key?'var(--accent, #1e40af)':'transparent',color:tab===key?'#fff':'var(--text)'}}>{label}</button>)}
     </div>
 
-    {!status.configured&&<div style={{padding:14,borderRadius:10,background:'#fff7ed',color:'#9a3412',lineHeight:1.9}}>
+    {statusReady&&!status.configured&&<div style={{padding:14,borderRadius:10,background:'#fff7ed',color:'#9a3412',lineHeight:1.9}}>
       {ar?'لم يتم العثور على ربط DGTERA في القابضة أو شركة المطاعم. افتح تبويب «الربط» لإكمال الإعداد.':'No DGTERA connection was found in the holding or restaurant company. Open Integration to configure it.'}
     </div>}
     {message&&<div style={{padding:12,borderRadius:10,background:'#fee2e2',color:'#991b1b'}}>{message}</div>}

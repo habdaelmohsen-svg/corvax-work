@@ -5,10 +5,10 @@
 ## بيانات الإصدار المعتمدة
 
 - Version: `1.0.0-agreement-completion-rc27.4-r9.4`
-- Migration head: `e20100000001`
+- Migration head: `e20200000001`
 - DGTERA daily sales runbook: `docs/DGTERA_DAILY_SALES_INTEGRATION.md`
 - DGTERA V8 uses the exact Branch Sales source-report date without the former Riyadh boundary shift; V6/V7 proofs are invalidated and history is reverified from `2025-01-01`.
-- Frontend production build: `2,035` modules — PASSED
+- Frontend production build: `2,036` modules — PASSED
 - Backend compilation: PASSED
 - Security, branch scope, health, RC20, RC21 and RC25 verification: PASSED in the RC27.2 execution round
 - Migration head, readiness and release info are now derived from Alembic at runtime, not hard-coded
@@ -19,7 +19,7 @@
 
 The internal software scope is complete for controlled staging, pilot and UAT. Production approval remains evidence-driven and cannot be asserted from code alone. It requires a real PostgreSQL staging/production environment, sanitized or approved real data, signed UAT, parallel operation, independent penetration/accounting/tax reviews and official credentials for ZATCA, banks, WPS/Mudad, Qiwa, Muqeem and GOSI.
 
-Apply migrations through `e20100000001`. The transaction/value reset is available only with `ENVIRONMENT=uat` and `ALLOW_DATA_RESET=true`; production rejects it unconditionally.
+Apply migrations through `e20200000001`. The transaction/value reset is available only with `ENVIRONMENT=uat` and `ALLOW_DATA_RESET=true`; production rejects it unconditionally.
 
 ## R9.3 UAT transaction/value reset
 

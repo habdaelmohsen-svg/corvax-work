@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import os
 import sys
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from time import perf_counter
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -65,7 +68,12 @@ from app.services.dgtera_sales_sync import (  # noqa: E402
     historical_backfill_window,
     sync_connection,
 )
-from app.workers.dgtera_daily_sync import HISTORY_CHUNKS_PER_CYCLE, _date_windows  # noqa: E402
+from app.workers.dgtera_daily_sync import (  # noqa: E402
+    CHANGED_DAYS_PER_CYCLE,
+    HISTORY_CHUNKS_PER_CYCLE,
+    _date_windows,
+)
+import app.workers.dgtera_daily_sync as daily_worker  # noqa: E402
 
 
 def ok(response, status=200):
@@ -73,8 +81,84 @@ def ok(response, status=200):
     return response.json()
 
 
+def verify_scheduler_queue_serialization() -> None:
+    """One poll may run current + exactly one queued historical day."""
+    current_day = date(2026, 8, 15)
+    history_day = current_day - timedelta(days=1)
+    connection = SimpleNamespace(id=77, created_by=1, last_sync_at=None)
+
+    class ScalarRows:
+        def all(self):
+            return [connection.id]
+
+    class DiscoveryDb:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def scalars(self, _query):
+            return ScalarRows()
+
+    class WorkDb:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get(self, _model, object_id):
+            return connection if object_id == connection.id else None
+
+    session_factory = MagicMock(side_effect=[DiscoveryDb(), WorkDb()])
+    sync = MagicMock(return_value={"strict_reconciled": True})
+    changed = MagicMock(return_value=[current_day - timedelta(days=2)])
+    audit = MagicMock(return_value=(current_day - timedelta(days=3), current_day - timedelta(days=3)))
+    with (
+        patch.object(daily_worker, "SessionLocal", session_factory),
+        patch.object(daily_worker, "connection_is_due", return_value=True),
+        patch.object(daily_worker, "catchup_window", return_value=(current_day, current_day)),
+        patch.object(daily_worker, "sync_connection", sync),
+        patch.object(daily_worker, "historical_backfill_window", return_value=(history_day, history_day)),
+        patch.object(daily_worker, "changed_historical_sales_dates", changed),
+        patch.object(daily_worker, "historical_recheck_window", audit),
+    ):
+        daily_worker.run_due_syncs()
+    assert sync.call_count == 2
+    assert sync.call_args_list[0].args[1:] == (connection, current_day, current_day, 1)
+    assert sync.call_args_list[0].kwargs == {}
+    assert sync.call_args_list[1].args[1:] == (connection, history_day, history_day, 1)
+    assert sync.call_args_list[1].kwargs == {"mark_current_sync": False}
+    changed.assert_not_called()
+    audit.assert_not_called()
+
+    # Once backfill is complete, changed-date discovery is also capped at one
+    # independently committed day and the rolling audit remains deferred.
+    work_db = WorkDb()
+    session_factory = MagicMock(side_effect=[DiscoveryDb(), work_db])
+    sync = MagicMock(return_value={"strict_reconciled": True})
+    changed_days = [current_day - timedelta(days=3), current_day - timedelta(days=2)]
+    audit = MagicMock(return_value=(current_day - timedelta(days=4), current_day - timedelta(days=4)))
+    with (
+        patch.object(daily_worker, "SessionLocal", session_factory),
+        patch.object(daily_worker, "connection_is_due", return_value=True),
+        patch.object(daily_worker, "catchup_window", return_value=(current_day, current_day)),
+        patch.object(daily_worker, "sync_connection", sync),
+        patch.object(daily_worker, "historical_backfill_window", return_value=None),
+        patch.object(daily_worker, "changed_historical_sales_dates", return_value=changed_days),
+        patch.object(daily_worker, "historical_recheck_window", audit),
+    ):
+        daily_worker.run_due_syncs()
+    assert sync.call_count == 2
+    assert sync.call_args_list[0].args[2:4] == (current_day, current_day)
+    assert sync.call_args_list[1].args[2:4] == (changed_days[0], changed_days[0])
+    assert sync.call_args_list[1].kwargs == {"mark_current_sync": False}
+    audit.assert_not_called()
+
+
 class FakeClient:
-    def __init__(self, source: dict, sales_date: date):
+    def __init__(self, source: dict | list[dict], sales_date: date):
         self.source = source
         self.sales_date = sales_date
 
@@ -83,7 +167,8 @@ class FakeClient:
 
     def daily_sales(self, start_date, end_date, timezone_name):
         assert timezone_name == "Asia/Riyadh"
-        return [self.source] if start_date <= self.sales_date <= end_date else []
+        rows = self.source if isinstance(self.source, list) else [self.source]
+        return rows if start_date <= self.sales_date <= end_date else []
 
 
 class StubOdooClient(Odoo14Client):
@@ -433,10 +518,16 @@ def main() -> None:
     assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v8"
     assert BRANCH_REPORT_ORDER_STATES == ("draft", "paid", "done", "invoiced")
     assert HISTORY_CHUNK_DAYS == 1
-    assert HISTORY_CHUNKS_PER_CYCLE == 4
+    assert HISTORY_CHUNKS_PER_CYCLE == 1
+    assert CHANGED_DAYS_PER_CYCLE == 1
     assert _date_windows([
         date(2025, 1, 1), date(2025, 1, 2), date(2025, 2, 10)
-    ]) == [(date(2025, 1, 1), date(2025, 1, 2)), (date(2025, 2, 10), date(2025, 2, 10))]
+    ]) == [
+        (date(2025, 1, 1), date(2025, 1, 1)),
+        (date(2025, 1, 2), date(2025, 1, 2)),
+        (date(2025, 2, 10), date(2025, 2, 10)),
+    ]
+    verify_scheduler_queue_serialization()
     assert validate_dgtera_url("https://cheesehouse.dgtera.com/") == "https://cheesehouse.dgtera.com"
     for unsafe in ("http://cheesehouse.dgtera.com", "https://example.com", "https://user:pass@cheesehouse.dgtera.com"):
         try:
@@ -574,7 +665,7 @@ def main() -> None:
 
                 connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
                 next_history = historical_backfill_window(db, connection)
-                assert next_history and next_history[1] == date.fromordinal(sales_date.replace(day=1).toordinal() - 1)
+                assert next_history and next_history[1] == sales_date - timedelta(days=1)
                 assert next_history[1] == next_history[0]
                 isolated_old_run = DgteraSyncRun(
                     connection_id=connection.id,
@@ -589,7 +680,7 @@ def main() -> None:
                 db.add(isolated_old_run)
                 db.flush()
                 gap_status = historical_backfill_status(db, connection)
-                assert gap_status["earliest_imported_date"] == sales_date.replace(day=1)
+                assert gap_status["earliest_imported_date"] == sales_date
                 assert gap_status["completed"] is False and gap_status["no_date_gaps"] is False
                 db.delete(isolated_old_run)
                 db.flush()
@@ -657,7 +748,7 @@ def main() -> None:
                 "/api/v1/integrations/dgtera/status?company_id=1",
                 headers=headers,
             ))
-            assert connection_status["history"]["earliest_imported_date"] == sales_date.replace(day=1).isoformat()
+            assert connection_status["history"]["earliest_imported_date"] == sales_date.isoformat()
             runs = ok(client.get("/api/v1/integrations/dgtera/sync-runs?company_id=1", headers=headers))
             assert len(runs) == 3 and all(row["status"] == "COMPLETED" for row in runs)
 
@@ -777,6 +868,50 @@ def main() -> None:
                 cleaned = sync_connection(db, connection, sales_date, sales_date, 1)
                 assert cleaned["removed"] == 506
                 assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 0
+
+            # Production-like load gate: a dense DGTERA business day with
+            # 1,000 orders, lines and payments must commit atomically and a
+            # repeated poll must remain idempotent with exactly the same sums.
+            load_date = sales_date - timedelta(days=1)
+            load_rows: list[dict] = []
+            for index in range(1000):
+                row = deepcopy(source)
+                row["order_id"] = f"LOAD-{index:04d}"
+                row["order_name"] = f"Load order {index:04d}"
+                row["pos_reference"] = f"POS/LOAD/{index:04d}"
+                row["sales_date"] = load_date.isoformat()
+                row["date_order_utc"] = f"{load_date.isoformat()} 09:30:00"
+                row["date_order_local"] = f"{load_date.isoformat()} 12:30:00"
+                row["source_updated_at"] = f"{load_date.isoformat()} 09:32:00"
+                row["source_hash"] = f"{index + 1:064x}"
+                row["lines"][0]["line_id"] = f"LOAD-LINE-{index:04d}"
+                row["payments"][0]["payment_id"] = f"LOAD-PAY-{index:04d}"
+                load_rows.append(row)
+            fake.source = load_rows
+            fake.sales_date = load_date
+            with SessionLocal() as db:
+                connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
+                started = perf_counter()
+                loaded = sync_connection(db, connection, load_date, load_date, 1)
+                first_elapsed = perf_counter() - started
+                assert loaded["inserted"] == 1000 and loaded["strict_reconciled"] is True
+                assert loaded["reconciliation"]["source"]["subtotal"] == loaded["reconciliation"]["corvax"]["subtotal"] == "200000.00"
+                assert loaded["reconciliation"]["source"]["vat"] == loaded["reconciliation"]["corvax"]["vat"] == "30000.00"
+                assert loaded["source_total"] == loaded["imported_total"] == Decimal("230000.00")
+                started = perf_counter()
+                repeated = sync_connection(db, connection, load_date, load_date, 1)
+                second_elapsed = perf_counter() - started
+                assert repeated["inserted"] == repeated["updated"] == repeated["removed"] == 0
+                assert repeated["unchanged"] == 1000 and repeated["strict_reconciled"] is True
+                assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 1000
+                assert db.scalar(select(func.count(DgteraSalesOrderLine.id))) == 1000
+                assert db.scalar(select(func.count(DgteraSalesPayment.id))) == 1000
+                assert first_elapsed < 30 and second_elapsed < 30
+            print(
+                "DGTERA 1000-order load gate: "
+                f"initial={first_elapsed:.2f}s idempotent={second_elapsed:.2f}s "
+                "net=200000.00 vat=30000.00 gross=230000.00"
+            )
 
     print("verify_dgtera_integration: PASSED")
 

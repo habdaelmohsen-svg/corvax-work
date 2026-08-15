@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -39,6 +40,7 @@ from app.services.dgtera_connector import (
 
 
 _SYNC_LOCK = Lock()
+logger = logging.getLogger("corvax.dgtera.sync")
 HISTORY_START_DATE = date(2025, 1, 1)
 # A single DGTERA business day is the smallest auditable and operationally
 # safe transaction.  Committing each day separately prevents the 2025
@@ -71,19 +73,31 @@ class DgteraReconciliationError(RuntimeError):
         )
 
 
+def _operational_error_chain(exc: OperationalError) -> list[BaseException]:
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        nested = getattr(current, "orig", None)
+        current = nested if isinstance(nested, BaseException) else None
+    return chain
+
+
 def _operational_error_code(exc: OperationalError) -> str | None:
-    original = getattr(exc, "orig", None)
-    return (
-        getattr(original, "sqlstate", None)
-        or getattr(original, "pgcode", None)
-    )
+    for item in reversed(_operational_error_chain(exc)):
+        code = getattr(item, "sqlstate", None) or getattr(item, "pgcode", None)
+        if code:
+            return str(code)
+    return None
 
 
 def _is_transient_operational_error(exc: OperationalError) -> bool:
     code = _operational_error_code(exc)
     if code in _TRANSIENT_DB_SQLSTATES or (code and code.startswith("08")):
         return True
-    message = str(getattr(exc, "orig", exc)).casefold()
+    message = " | ".join(str(item) for item in _operational_error_chain(exc)).casefold()
     return any(token in message for token in (
         "connection reset",
         "connection refused",
@@ -100,8 +114,26 @@ def _safe_sync_error(exc: Exception) -> str:
     """Return actionable diagnostics without SQL text, parameters or secrets."""
     if isinstance(exc, OperationalError):
         code = _operational_error_code(exc) or "unknown"
-        original = type(getattr(exc, "orig", exc)).__name__
-        return f"OperationalError[{code}] ({original})"
+        chain = _operational_error_chain(exc)
+        original = type(chain[-1]).__name__
+        message = " | ".join(str(item) for item in chain).casefold()
+        reason = "database_operation_failed"
+        for token, label in (
+            ("server closed", "connection_closed"),
+            ("connection reset", "connection_reset"),
+            ("connection is closed", "connection_closed"),
+            ("timeout", "timeout"),
+            ("deadlock", "deadlock"),
+            ("lock not available", "lock_unavailable"),
+            ("remaining connection slots", "too_many_connections"),
+            ("too many connections", "too_many_connections"),
+            ("disk full", "disk_full"),
+            ("out of memory", "out_of_memory"),
+        ):
+            if token in message:
+                reason = label
+                break
+        return f"OperationalError[{code}] ({original}; {reason})"
     return f"{type(exc).__name__}: {str(exc)[:850]}"
 
 
@@ -409,7 +441,6 @@ def _apply_order(
             source_payload="{}",
         )
         db.add(order)
-        db.flush()
         if order_cache is not None:
             order_cache[external_id] = order
     else:
@@ -451,12 +482,11 @@ def _apply_order(
     order.source_payload = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     order.source_updated_at = _source_datetime(source.get("source_updated_at"))
     order.imported_at = utc_now()
-    db.flush()
 
     for line_source in source.get("lines", []):
         product = products_by_external_id[str(line_source["product"]["product_id"])]
         db.add(DgteraSalesOrderLine(
-            order_id=order.id,
+            order=order,
             external_line_id=str(line_source["line_id"])[:80],
             product_id=product.id,
             product_name=str(
@@ -473,7 +503,7 @@ def _apply_order(
         ))
     for payment_source in source.get("payments", []):
         db.add(DgteraSalesPayment(
-            order_id=order.id,
+            order=order,
             external_payment_id=str(payment_source["payment_id"])[:80],
             external_method_id=(
                 str(payment_source.get("method_id"))[:80]
@@ -577,6 +607,7 @@ def _strict_reconciliation(
             DgteraSalesOrder.sales_date <= end_date,
         )
         .options(
+            defer(DgteraSalesOrder.source_payload),
             selectinload(DgteraSalesOrder.lines),
             selectinload(DgteraSalesOrder.payments),
         )
@@ -644,11 +675,11 @@ def _strict_reconciliation(
         ):
             same(category, f"{prefix}.{source_key}", money(source.get(source_key)), money(local_value))
         same("source_hashes", f"{prefix}.source_hash", str(source["source_hash"]), order.source_hash)
-        try:
-            stored_payload = json.loads(str(order.source_payload))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            stored_payload = None
-        same("source_hashes", f"{prefix}.source_payload", source, stored_payload)
+        # source_hash is SHA-256 of the complete canonical payload generated by
+        # the connector.  Re-decrypting and parsing hundreds of large payloads
+        # inside every live synchronization duplicated that proof and kept the
+        # PostgreSQL connection busy for no additional financial assurance.
+        # A separate forensic audit can still call strict_persisted_reconciliation.
 
         source_lines = {str(row["line_id"]): row for row in source.get("lines", [])}
         local_lines = {row.external_line_id: row for row in order.lines}
@@ -768,15 +799,11 @@ def _strict_reconciliation(
 
 def catchup_window(connection: DgteraConnection) -> tuple[date, date]:
     zone = ZoneInfo(connection.timezone or "Asia/Riyadh")
-    now_local = utc_now_aware().astimezone(zone)
-    today = now_local.date()
-    if connection.last_sync_at:
-        last_sync = connection.last_sync_at.replace(tzinfo=timezone.utc).astimezone(zone).date()
-        start = min(last_sync, today)
-    else:
-        start = today.replace(day=1)
-    start = max(start, today - timedelta(days=31))
-    return start, today
+    today = utc_now_aware().astimezone(zone).date()
+    # The live queue owns today only. Missing older dates are drained by the
+    # independently committed historical queue, one business day at a time.
+    # A first connection must never turn into a month-sized foreground job.
+    return today, today
 
 
 def _strict_completed_intervals(
@@ -795,7 +822,7 @@ def _strict_completed_intervals(
         DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
         DgteraSyncRun.end_date >= start_date,
         DgteraSyncRun.start_date <= end_date,
-    ).order_by(DgteraSyncRun.start_date, DgteraSyncRun.end_date)).all()
+    ).distinct().order_by(DgteraSyncRun.start_date, DgteraSyncRun.end_date)).all()
     merged: list[tuple[date, date]] = []
     for row_start, row_end in rows:
         current_start, current_end = max(row_start, start_date), min(row_end, end_date)
@@ -843,7 +870,7 @@ def strict_range_coverage_status(
     verification_rows = db.execute(select(
         DgteraSyncRun.start_date,
         DgteraSyncRun.end_date,
-        DgteraSyncRun.completed_at,
+        func.max(DgteraSyncRun.completed_at),
     ).where(
         DgteraSyncRun.connection_id == connection.id,
         DgteraSyncRun.status == "COMPLETED",
@@ -851,6 +878,9 @@ def strict_range_coverage_status(
         DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
         DgteraSyncRun.end_date >= start_date,
         DgteraSyncRun.start_date <= historical_end,
+    ).group_by(
+        DgteraSyncRun.start_date,
+        DgteraSyncRun.end_date,
     )).all()
     day_verifications: list[datetime] = []
     day = start_date
@@ -938,14 +968,24 @@ def strict_range_reconciliation_evidence(
     if coverage["required_days"] == 0:
         mismatch("order_ids", "range.live_source", "historical/current period", "future period")
 
-    runs = db.scalars(select(DgteraSyncRun).where(
+    # One proof row per business day is sufficient.  The former query loaded
+    # and parsed every successful two-minute run for the requested range, so a
+    # yearly dashboard became slower every day even though the proof was the
+    # same.  Each chosen row was already committed atomically with its mirror.
+    latest_daily_ids = select(
+        func.max(DgteraSyncRun.id).label("run_id")
+    ).where(
         DgteraSyncRun.connection_id == connection.id,
         DgteraSyncRun.status == "COMPLETED",
         DgteraSyncRun.strict_reconciled.is_(True),
         DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
-        DgteraSyncRun.end_date >= start_date,
+        DgteraSyncRun.start_date == DgteraSyncRun.end_date,
+        DgteraSyncRun.start_date >= start_date,
         DgteraSyncRun.start_date <= end_date,
-    ).order_by(DgteraSyncRun.completed_at.desc(), DgteraSyncRun.id.desc())).all()
+    ).group_by(DgteraSyncRun.start_date).subquery()
+    runs = db.scalars(select(DgteraSyncRun).where(
+        DgteraSyncRun.id.in_(select(latest_daily_ids.c.run_id))
+    ).order_by(DgteraSyncRun.start_date)).all()
     daily: dict[str, dict] = {}
     for run in runs:
         try:
@@ -1024,27 +1064,6 @@ def strict_range_reconciliation_evidence(
         if source_metrics[metric] != local_metrics[metric]:
             mismatch(category, f"range.{metric}", source_metrics[metric], local_metrics[metric])
 
-    local_hash_rows = db.execute(select(
-        DgteraSalesOrder.sales_date,
-        DgteraSalesOrder.external_order_id,
-        DgteraSalesOrder.source_hash,
-    ).where(
-        DgteraSalesOrder.connection_id == connection.id,
-        DgteraSalesOrder.sales_date >= start_date,
-        DgteraSalesOrder.sales_date <= end_date,
-    ).order_by(DgteraSalesOrder.sales_date, DgteraSalesOrder.external_order_id)).all()
-    local_day_hashes: dict[str, list[tuple[str, str]]] = {}
-    for sales_day, external_id, source_hash in local_hash_rows:
-        local_day_hashes.setdefault(sales_day.isoformat(), []).append((external_id, source_hash))
-    for day_key, evidence in daily.items():
-        actual_hash = hashlib.sha256("\n".join(
-            f"{external_id}:{source_hash}"
-            for external_id, source_hash in local_day_hashes.get(day_key, [])
-        ).encode("utf-8")).hexdigest()
-        expected_hash = evidence.get("verification_hash")
-        if expected_hash != actual_hash:
-            mismatch("source_hashes", f"day[{day_key}].fingerprint", expected_hash, actual_hash)
-
     if not coverage["complete"]:
         mismatch("order_ids", "range.date_coverage", "no missing days", coverage.get("first_missing_date"))
     aggregate_hash = hashlib.sha256("\n".join(
@@ -1065,6 +1084,7 @@ def strict_range_reconciliation_evidence(
         "last_verified_at": coverage.get("last_verified_at"),
         "days_verified": len(daily),
         "orders_verified_individually": True,
+        "proof_mode": "ATOMIC_DAILY_SYNC",
         "mismatches": mismatches,
     }
 
@@ -1163,7 +1183,9 @@ def historical_recheck_window(
     start_date, end_date, last_verified_at = rows[0]
     if last_verified_at and last_verified_at > utc_now() - timedelta(hours=HISTORY_RECHECK_INTERVAL_HOURS):
         return None
-    return start_date, end_date
+    # Legacy releases sometimes stored multi-day audit runs. Recheck only one
+    # business day so a stale legacy row can never recreate a large job.
+    return start_date, start_date
 
 
 def _sync_caches(
@@ -1232,6 +1254,7 @@ def _sync_unlocked(
     *,
     mark_current_sync: bool,
 ) -> dict:
+    phase = "source_read"
     try:
         source_orders = client_for(connection).daily_sales(start_date, end_date, connection.timezone)
     except DgteraResultLimitExceeded:
@@ -1254,6 +1277,7 @@ def _sync_unlocked(
         db.commit()
         raise
 
+    phase = "run_create"
     source_metrics = _source_metrics(source_orders)
     run = DgteraSyncRun(
         connection_id=connection.id,
@@ -1275,10 +1299,12 @@ def _sync_unlocked(
     )
     db.add(run)
     db.flush()
+    phase = "cache_load"
     caches = _sync_caches(db, connection, source_orders)
     counts = {"INSERTED": 0, "UPDATED": 0, "UNCHANGED": 0}
     removed = 0
     try:
+        phase = "mirror_apply"
         # A completed range is a source-of-truth snapshot.  Removing records
         # no longer returned also clears cancelled orders and, importantly,
         # orders assigned to the wrong day by the former UTC conversion.
@@ -1298,6 +1324,7 @@ def _sync_unlocked(
         for source in source_orders:
             counts[_apply_order(db, connection, source, caches)] += 1
         db.flush()
+        phase = "strict_reconciliation"
         reconciliation = _strict_reconciliation(
             db, connection, start_date, end_date, source_orders
         )
@@ -1317,6 +1344,7 @@ def _sync_unlocked(
         if mark_current_sync:
             connection.last_sync_at = utc_now()
         connection.last_error = None
+        phase = "audit_write"
         write_audit(
             db,
             action="DGTERA_SALES_SYNC_COMPLETED",
@@ -1340,8 +1368,19 @@ def _sync_unlocked(
                 "mode": "SALES_ONLY",
             },
         )
+        phase = "commit"
         db.commit()
     except Exception as exc:
+        logger.exception(
+            "DGTERA mirror transaction failed",
+            extra={
+                "connection_id": connection.id,
+                "start": str(start_date),
+                "end": str(end_date),
+                "phase": phase,
+                "safe_error": _safe_sync_error(exc),
+            },
+        )
         db.rollback()
         connection = db.get(DgteraConnection, connection.id)
         if connection:
@@ -1356,7 +1395,7 @@ def _sync_unlocked(
                     detail += f" [{', '.join(first_paths)}]"
                 connection.last_error = f"Sales mirror failed (DgteraReconciliationError){detail}"[:1000]
             else:
-                connection.last_error = f"Sales mirror failed — {_safe_sync_error(exc)}"[:1000]
+                connection.last_error = f"Sales mirror failed at {phase} — {_safe_sync_error(exc)}"[:1000]
         failed_report = exc.report if isinstance(exc, DgteraReconciliationError) else None
         failed = DgteraSyncRun(
             connection_id=connection.id if connection else run.connection_id,
@@ -1383,7 +1422,7 @@ def _sync_unlocked(
                 json.dumps(failed_report, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                 if failed_report else None
             ),
-            error_message=_safe_sync_error(exc),
+            error_message=f"{phase}: {_safe_sync_error(exc)}",
             completed_at=utc_now(),
         )
         db.add(failed)
