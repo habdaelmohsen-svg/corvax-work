@@ -9,7 +9,7 @@ services:
     name: corvax-business-platform
     runtime: docker
     plan: starter
-    autoDeploy: false
+    autoDeploy: true
     healthCheckPath: /health/ready
     preDeployCommand: alembic upgrade head
     maxShutdownDelaySeconds: 60

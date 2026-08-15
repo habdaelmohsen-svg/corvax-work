@@ -671,5 +671,5 @@ f4c263a9365b47f8466d058907860cadfc35a4e07b7dbd53f1a298ec7a0cf3b6  ./frontend/src
 65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5  ./frontend/src/vite-env.d.ts
 221d705967c6051c826f85e6d9c8ca5544dba6ec48da3b405f3f63b145b93454  ./frontend/tsconfig.json
 73980213914ccf271af2f11a2d999c0e8979e5341cab6e450fe44062b47f86f6  ./frontend/vite.config.ts
-356c9dbdf50a3a76c67e4a5f7b9ea8922b6f1dc5c9ace0fe88b0fa205c1a1acf  ./render.yaml
+c8399b598d48dd411c7dac69ba9b45668cfbf87a577861bc06b07ff1fed521e3  ./render.yaml
 b5ad19e93936cd595a70ecaf6a39b60c1275d1cc38570a39b7eac9945fbf97dc  ./start_local.sh
