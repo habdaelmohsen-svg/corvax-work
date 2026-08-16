@@ -569,7 +569,7 @@ def verify_adaptive_safe_split() -> None:
 def main() -> None:
     assert str(DAY_START) == "00:00:00"
     assert str(DAY_END) == "23:59:59"
-    assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v8"
+    assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v9"
     assert BRANCH_REPORT_ORDER_STATES == ("draft", "paid", "done", "invoiced")
     assert HISTORY_CHUNK_DAYS == 1
     assert HISTORY_CHUNKS_PER_CYCLE == 1
@@ -765,6 +765,21 @@ def main() -> None:
                 assert db.scalar(select(func.count(DgteraSalesOrderLine.id))) == 1
                 assert order and order.total == 230 and order.source_hash == "b" * 64
 
+            manual = ok(client.post(
+                "/api/v1/integrations/dgtera/sync",
+                headers=headers,
+                json={
+                    "company_id": 1,
+                    "start_date": sales_date.isoformat(),
+                    "end_date": sales_date.isoformat(),
+                },
+            ))
+            assert manual["synchronized"] is True
+            assert manual["strict_reconciled"] is True
+            assert manual["source_orders"] == 1
+            assert float(manual["source_total"]) == 230
+            assert manual["verification_hash"]
+
             snap = ok(client.get(
                 f"/api/v1/integrations/dgtera/snapshot?company_id=1&start_date={sales_date}&end_date={sales_date}",
                 headers=headers,
@@ -788,6 +803,40 @@ def main() -> None:
             assert all(snap["reconciliation"]["checks"].values())
             assert snap["product_sales"][0]["key"] == "Classic Burger"
             assert len(snap["orders"][0]["lines"]) == 1 and len(snap["orders"][0]["payments"]) == 1
+
+            # Proofs from the pre-pagination-fix marker must never be trusted,
+            # even when their partial local mirror matched itself exactly.
+            with SessionLocal() as db:
+                proof_runs = db.scalars(select(DgteraSyncRun).where(
+                    DgteraSyncRun.start_date == sales_date,
+                    DgteraSyncRun.end_date == sales_date,
+                    DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
+                )).all()
+                assert proof_runs
+                for proof_run in proof_runs:
+                    proof_run.window_label = proof_run.window_label.replace(
+                        SOURCE_LOCAL_WINDOW_MARKER,
+                        "dgtera-source-date-line-report-strict-v8",
+                    )
+                db.commit()
+            legacy_untrusted = ok(client.get(
+                f"/api/v1/integrations/dgtera/snapshot?company_id=1&start_date={sales_date}&end_date={sales_date}",
+                headers=headers,
+            ))
+            assert legacy_untrusted["trusted_sales"] is False
+            assert legacy_untrusted["totals"] is None
+            with SessionLocal() as db:
+                proof_runs = db.scalars(select(DgteraSyncRun).where(
+                    DgteraSyncRun.start_date == sales_date,
+                    DgteraSyncRun.end_date == sales_date,
+                    DgteraSyncRun.window_label.like("%strict-v8%"),
+                )).all()
+                for proof_run in proof_runs:
+                    proof_run.window_label = proof_run.window_label.replace(
+                        "dgtera-source-date-line-report-strict-v8",
+                        SOURCE_LOCAL_WINDOW_MARKER,
+                    )
+                db.commit()
             analytics = ok(client.get(
                 f"/api/v1/integrations/dgtera/analytics?company_id=1&as_of_date={sales_date}&period=DAY",
                 headers=headers,
@@ -805,7 +854,7 @@ def main() -> None:
             ))
             assert connection_status["history"]["earliest_imported_date"] == sales_date.isoformat()
             runs = ok(client.get("/api/v1/integrations/dgtera/sync-runs?company_id=1", headers=headers))
-            assert len(runs) == 3 and all(row["status"] == "COMPLETED" for row in runs)
+            assert len(runs) == 4 and all(row["status"] == "COMPLETED" for row in runs)
 
             # A newer failed read invalidates the older green proof for that
             # day.  CORVAX may retain the last atomic rows for recovery, but it
@@ -943,8 +992,9 @@ def main() -> None:
                     assert "1 differences" in str(connection.last_error)
                     assert "order[9001].vat" in str(connection.last_error)
 
-            # There is intentionally no user-triggered import endpoint.
-            assert client.post("/api/v1/integrations/dgtera/sync", headers=headers, json={}).status_code in {404, 405}
+            # The user-triggered endpoint is strict and rejects malformed or
+            # unbounded requests before any source or mirror mutation.
+            assert client.post("/api/v1/integrations/dgtera/sync", headers=headers, json={}).status_code == 422
 
             # A completed source window is authoritative: cancelled/moved
             # records that disappear from DGTERA must not remain in totals.

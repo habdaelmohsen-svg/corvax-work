@@ -49,7 +49,10 @@ HISTORY_START_DATE = date(2025, 1, 1)
 HISTORY_CHUNK_DAYS = 1
 LIVE_SYNC_INTERVAL_MINUTES = 2
 HISTORY_RECHECK_INTERVAL_HOURS = 24
-SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v8"
+# V9 deliberately invalidates every proof created before the server-capped
+# pagination repair.  A V8 row may reconcile perfectly with the *partial*
+# 300-order mirror and must therefore never be presented as live-source proof.
+SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v9"
 _TRANSIENT_DB_SQLSTATES = {
     "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
     "40001", "40P01", "53300", "53400", "55P03", "57P01", "57P02", "57P03",
@@ -811,7 +814,7 @@ def _latest_daily_run_ids(
     start_date: date,
     end_date: date,
 ):
-    """Return the newest attempted strict-v8 run id for each business day.
+    """Return the newest attempted current-version run id for each business day.
 
     A later failed attempt must invalidate an older successful proof.  Keeping
     the old proof trusted after DGTERA reports an incomplete page sequence is
