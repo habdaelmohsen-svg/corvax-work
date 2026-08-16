@@ -55,6 +55,7 @@ from app.services.dgtera_connector import (  # noqa: E402
     BRANCH_REPORT_ORDER_STATES,
     DAY_END,
     DAY_START,
+    DgteraRemoteError,
     DgteraResultLimitExceeded,
     Odoo14Client,
     classify_sale,
@@ -271,6 +272,59 @@ class StubOdooClient(Odoo14Client):
         if model == "pos.payment.method":
             return [{"id": 41, "name": "Cash"}, {"id": 42, "name": "Keeta"}]
         raise AssertionError(model)
+
+
+def verify_server_capped_keyset_pagination() -> None:
+    """Read every row when DGTERA silently caps each response at 300."""
+
+    class ServerCappedClient(Odoo14Client):
+        def __init__(self, *, stop_after_first_page: bool = False):
+            self.uid = 1
+            self.stop_after_first_page = stop_after_first_page
+            self.calls: list[dict] = []
+
+        def execute_kw(self, model, method, args=None, kwargs=None):
+            assert model == "pos.order"
+            if method == "search_count":
+                return 750
+            assert method == "search_read"
+            kwargs = kwargs or {}
+            self.calls.append(kwargs)
+            domain = (args or [[]])[0]
+            cursor = next(
+                int(condition[2])
+                for condition in domain
+                if isinstance(condition, tuple) and condition[:2] == ("id", ">")
+            )
+            if self.stop_after_first_page and cursor >= 300:
+                return []
+            # Reproduce DGTERA's observed behaviour: it returns no more than
+            # 300 records even when CORVAX requests a larger page.
+            server_limit = min(int(kwargs.get("limit") or 0), 300)
+            return [
+                {"id": row_id, "name": f"ORDER-{row_id:04d}"}
+                for row_id in range(cursor + 1, min(cursor + server_limit, 750) + 1)
+            ]
+
+    client = ServerCappedClient()
+    rows = client._search_read_all(
+        "pos.order", [("state", "!=", "cancel")], ["id", "name"],
+        order="date_order,id", maximum=10000,
+    )
+    assert len(rows) == 750
+    assert [row["id"] for row in rows] == list(range(1, 751))
+    assert len(client.calls) == 3
+    assert all(call["offset"] == 0 and call["order"] == "id" for call in client.calls)
+
+    stopped = ServerCappedClient(stop_after_first_page=True)
+    try:
+        stopped._search_read_all(
+            "pos.order", [], ["id"], order="id", maximum=10000,
+        )
+    except DgteraRemoteError as exc:
+        assert "stopped after 300 of 750 records" in str(exc)
+    else:
+        raise AssertionError("an incomplete DGTERA page sequence was accepted")
 
 
 def verify_real_connector_window(sales_date: date) -> None:
@@ -546,6 +600,7 @@ def main() -> None:
     assert evidence == "DGTERA_DELIVERY_EVIDENCE"
     assert classify_sale(partner_name="", payment_method_names=["Cash"], optional_values={"table_id": [12, "T12"]})[:2] == ("INTERNAL", "DINE_IN")
     assert classify_sale(partner_name="", payment_method_names=["Cash"], optional_values={})[:2] == ("INTERNAL", "TAKEAWAY")
+    verify_server_capped_keyset_pagination()
     verify_real_connector_window(date.today())
     verify_attached_report_reference_totals()
     verify_adaptive_safe_split()
@@ -751,6 +806,37 @@ def main() -> None:
             assert connection_status["history"]["earliest_imported_date"] == sales_date.isoformat()
             runs = ok(client.get("/api/v1/integrations/dgtera/sync-runs?company_id=1", headers=headers))
             assert len(runs) == 3 and all(row["status"] == "COMPLETED" for row in runs)
+
+            # A newer failed read invalidates the older green proof for that
+            # day.  CORVAX may retain the last atomic rows for recovery, but it
+            # must not expose their financial values as trusted sales.
+            with SessionLocal() as db:
+                connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
+                failed_run = DgteraSyncRun(
+                    connection_id=connection.id,
+                    company_id=connection.company_id,
+                    start_date=sales_date,
+                    end_date=sales_date,
+                    window_label=f"00:00-23:59:59 DGTERA source date / {SOURCE_LOCAL_WINDOW_MARKER}",
+                    status="ERROR",
+                    strict_reconciled=False,
+                    error_message="DGTERA pos.order pagination stopped after 300 of 750 records",
+                    completed_at=datetime.now(),
+                )
+                db.add(failed_run)
+                db.commit()
+                failed_run_id = failed_run.id
+            untrusted = ok(client.get(
+                f"/api/v1/integrations/dgtera/snapshot?company_id=1&start_date={sales_date}&end_date={sales_date}",
+                headers=headers,
+            ))
+            assert untrusted["trusted_sales"] is False
+            assert untrusted["totals"] is None and untrusted["orders"] == []
+            assert untrusted["reconciliation"]["matched"] is False
+            assert untrusted["coverage"]["complete"] is False
+            with SessionLocal() as db:
+                db.delete(db.get(DgteraSyncRun, failed_run_id))
+                db.commit()
 
             # The holding owns one encrypted connection, while the restaurant
             # workspace reads the exact same connection-scoped mirror.  This
