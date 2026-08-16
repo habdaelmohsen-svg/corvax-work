@@ -806,22 +806,40 @@ def catchup_window(connection: DgteraConnection) -> tuple[date, date]:
     return today, today
 
 
+def _latest_daily_run_ids(
+    connection: DgteraConnection,
+    start_date: date,
+    end_date: date,
+):
+    """Return the newest attempted strict-v8 run id for each business day.
+
+    A later failed attempt must invalidate an older successful proof.  Keeping
+    the old proof trusted after DGTERA reports an incomplete page sequence is
+    exactly how stale partial sales were previously shown as a green match.
+    """
+    return select(func.max(DgteraSyncRun.id).label("run_id")).where(
+        DgteraSyncRun.connection_id == connection.id,
+        DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
+        DgteraSyncRun.start_date == DgteraSyncRun.end_date,
+        DgteraSyncRun.start_date >= start_date,
+        DgteraSyncRun.start_date <= end_date,
+    ).group_by(DgteraSyncRun.start_date).subquery()
+
+
 def _strict_completed_intervals(
     db: Session,
     connection: DgteraConnection,
     start_date: date,
     end_date: date,
 ) -> list[tuple[date, date]]:
+    latest_daily_ids = _latest_daily_run_ids(connection, start_date, end_date)
     rows = db.execute(select(
         DgteraSyncRun.start_date,
         DgteraSyncRun.end_date,
     ).where(
-        DgteraSyncRun.connection_id == connection.id,
+        DgteraSyncRun.id.in_(select(latest_daily_ids.c.run_id)),
         DgteraSyncRun.status == "COMPLETED",
         DgteraSyncRun.strict_reconciled.is_(True),
-        DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
-        DgteraSyncRun.end_date >= start_date,
-        DgteraSyncRun.start_date <= end_date,
     ).distinct().order_by(DgteraSyncRun.start_date, DgteraSyncRun.end_date)).all()
     merged: list[tuple[date, date]] = []
     for row_start, row_end in rows:
@@ -867,20 +885,15 @@ def strict_range_coverage_status(
     if cursor <= historical_end and first_missing is None:
         first_missing = cursor
     required_days = (historical_end - start_date).days + 1
+    latest_daily_ids = _latest_daily_run_ids(connection, start_date, historical_end)
     verification_rows = db.execute(select(
         DgteraSyncRun.start_date,
         DgteraSyncRun.end_date,
-        func.max(DgteraSyncRun.completed_at),
+        DgteraSyncRun.completed_at,
     ).where(
-        DgteraSyncRun.connection_id == connection.id,
+        DgteraSyncRun.id.in_(select(latest_daily_ids.c.run_id)),
         DgteraSyncRun.status == "COMPLETED",
         DgteraSyncRun.strict_reconciled.is_(True),
-        DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
-        DgteraSyncRun.end_date >= start_date,
-        DgteraSyncRun.start_date <= historical_end,
-    ).group_by(
-        DgteraSyncRun.start_date,
-        DgteraSyncRun.end_date,
     )).all()
     day_verifications: list[datetime] = []
     day = start_date
@@ -972,19 +985,11 @@ def strict_range_reconciliation_evidence(
     # and parsed every successful two-minute run for the requested range, so a
     # yearly dashboard became slower every day even though the proof was the
     # same.  Each chosen row was already committed atomically with its mirror.
-    latest_daily_ids = select(
-        func.max(DgteraSyncRun.id).label("run_id")
-    ).where(
-        DgteraSyncRun.connection_id == connection.id,
+    latest_daily_ids = _latest_daily_run_ids(connection, start_date, end_date)
+    runs = db.scalars(select(DgteraSyncRun).where(
+        DgteraSyncRun.id.in_(select(latest_daily_ids.c.run_id)),
         DgteraSyncRun.status == "COMPLETED",
         DgteraSyncRun.strict_reconciled.is_(True),
-        DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
-        DgteraSyncRun.start_date == DgteraSyncRun.end_date,
-        DgteraSyncRun.start_date >= start_date,
-        DgteraSyncRun.start_date <= end_date,
-    ).group_by(DgteraSyncRun.start_date).subquery()
-    runs = db.scalars(select(DgteraSyncRun).where(
-        DgteraSyncRun.id.in_(select(latest_daily_ids.c.run_id))
     ).order_by(DgteraSyncRun.start_date)).all()
     daily: dict[str, dict] = {}
     for run in runs:

@@ -322,21 +322,52 @@ class Odoo14Client:
         if total > maximum:
             raise DgteraResultLimitExceeded(model, total, maximum)
         rows: list[dict[str, object]] = []
-        offset = 0
+        # Some DGTERA installations impose a lower server-side page cap than
+        # the requested limit (300 has been observed in production).  Offset
+        # pagination is not reliable in that setup: the first page is returned
+        # but a later offset can be empty even while search_count still proves
+        # that unread records remain.  Walk the immutable Odoo primary key
+        # instead.  This also avoids skips/duplicates if records are written
+        # while a busy business day is being read.
+        last_id = 0
+        seen_ids: set[int] = set()
         page_size = min(500, maximum)
-        while offset < total:
+        requested_fields = list(dict.fromkeys(["id", *fields]))
+        while len(rows) < total:
+            remaining = total - len(rows)
             page = self.execute_kw(
                 model,
                 "search_read",
-                [domain],
-                {"fields": fields, "order": order, "offset": offset, "limit": page_size},
+                [[*domain, ("id", ">", last_id)]],
+                {
+                    "fields": requested_fields,
+                    "order": "id",
+                    "offset": 0,
+                    "limit": min(page_size, remaining),
+                },
             ) or []
             if not page:
                 break
+            page_ids: list[int] = []
+            for row in page:
+                try:
+                    row_id = int(row["id"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise DgteraRemoteError(
+                        f"DGTERA {model} returned a record without a valid id"
+                    ) from exc
+                if row_id <= last_id or row_id in seen_ids:
+                    raise DgteraRemoteError(
+                        f"DGTERA {model} pagination did not advance safely"
+                    )
+                seen_ids.add(row_id)
+                page_ids.append(row_id)
             rows.extend(page)
-            offset += len(page)
+            last_id = page_ids[-1]
         if len(rows) != total:
-            raise DgteraRemoteError(f"DGTERA {model} pagination stopped before all records were read")
+            raise DgteraRemoteError(
+                f"DGTERA {model} pagination stopped after {len(rows)} of {total} records"
+            )
         return rows
 
     def test_connection(self) -> dict[str, object]:
