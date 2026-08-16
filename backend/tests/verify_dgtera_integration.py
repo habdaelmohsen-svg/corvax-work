@@ -993,7 +993,28 @@ def main() -> None:
                     assert "order[9001].vat" in str(connection.last_error)
 
             # The user-triggered endpoint is strict and rejects malformed or
-            # unbounded requests before any source or mirror mutation.
+            # unbounded requests before any source or mirror mutation.  An
+            # unexpected server-side failure must also remain a structured,
+            # actionable API error instead of the empty HTML 500 that hides the
+            # live cause from operators.
+            with patch(
+                "app.api.dgtera_integration.dgtera_sales_sync.sync_connection",
+                side_effect=RuntimeError("simulated safe diagnostic"),
+            ):
+                unexpected = client.post(
+                    "/api/v1/integrations/dgtera/sync",
+                    headers=headers,
+                    json={
+                        "company_id": 1,
+                        "start_date": sales_date.isoformat(),
+                        "end_date": sales_date.isoformat(),
+                    },
+                )
+            assert unexpected.status_code == 502
+            assert unexpected.json()["detail"] == (
+                "DGTERA sales synchronization failed safely: "
+                "RuntimeError: simulated safe diagnostic"
+            )
             assert client.post("/api/v1/integrations/dgtera/sync", headers=headers, json={}).status_code == 422
 
             # A completed source window is authoritative: cancelled/moved
