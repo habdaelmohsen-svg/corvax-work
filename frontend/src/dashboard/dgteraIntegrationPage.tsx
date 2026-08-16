@@ -73,8 +73,13 @@ async function json(url:string,init?:RequestInit,timeoutMs=REQUEST_TIMEOUT_MS){
   const timer=window.setTimeout(()=>controller.abort(),timeoutMs);
   try{
     const r=await apiFetch(url,{...(init||{}),signal:controller.signal});
-    const x=await r.json().catch(()=>({}));
-    if(!r.ok)throw new Error(typeof x.detail==='string'?x.detail:JSON.stringify(x.detail||x));
+    const raw=await r.text();
+    let x:any={};
+    try{x=raw?JSON.parse(raw):{}}catch{x={detail:raw.trim()||`HTTP ${r.status}`}}
+    if(!r.ok){
+      const detail=typeof x.detail==='string'?x.detail:JSON.stringify(x.detail||x);
+      throw new Error(detail&&detail!=='{}'?detail:`DGTERA API request failed with HTTP ${r.status}`);
+    }
     return x;
   }catch(error:any){
     if(controller.signal.aborted)throw new Error(`DGTERA API request timed out after ${timeoutMs/1000} seconds`);
