@@ -68,16 +68,16 @@ function riyadhToday(){
 }
 
 const REQUEST_TIMEOUT_MS=30000;
-async function json(url:string,init?:RequestInit){
+async function json(url:string,init?:RequestInit,timeoutMs=REQUEST_TIMEOUT_MS){
   const controller=new AbortController();
-  const timer=window.setTimeout(()=>controller.abort(),REQUEST_TIMEOUT_MS);
+  const timer=window.setTimeout(()=>controller.abort(),timeoutMs);
   try{
     const r=await apiFetch(url,{...(init||{}),signal:controller.signal});
     const x=await r.json().catch(()=>({}));
     if(!r.ok)throw new Error(typeof x.detail==='string'?x.detail:JSON.stringify(x.detail||x));
     return x;
   }catch(error:any){
-    if(controller.signal.aborted)throw new Error(`DGTERA API request timed out after ${REQUEST_TIMEOUT_MS/1000} seconds`);
+    if(controller.signal.aborted)throw new Error(`DGTERA API request timed out after ${timeoutMs/1000} seconds`);
     throw error;
   }finally{window.clearTimeout(timer)}
 }
@@ -117,16 +117,16 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
   const [selectedOrder,setSelectedOrder]=useState<Order|null>(null);
   const [busy,setBusy]=useState(false);const [reportLoading,setReportLoading]=useState(false);const [msg,setMsg]=useState('');const [isError,setIsError]=useState(false);
 
-  const load=async()=>{
+  const load=async(filters:DisplayFilters=appliedFilters)=>{
     setReportLoading(true);
     try{
       const st=await json(`/api/v1/integrations/dgtera/status?company_id=${companyId}`);
       setStatus(st);if(st.base_url)setBaseUrl(st.base_url);
       if(!st.configured){setSnapshot(null);setAnalytics(null);setRuns([]);return;}
-      const params=new URLSearchParams({company_id:String(companyId),start_date:appliedFilters.startDate,end_date:appliedFilters.endDate});
-      if(appliedFilters.branchId)params.set('branch_id',appliedFilters.branchId);if(appliedFilters.scope)params.set('sales_scope',appliedFilters.scope);if(appliedFilters.service)params.set('service_mode',appliedFilters.service);
+      const params=new URLSearchParams({company_id:String(companyId),start_date:filters.startDate,end_date:filters.endDate});
+      if(filters.branchId)params.set('branch_id',filters.branchId);if(filters.scope)params.set('sales_scope',filters.scope);if(filters.service)params.set('service_mode',filters.service);
       const analyticsParams=new URLSearchParams({company_id:String(companyId),as_of_date:compareDate,period});
-      if(appliedFilters.branchId)analyticsParams.set('branch_id',appliedFilters.branchId);if(appliedFilters.scope)analyticsParams.set('sales_scope',appliedFilters.scope);if(appliedFilters.service)analyticsParams.set('service_mode',appliedFilters.service);
+      if(filters.branchId)analyticsParams.set('branch_id',filters.branchId);if(filters.scope)analyticsParams.set('sales_scope',filters.scope);if(filters.service)analyticsParams.set('service_mode',filters.service);
       const [snapResult,comparisonResult,historyResult]=await Promise.allSettled([
         json(`/api/v1/integrations/dgtera/snapshot?${params.toString()}`),
         json(`/api/v1/integrations/dgtera/analytics?${analyticsParams.toString()}`),
@@ -152,11 +152,22 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
   },[companyId,appliedFilters,compareDate,period]);
 
   const say=(text:string,error=false)=>{setMsg(text);setIsError(error)};
-  const showSales=()=>{
+  const showSales=async()=>{
     if(!startDate||!endDate){say(ar?'اختر تاريخ البداية والنهاية أولًا.':'Select both start and end dates first.',true);return;}
     if(endDate<startDate){say(ar?'تاريخ النهاية لا يمكن أن يسبق تاريخ البداية.':'End date cannot be before start date.',true);return;}
-    setMsg('');setIsError(false);
-    setAppliedFilters({startDate,endDate,branchId,scope,service});
+    setReportLoading(true);setMsg('');setIsError(false);
+    const nextFilters={startDate,endDate,branchId,scope,service};
+    try{
+      const result=await json('/api/v1/integrations/dgtera/sync',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({company_id:companyId,start_date:startDate,end_date:endDate}),
+      },120000);
+      if(!result.strict_reconciled)throw new Error(ar?'لم تجتز الفترة المطابقة الصارمة.':'The period did not pass strict reconciliation.');
+      const unchanged=JSON.stringify(nextFilters)===JSON.stringify(appliedFilters);
+      setAppliedFilters(nextFilters);
+      say(ar?`اكتملت القراءة المباشرة والمطابقة الصارمة: ${result.source_orders} طلب.`:`Fresh source read and strict reconciliation completed: ${result.source_orders} orders.`);
+      if(unchanged)await load(nextFilters);
+    }catch(e:any){rejectStale(e)}finally{setReportLoading(false)}
   };
   const saveConnection=async()=>{
     if(status.inherited){
