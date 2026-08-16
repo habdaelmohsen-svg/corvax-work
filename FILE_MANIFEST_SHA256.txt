@@ -54,7 +54,7 @@ c62bcfaf73175bee697c67e302735d916c95bc4cdf81e3302d89af338b9a5529  ./backend/app/
 11626d6a6b2347bf0729c51ef1be2e9da29f91754be4eece2b88dd50871e9c1c  ./backend/app/api/credit_notes.py
 ab527e4b54761b31bfb732c195f101181a7dca24e7789aa1ad757d0b1943d8ea  ./backend/app/api/crm.py
 ec14f90c0aee0582f73f389f4275d58d61fd021eed461c598cafbbb71dea7da4  ./backend/app/api/data_reset.py
-6eae19f811fb24bccc5d51c35aee805cbccfe06b52b1aed3eb137acd7edca2ea  ./backend/app/api/dgtera_integration.py
+e5775d52241d6a6f7f7587e71d31697a662c93a3b628bc6d0da3fdb14897c26d  ./backend/app/api/dgtera_integration.py
 8e550fec844801216747895b0ec378fc1e1da1ad4cde2ea8b9c9ed7841b5ef13  ./backend/app/api/enterprise.py
 35f397dc0051ff96d8666b3655b3ba1f79cc0a3e75d800e4d2fa0209f2d557d5  ./backend/app/api/excise_tax.py
 3cccfd5bad473809942a5fdc1f241131753a86f7afc0940a4ada39fc69d7d3ad  ./backend/app/api/finance.py
@@ -154,7 +154,7 @@ b3c9016f2a3508b612b81522428996064b960fe38871a91ed9b02b0e08019473  ./backend/app/
 7d167b7f3663b98eeccdf387f2c23f3afcd46c8bd1e3c94f94b0549897831ad5  ./backend/app/services/audit.py
 98b1f11c61c0d9edca8ee21245c6ec5d27a4444e9aa036e1711f75ac49809e29  ./backend/app/services/bootstrap.py
 0c64db600b0473b931a19d37c6f1c2d5c95db53e8d284ab87e9b224695af0447  ./backend/app/services/dgtera_connector.py
-bd5fa05ecec987331e28533bcd0f0aad6a129fbad2c85907f0f585bde89f2819  ./backend/app/services/dgtera_sales_sync.py
+4dd6aceb7e157255ad291183dc9a7e8486bf6a882cc893a6d7a7be1ffb8529d3  ./backend/app/services/dgtera_sales_sync.py
 27d9c6042a9df784f4f371542c0369a0bfb39ad9e8a406c80237734bfe405044  ./backend/app/services/mrp.py
 a49340a6a6942cb910f0771d07bdb6c9412577d76324138d923256bce1e33446  ./backend/app/services/operations.py
 5d47ea45107aa4f23a115405a20d93805f5a0433c662fedb62a09a98780690b3  ./backend/app/services/payroll.py
@@ -361,7 +361,7 @@ c47d21f007b63f3a365209884f2c3b72dc82695714d28f1122d76ace76901baf  ./backend/test
 b74cf9ed94f1932922363141f766fe83106ebde49947d5cbe64fe834f385f3ef  ./backend/tests/verify_branch_scope_security.py
 5948dbff1fdf0497188c371d4600d7f95aca9cc9bfd588ccd64c9e1f1c993a7a  ./backend/tests/verify_demo_data_reset_safety.py
 1b6925bc3e07d5f3c6583e165699cc2b3c6c79b7cca17a017e2d8da0c304258f  ./backend/tests/verify_demo_surface_hardening.py
-db9c2501a517f25f58921c2ed14e792bb65f13276e86d923a81c656900923890  ./backend/tests/verify_dgtera_integration.py
+734e1a14d77f85229fbe8e818810336d9a3ce443bdb57d86229bd5ae33586e1d  ./backend/tests/verify_dgtera_integration.py
 c6739ee256b6a9f8cd03554a681f907c3d8f50aa046d428772e91a32932aa1cf  ./backend/tests/verify_final_home_dashboard.py
 4c6e084dad72f1c46914e43ab2b13fecd71a702b495661bbc760dbae5e9dde40  ./backend/tests/verify_final_internal.py
 6db739271f0ff19e2178d977202f08fcad3f3a07f7499d7021fc8897f7f28a89  ./backend/tests/verify_health_contract.py
@@ -619,7 +619,7 @@ d5fd7b577114133ee96b2280881891bc5c2c63f8783a35e5769403962f1ac5eb  ./frontend/src
 0134218e901356984ae22c5778c9cb12785cd93fac558c839d2e0e024022abec  ./frontend/src/dashboard/comparativeStatementTable.tsx
 d3f934b30541fea576f3f57d836c8760b7b26553e2b669a6e9f24e9d7ddf08ff  ./frontend/src/dashboard/creditNotesPage.tsx
 b19e0455d48b57bbb695744f8561f2cad26b833e80f4b41b87fba06df15916d6  ./frontend/src/dashboard/dataResetPage.tsx
-a15f805fd22a3abb0caea28917639340d46914db3cd1f5c6e8f804304bb3c984  ./frontend/src/dashboard/dgteraIntegrationPage.tsx
+928dcef58ca4ba83d79a145a17c9fe6bca99a161637b768c40fd396aa72df7f7  ./frontend/src/dashboard/dgteraIntegrationPage.tsx
 85609df6717ab477919cffa4f9bc5ef04f11b706b4976a9d19f744bd86c05a92  ./frontend/src/dashboard/exciseTaxPage.tsx
 3ce4e2d1e1d6569bd581efd795733c672368dbf167a23853bc2978fc42bb4b52  ./frontend/src/dashboard/executive.tsx
 3f11f39755d7469a93f34feca8bcc2c052becd41a09cd03ad34ec3aef738b73b  ./frontend/src/dashboard/executiveNavigation.ts
