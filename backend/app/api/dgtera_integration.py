@@ -57,6 +57,22 @@ class ConnectionIn(BaseModel):
         return self
 
 
+class SyncRangeIn(BaseModel):
+    company_id: int
+    start_date: date
+    end_date: date
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must not be before start_date")
+        if self.start_date < dgtera_sales_sync.HISTORY_START_DATE:
+            raise ValueError("DGTERA synchronization starts on 2025-01-01")
+        if (self.end_date - self.start_date).days > 31:
+            raise ValueError("A manual DGTERA synchronization cannot exceed 32 days")
+        return self
+
+
 _LINKED_DGTERA_COMPANY_TYPES = {
     "HOLDING": "RESTAURANT",
     "RESTAURANT": "HOLDING",
@@ -222,6 +238,44 @@ def save_connection(data: ConnectionIn, user: User = Depends(get_current_user), 
         **_connection_out(row, data.company_id),
         "automatic_test": test_result,
         "initial_sync": initial_sync,
+    }
+
+
+@router.post("/sync")
+def synchronize_range(data: SyncRangeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Read the selected source days again before displaying their sales.
+
+    The display button must never merely reopen a cached proof.  It requests a
+    fresh, atomic DGTERA read and only returns success after the current proof
+    version reconciles every order, line, payment and monetary total.
+    """
+    ensure_permission(db, user, data.company_id, "pos.manage")
+    connection = _connection(db, data.company_id)
+    if not connection.active:
+        raise HTTPException(409, "DGTERA connection is inactive")
+    today = utc_now_aware().astimezone(ZoneInfo(connection.timezone)).date()
+    if data.end_date > today:
+        raise HTTPException(422, "A DGTERA synchronization cannot include a future date")
+    try:
+        result = dgtera_sales_sync.sync_connection(
+            db,
+            connection,
+            data.start_date,
+            data.end_date,
+            user.id,
+        )
+    except dgtera_sales_sync.DgteraSyncBusy as exc:
+        raise HTTPException(409, "DGTERA synchronization is already running; retry shortly") from exc
+    except (DgteraRemoteError, ValueError, dgtera_sales_sync.DgteraReconciliationError) as exc:
+        raise HTTPException(502, f"DGTERA sales synchronization failed: {exc}") from exc
+    return {
+        "synchronized": True,
+        "start_date": data.start_date,
+        "end_date": data.end_date,
+        "strict_reconciled": bool(result.get("strict_reconciled")),
+        "source_orders": int(result.get("source_orders") or 0),
+        "source_total": money(result.get("source_total")),
+        "verification_hash": result.get("verification_hash"),
     }
 
 
