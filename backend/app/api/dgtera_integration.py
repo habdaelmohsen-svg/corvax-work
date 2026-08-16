@@ -243,6 +243,24 @@ def save_connection(data: ConnectionIn, user: User = Depends(get_current_user), 
 
 @router.post("/sync")
 def synchronize_range(data: SyncRangeIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        return _synchronize_range_strict(data, user, db)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Never let an unexpected production dependency/database failure turn
+        # into an empty HTML 500 response.  The existing sanitizer deliberately
+        # excludes SQL text, parameters and credentials while retaining the
+        # exception class and a bounded operational reason for diagnosis.
+        db.rollback()
+        safe_error = dgtera_sales_sync._safe_sync_error(exc)
+        raise HTTPException(
+            502,
+            f"DGTERA sales synchronization failed safely: {safe_error}",
+        ) from exc
+
+
+def _synchronize_range_strict(data: SyncRangeIn, user: User, db: Session):
     """Read the selected source days again before displaying their sales.
 
     The display button must never merely reopen a cached proof.  It requests a
