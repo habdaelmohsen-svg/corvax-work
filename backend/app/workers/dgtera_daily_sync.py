@@ -82,11 +82,17 @@ def run_due_syncs() -> None:
                 )
                 continue
 
-            # While initial history is incomplete, import one independently
-            # committed day and end this cycle.  Changed-date discovery is
-            # intentionally postponed: those dates are already in this queue.
-            history_window = historical_backfill_window(db, connection)
-            if history_window is not None:
+            # Drain several independently committed business days per cycle.
+            # Each day remains a separate source read, transaction and strict
+            # proof, so acceleration cannot turn into one unsafe year-sized
+            # database transaction.  Stop at the first failure and retry that
+            # exact day on the next two-minute cycle.
+            imported_history = False
+            for _ in range(HISTORY_CHUNKS_PER_CYCLE):
+                history_window = historical_backfill_window(db, connection)
+                if history_window is None:
+                    break
+                imported_history = True
                 history_start, history_end = history_window
                 try:
                     result = sync_connection(
@@ -104,16 +110,22 @@ def run_due_syncs() -> None:
                     )
                 except DgteraSyncBusy:
                     logger.info("DGTERA historical sales backfill already running", extra={"connection_id": connection.id})
+                    break
                 except (DgteraRemoteError, ValueError) as exc:
                     logger.error(
                         "DGTERA historical sales backfill failed",
                         extra={"connection_id": connection.id, "start": str(history_start), "end": str(history_end), "error": str(exc)},
                     )
+                    break
                 except Exception:  # noqa: BLE001 - keep the next poll alive
                     logger.exception(
                         "Unexpected DGTERA historical backfill failure",
                         extra={"connection_id": connection.id, "start": str(history_start), "end": str(history_end)},
                     )
+                    break
+            if imported_history:
+                # Changed-date discovery is intentionally postponed until the
+                # contiguous history queue has been drained.
                 continue
 
             # Only after backfill completion, recheck at most one changed day.

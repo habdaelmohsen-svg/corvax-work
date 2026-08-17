@@ -2,8 +2,10 @@
 
 DGTERA remains the source of truth. CORVAX imports Branch Sales report orders plus the
 branch, product, customer, payment and service-channel dimensions carried by
-those sales. The mirror deliberately has no inventory, COGS or journal-entry
-side effects.
+those sales. The mirror deliberately has no inventory or COGS side effects.
+After a day passes strict reconciliation, CORVAX may create one idempotent
+restaurant-ledger summary journal (gross receivable, net revenue and output
+VAT); the holding workspace remains a non-posting view of the same source.
 """
 from __future__ import annotations
 

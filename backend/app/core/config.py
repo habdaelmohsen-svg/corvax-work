@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # Historical imports are intentionally drained in small, independently
     # committed business-day units.  A web process must remain responsive
     # while the 2025 backfill is running on a modest PostgreSQL instance.
-    dgtera_history_days_per_cycle: int = 1
+    dgtera_history_days_per_cycle: int = 8
     # Historical corrections are deliberately serialized.  An Odoo write-date
     # scan can surface thousands of old orders at once; only one already
     # imported business day is rechecked after the initial backfill completes.
