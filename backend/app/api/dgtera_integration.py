@@ -248,10 +248,8 @@ def synchronize_range(data: SyncRangeIn, user: User = Depends(get_current_user),
     except HTTPException:
         raise
     except Exception as exc:
-        # Never let an unexpected production dependency/database failure turn
-        # into an empty HTML 500 response.  The existing sanitizer deliberately
-        # excludes SQL text, parameters and credentials while retaining the
-        # exception class and a bounded operational reason for diagnosis.
+        # Preserve an actionable JSON error in production without leaking SQL,
+        # parameters, credentials or an internal traceback.
         db.rollback()
         safe_error = dgtera_sales_sync._safe_sync_error(exc)
         raise HTTPException(
@@ -261,12 +259,7 @@ def synchronize_range(data: SyncRangeIn, user: User = Depends(get_current_user),
 
 
 def _synchronize_range_strict(data: SyncRangeIn, user: User, db: Session):
-    """Read the selected source days again before displaying their sales.
-
-    The display button must never merely reopen a cached proof.  It requests a
-    fresh, atomic DGTERA read and only returns success after the current proof
-    version reconciles every order, line, payment and monetary total.
-    """
+    """Freshly read and strictly reconcile the selected source days."""
     ensure_permission(db, user, data.company_id, "pos.manage")
     connection = _connection(db, data.company_id)
     if not connection.active:
@@ -294,6 +287,7 @@ def _synchronize_range_strict(data: SyncRangeIn, user: User, db: Session):
         "source_orders": int(result.get("source_orders") or 0),
         "source_total": money(result.get("source_total")),
         "verification_hash": result.get("verification_hash"),
+        "accounting": result.get("accounting"),
     }
 
 
@@ -993,6 +987,109 @@ def executive_summary(
         "as_of_date": as_of,
         "timezone": connection.timezone,
         "periods": periods,
+        "history": dgtera_sales_sync.historical_backfill_status(db, connection),
+    }
+
+
+@router.get("/range-comparison")
+def range_comparison(
+    company_id: int,
+    start_date: date,
+    end_date: date,
+    branch_id: int | None = None,
+    sales_scope: str | None = Query(default=None, pattern="^(INTERNAL|EXTERNAL)$"),
+    service_mode: str | None = Query(default=None, pattern="^(DINE_IN|TAKEAWAY|DELIVERY)$"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Compare any selected sales range with adjacent and prior-year ranges.
+
+    Values are returned only when every day in that exact window has a newest,
+    successful, zero-difference proof from the live DGTERA source.
+    """
+    ensure_permission(db, user, company_id, "pos.read")
+    connection = _connection(db, company_id)
+    current_start, current_end = _date_window(connection, start_date, end_date)
+    length = (current_end - current_start).days + 1
+    windows = {
+        "current": (current_start, current_end),
+        "previous": (
+            current_start - timedelta(days=length),
+            current_start - timedelta(days=1),
+        ),
+        "next": (
+            current_end + timedelta(days=1),
+            current_end + timedelta(days=length),
+        ),
+        "prior_year": (
+            _shift_year(current_start, -1),
+            _shift_year(current_end, -1),
+        ),
+    }
+
+    def conditions_for(window: tuple[date, date]) -> list:
+        return _order_conditions(
+            connection.id,
+            window[0],
+            window[1],
+            branch_id=branch_id,
+            sales_scope=sales_scope,
+            service_mode=service_mode,
+        )
+
+    raw_metrics = {
+        key: _order_metrics(db, conditions_for(window))
+        for key, window in windows.items()
+    }
+    coverage = {
+        key: _range_coverage(db, connection, window[0], window[1])
+        for key, window in windows.items()
+    }
+    reconciliation = {
+        key: dgtera_sales_sync.strict_range_reconciliation_evidence(
+            db, connection, window[0], window[1]
+        )
+        for key, window in windows.items()
+    }
+    for key in windows:
+        coverage[key]["complete"] = bool(
+            coverage[key]["complete"] and reconciliation[key]["matched"]
+        )
+    metrics = {
+        key: raw_metrics[key] if coverage[key]["complete"] else None
+        for key in windows
+    }
+    current = metrics["current"]
+
+    def compared(reference_key: str) -> Decimal | None:
+        reference = metrics[reference_key]
+        if current is None or reference is None:
+            return None
+        return _change_percent(current["subtotal"], reference["subtotal"])
+
+    return {
+        "company_id": company_id,
+        "connection_company_id": connection.company_id,
+        "windows": {
+            key: {"start_date": window[0], "end_date": window[1]}
+            for key, window in windows.items()
+        },
+        "filters": {
+            "branch_id": branch_id,
+            "sales_scope": sales_scope,
+            "service_mode": service_mode,
+        },
+        "metrics": metrics,
+        "coverage": coverage,
+        "reconciliation": reconciliation,
+        "comparison": {
+            "previous_change_percent": compared("previous"),
+            "next_change_percent": (
+                _change_percent(metrics["next"]["subtotal"], current["subtotal"])
+                if current is not None and metrics["next"] is not None else None
+            ),
+            "prior_year_change_percent": compared("prior_year"),
+        },
         "history": dgtera_sales_sync.historical_backfill_status(db, connection),
     }
 

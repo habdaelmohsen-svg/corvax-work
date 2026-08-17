@@ -54,10 +54,10 @@ c62bcfaf73175bee697c67e302735d916c95bc4cdf81e3302d89af338b9a5529  ./backend/app/
 11626d6a6b2347bf0729c51ef1be2e9da29f91754be4eece2b88dd50871e9c1c  ./backend/app/api/credit_notes.py
 ab527e4b54761b31bfb732c195f101181a7dca24e7789aa1ad757d0b1943d8ea  ./backend/app/api/crm.py
 ec14f90c0aee0582f73f389f4275d58d61fd021eed461c598cafbbb71dea7da4  ./backend/app/api/data_reset.py
-bc3e0ae33151248f632ced31aa7b09c93e7d0dc1c3b34f5a8e2eeacf4ebdc269  ./backend/app/api/dgtera_integration.py
+19daf2d715dac85063f65132be6f6b084fba19d716441acbcebfc74ebce41581  ./backend/app/api/dgtera_integration.py
 8e550fec844801216747895b0ec378fc1e1da1ad4cde2ea8b9c9ed7841b5ef13  ./backend/app/api/enterprise.py
 35f397dc0051ff96d8666b3655b3ba1f79cc0a3e75d800e4d2fa0209f2d557d5  ./backend/app/api/excise_tax.py
-3cccfd5bad473809942a5fdc1f241131753a86f7afc0940a4ada39fc69d7d3ad  ./backend/app/api/finance.py
+5c2a19ceccf0c1f2f8968faa283e0a366782c5847cefab62af9eca3b99d25792  ./backend/app/api/finance.py
 bd839b924ea1e475a568afa2d49ccb480b250e3d8dbd08ced2f9a64605217610  ./backend/app/api/finance_completion.py
 63c7fc7372b8c82f29badf99f2a654267de51fa67dde25a88e6786b375814b25  ./backend/app/api/financial_close.py
 337d8e78f78f6df826b883dc1b054f16b83edbd528231c062a4576b57dfb82a6  ./backend/app/api/food_safety.py
@@ -95,7 +95,7 @@ d66fbf54126a49f38d79e3f35960c8eb4d78dcb7b1d086b148cfcbe289fbd532  ./backend/app/
 6f65f783513295b11f56d86e1ecd1ee0f0378cb21fb69838660f4a5368995466  ./backend/app/api/workspace.py
 d844ff21c02fe34d727414756149d11d17373ed0114050fc913727c921047bf9  ./backend/app/api/year_end_close.py
 94aa90aec07bfc08e2ce6df6ce7e54fcc2a1cbf3b1f8b0fda990db7528d5fa6f  ./backend/app/api/zakat_income_tax.py
-6d84b1310eb0a0031b00d88bcff772a915e7f9630d84ff7abdca65e3a44cc64a  ./backend/app/core/config.py
+8d292278e3ccd4e4dbfb59785c1d98f91df1636b8a36973355757c91fd4d1e7d  ./backend/app/core/config.py
 fb8c30f1457611c06216bf84477ccf7bb6dbb48f83c408a5aa0e7a8d2d490c7a  ./backend/app/core/crypto.py
 7cac2735f2be70985d1497a4b74ee21c6526d20b81552a61e32c76e004ef2aad  ./backend/app/core/middleware.py
 3332e4f98e36ddf661859e5bfd3f8d0b8e8783dac9690b4d850839041eb39dbf  ./backend/app/core/migration_head.py
@@ -118,7 +118,7 @@ cac015abef9dc4cd83e3c3eb4ca32f8cbec7499f75e323623878b566787f2c73  ./backend/app/
 21eee52496b8b2b4e26cee802564082abbbc3f2fad3dca3c4c871a7c7b37467f  ./backend/app/models/data_management.py
 94cd96b28055e0bae3601fa2deaf95de3cc2497238902911d45c049945bcc801  ./backend/app/models/entities.py
 7adf8afddc2878bb1bd20ac723f3a88981f905975d967374c5674f3e1f15cd79  ./backend/app/models/excise_tax.py
-eadb8254fd1cb83559f6a1387dd8ef027a95eddcb5ecc5ef32cd0a5ff860d655  ./backend/app/models/external_integrations.py
+1dabcaabdd3f5d7d727b6564cd436f4aacd01de74fa475d7947a92cc36f1bbab  ./backend/app/models/external_integrations.py
 be1bfb85c4412fea505705a322491cb2744b230b5fe13950c7dad25f20660b4a  ./backend/app/models/finance.py
 148d283a180dd928547c5776a9d3f8892762747ef4f5634f614eb327c1e9bef3  ./backend/app/models/financial_close.py
 5351d49f1d59f688113bc39bd7704a2b8eaf721d994921e5ae4a1e66b5a87855  ./backend/app/models/governance_enterprise.py
@@ -154,7 +154,7 @@ b3c9016f2a3508b612b81522428996064b960fe38871a91ed9b02b0e08019473  ./backend/app/
 7d167b7f3663b98eeccdf387f2c23f3afcd46c8bd1e3c94f94b0549897831ad5  ./backend/app/services/audit.py
 98b1f11c61c0d9edca8ee21245c6ec5d27a4444e9aa036e1711f75ac49809e29  ./backend/app/services/bootstrap.py
 0c64db600b0473b931a19d37c6f1c2d5c95db53e8d284ab87e9b224695af0447  ./backend/app/services/dgtera_connector.py
-4dd6aceb7e157255ad291183dc9a7e8486bf6a882cc893a6d7a7be1ffb8529d3  ./backend/app/services/dgtera_sales_sync.py
+9da3e16506584e454e879a9c52a6d0c81f31b4008af63fe80b6e791344e88041  ./backend/app/services/dgtera_sales_sync.py
 27d9c6042a9df784f4f371542c0369a0bfb39ad9e8a406c80237734bfe405044  ./backend/app/services/mrp.py
 a49340a6a6942cb910f0771d07bdb6c9412577d76324138d923256bce1e33446  ./backend/app/services/operations.py
 5d47ea45107aa4f23a115405a20d93805f5a0433c662fedb62a09a98780690b3  ./backend/app/services/payroll.py
@@ -162,7 +162,7 @@ a49340a6a6942cb910f0771d07bdb6c9412577d76324138d923256bce1e33446  ./backend/app/
 6f24d966c85d509f5382661c26c03074ad47741ee51d6cc315d63591c56e321f  ./backend/app/services/seed.py
 ceada2031ef09695ded12a05cb2ebaa45cbff01ad7261aae2b220d014191b5d0  ./backend/app/services/tax.py
 eeba5f4fdbc95a1a6c04a528ea1dbd67c946f52a877e002a297b9e9c6fc27dae  ./backend/app/workers/__init__.py
-755d24b6cb58815d2a60712bacf1fdf777487c49159459942336ef89dec835fb  ./backend/app/workers/dgtera_daily_sync.py
+86dcd5ace3df43040f062223fa7caf2f738b56bbe44424147f35434a83973ed2  ./backend/app/workers/dgtera_daily_sync.py
 5ddbc4af9e264f49a5e2482bd8f3796f391e3eee9e46531dfd1a49e85b3ffe5e  ./backend/app/workers/mrp_worker.py
 31595cf53626af9ed16e15c44fa43183209cc163fbc3ebcb904b22ac436a8884  ./backend/migrations/README
 5e21c757ae1afc63c03f6293b42f2222d1951d64b2ec22d8d9435797ca69e46d  ./backend/migrations/env.py
@@ -361,7 +361,7 @@ c47d21f007b63f3a365209884f2c3b72dc82695714d28f1122d76ace76901baf  ./backend/test
 b74cf9ed94f1932922363141f766fe83106ebde49947d5cbe64fe834f385f3ef  ./backend/tests/verify_branch_scope_security.py
 5948dbff1fdf0497188c371d4600d7f95aca9cc9bfd588ccd64c9e1f1c993a7a  ./backend/tests/verify_demo_data_reset_safety.py
 1b6925bc3e07d5f3c6583e165699cc2b3c6c79b7cca17a017e2d8da0c304258f  ./backend/tests/verify_demo_surface_hardening.py
-65dd9ace42224e48ed987fd6680e93ddc59dab56175294abca6a43f8148d9a7d  ./backend/tests/verify_dgtera_integration.py
+26008aedc1cc5c8a1992e277003565375b4b65891c58b9e67af3507cdbf8dd66  ./backend/tests/verify_dgtera_integration.py
 c6739ee256b6a9f8cd03554a681f907c3d8f50aa046d428772e91a32932aa1cf  ./backend/tests/verify_final_home_dashboard.py
 4c6e084dad72f1c46914e43ab2b13fecd71a702b495661bbc760dbae5e9dde40  ./backend/tests/verify_final_internal.py
 6db739271f0ff19e2178d977202f08fcad3f3a07f7499d7021fc8897f7f28a89  ./backend/tests/verify_health_contract.py
@@ -619,7 +619,7 @@ d5fd7b577114133ee96b2280881891bc5c2c63f8783a35e5769403962f1ac5eb  ./frontend/src
 0134218e901356984ae22c5778c9cb12785cd93fac558c839d2e0e024022abec  ./frontend/src/dashboard/comparativeStatementTable.tsx
 d3f934b30541fea576f3f57d836c8760b7b26553e2b669a6e9f24e9d7ddf08ff  ./frontend/src/dashboard/creditNotesPage.tsx
 b19e0455d48b57bbb695744f8561f2cad26b833e80f4b41b87fba06df15916d6  ./frontend/src/dashboard/dataResetPage.tsx
-84f44580f63d66da7ee832664733790c7efbc375a1bf917f26f73fde89569efc  ./frontend/src/dashboard/dgteraIntegrationPage.tsx
+544edfcfd600b69373587f49311c88f1c4820da5e338498a1ff160fa03704b43  ./frontend/src/dashboard/dgteraIntegrationPage.tsx
 85609df6717ab477919cffa4f9bc5ef04f11b706b4976a9d19f744bd86c05a92  ./frontend/src/dashboard/exciseTaxPage.tsx
 3ce4e2d1e1d6569bd581efd795733c672368dbf167a23853bc2978fc42bb4b52  ./frontend/src/dashboard/executive.tsx
 3f11f39755d7469a93f34feca8bcc2c052becd41a09cd03ad34ec3aef738b73b  ./frontend/src/dashboard/executiveNavigation.ts
@@ -646,7 +646,7 @@ b82ff350dd06fecb43798b9e70d0082a2f5dcb8be562a33d84fd45cb62a986a6  ./frontend/src
 fc278f539b2378e8a35ee6373d72472b5d372339dee85cabcee80fd62160c0e4  ./frontend/src/dashboard/printDocument.ts
 696a6cf2c5d6063a925b755736fc8cb1d654d26d305da0c2be7ad274cf81eefe  ./frontend/src/dashboard/purchasesPage.tsx
 78c48d7cc8ec1b9c8cf9e10ed2cac9eef609638f9c4209f788760c65bbd112b5  ./frontend/src/dashboard/reportBuilderTab.tsx
-9869aa860c453a08861f1fae055e2647595ef5501c05f1d5f3a12453c1896361  ./frontend/src/dashboard/reportsCenterPage.tsx
+f994a411706bc518f0f3776e2059104f0cd11ddbf6e77c964250e490f4298814  ./frontend/src/dashboard/reportsCenterPage.tsx
 229860c7c496242b6656dd0c0f70047f5569e030152335b6a36036ecd30da911  ./frontend/src/dashboard/restaurantRealPage.tsx
 cd8a89e92093ac76ff6cfdcfc4a1df1c99e39de2b01fd78b8da0a1a739ff0a74  ./frontend/src/dashboard/routes.tsx
 bda855196bee5e5de03608c605c122ede0773fee68a81c1474ef7e0a63152a0c  ./frontend/src/dashboard/salesCommissionsTab.tsx
@@ -671,5 +671,5 @@ f4c263a9365b47f8466d058907860cadfc35a4e07b7dbd53f1a298ec7a0cf3b6  ./frontend/src
 65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5  ./frontend/src/vite-env.d.ts
 221d705967c6051c826f85e6d9c8ca5544dba6ec48da3b405f3f63b145b93454  ./frontend/tsconfig.json
 73980213914ccf271af2f11a2d999c0e8979e5341cab6e450fe44062b47f86f6  ./frontend/vite.config.ts
-c8399b598d48dd411c7dac69ba9b45668cfbf87a577861bc06b07ff1fed521e3  ./render.yaml
+34d8be2e2f9506a34ca6a4e84c0dcfda8ec74cf12d3433104261e26f69033339  ./render.yaml
 b5ad19e93936cd595a70ecaf6a39b60c1275d1cc38570a39b7eac9945fbf97dc  ./start_local.sh

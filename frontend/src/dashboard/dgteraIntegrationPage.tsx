@@ -389,8 +389,8 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
 
       <div style={{padding:12,borderRadius:10,background:'#eff6ff',color:'#1e3a8a',fontSize:13,lineHeight:1.9}}>
         {ar
-          ? 'الربط قراءة فقط ومخصص للمبيعات: لا يسحب قيودًا محاسبية أو مخزونًا أو تكلفة بضاعة. الفروع والأصناف والعملاء وطرق الدفع تأتي من الطلبات نفسها، وأي تعديل في DGTERA يُحدّث نفس الطلب في CORVAX من دون تكرار.'
-          : 'This is a read-only sales mirror. It does not import journals, inventory or COGS. Branches, products, customers and payments come from the source orders, and source changes update the same CORVAX order without duplicates.'}
+          ? 'الربط يقرأ المبيعات فقط ولا يسحب المخزون أو تكلفة البضاعة. بعد مطابقة اليوم دون أي فرق، ينشئ CORVAX قيدًا يوميًا واحدًا في شركة المطاعم: إجمالي مستحق، وصافي إيراد، وضريبة مخرجات. القابضة تعرض نفس المصدر دون قيد ثانٍ، وأي تعديل في DGTERA يعكس القيد السابق ويستبدله دون تكرار.'
+          : 'The integration reads sales only and does not import inventory or COGS. After a day reconciles with zero difference, CORVAX creates one restaurant-company summary journal: gross receivable, net revenue and output VAT. The holding workspace displays the same source without a second journal; a DGTERA correction reverses and replaces the prior journal without duplication.'}
       </div>
     </>}
   </>;

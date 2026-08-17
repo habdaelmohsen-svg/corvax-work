@@ -37,6 +37,7 @@ from sqlalchemy.exc import OperationalError  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
+    Account,
     Branch,
     DeliveryPlatform,
     DgteraBranch,
@@ -47,6 +48,8 @@ from app.models import (  # noqa: E402
     DgteraSalesOrderLine,
     DgteraSalesPayment,
     DgteraSyncRun,
+    FiscalPeriod,
+    FiscalYear,
     JournalEntry,
     Party,
 )
@@ -83,9 +86,9 @@ def ok(response, status=200):
 
 
 def verify_scheduler_queue_serialization() -> None:
-    """One poll may run current + exactly one queued historical day."""
+    """One poll may drain several independently committed historical days."""
     current_day = date(2026, 8, 15)
-    history_day = current_day - timedelta(days=1)
+    history_days = [current_day - timedelta(days=value) for value in (1, 2, 3)]
     connection = SimpleNamespace(id=77, created_by=1, last_sync_at=None)
 
     class ScalarRows:
@@ -121,16 +124,19 @@ def verify_scheduler_queue_serialization() -> None:
         patch.object(daily_worker, "connection_is_due", return_value=True),
         patch.object(daily_worker, "catchup_window", return_value=(current_day, current_day)),
         patch.object(daily_worker, "sync_connection", sync),
-        patch.object(daily_worker, "historical_backfill_window", return_value=(history_day, history_day)),
+        patch.object(daily_worker, "historical_backfill_window", side_effect=[
+            *((value, value) for value in history_days), None,
+        ]),
         patch.object(daily_worker, "changed_historical_sales_dates", changed),
         patch.object(daily_worker, "historical_recheck_window", audit),
     ):
         daily_worker.run_due_syncs()
-    assert sync.call_count == 2
+    assert sync.call_count == 4
     assert sync.call_args_list[0].args[1:] == (connection, current_day, current_day, 1)
     assert sync.call_args_list[0].kwargs == {}
-    assert sync.call_args_list[1].args[1:] == (connection, history_day, history_day, 1)
-    assert sync.call_args_list[1].kwargs == {"mark_current_sync": False}
+    for index, history_day in enumerate(history_days, start=1):
+        assert sync.call_args_list[index].args[1:] == (connection, history_day, history_day, 1)
+        assert sync.call_args_list[index].kwargs == {"mark_current_sync": False}
     changed.assert_not_called()
     audit.assert_not_called()
 
@@ -569,10 +575,10 @@ def verify_adaptive_safe_split() -> None:
 def main() -> None:
     assert str(DAY_START) == "00:00:00"
     assert str(DAY_END) == "23:59:59"
-    assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v9"
+    assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v10"
     assert BRANCH_REPORT_ORDER_STATES == ("draft", "paid", "done", "invoiced")
     assert HISTORY_CHUNK_DAYS == 1
-    assert HISTORY_CHUNKS_PER_CYCLE == 1
+    assert HISTORY_CHUNKS_PER_CYCLE == 8
     assert CHANGED_DAYS_PER_CYCLE == 1
     assert _date_windows([
         date(2025, 1, 1), date(2025, 1, 2), date(2025, 2, 10)
@@ -672,6 +678,15 @@ def main() -> None:
         with TestClient(app) as client:
             token = ok(client.post("/api/v1/auth/login", json={"email": "admin@corvaxplatform.com", "password": "Corvax@123"}))["access_token"]
             headers = {"Authorization": f"Bearer {token}"}
+            with SessionLocal() as db:
+                restaurant_period = db.scalar(select(FiscalPeriod).join(FiscalYear).where(
+                    FiscalYear.company_id == 3,
+                    FiscalPeriod.start_date <= sales_date,
+                    FiscalPeriod.end_date >= sales_date,
+                ))
+                assert restaurant_period
+                restaurant_period.status = "OPEN"
+                db.commit()
             secrets = ("private_odoo_database", "integration@example.invalid", "api-key-never-returned-12345")
             saved = ok(client.put(
                 "/api/v1/integrations/dgtera/connection",
@@ -705,7 +720,28 @@ def main() -> None:
                 assert db.scalar(select(func.count(DgteraBranch.id))) == 1
                 assert db.scalar(select(func.count(DgteraProduct.id))) == 1
                 assert db.scalar(select(func.count(DgteraCustomer.id))) == 1
-                assert db.scalar(select(func.count(JournalEntry.id)).where(JournalEntry.reference.like("DGTERA:%"))) == 0
+                sales_journals = db.scalars(select(JournalEntry).where(
+                    JournalEntry.reference.like("DGTERA-SALES:%")
+                )).all()
+                assert len(sales_journals) == 1
+                sales_journal = sales_journals[0]
+                assert sales_journal.company_id == 3
+                assert sales_journal.total_debit == sales_journal.total_credit == 115
+                account_codes = {
+                    row.id: row.code for row in db.scalars(select(Account).where(
+                        Account.company_id == 3,
+                        Account.code.in_(["112010", "212010", "411010"]),
+                    )).all()
+                }
+                journal_amounts = {
+                    account_codes[line.account_id]: (line.debit, line.credit)
+                    for line in sales_journal.lines
+                }
+                assert journal_amounts == {
+                    "112010": (Decimal("115.00"), Decimal("0.00")),
+                    "411010": (Decimal("0.00"), Decimal("100.00")),
+                    "212010": (Decimal("0.00"), Decimal("15.00")),
+                }
                 order = db.scalar(select(DgteraSalesOrder))
                 assert order and order.sales_scope == "EXTERNAL" and order.service_mode == "DELIVERY"
                 assert str(order.source_payload).startswith("{")  # transparently decrypted by the ORM
@@ -760,10 +796,12 @@ def main() -> None:
                 connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
                 updated = sync_connection(db, connection, sales_date, sales_date, 1)
                 assert updated["updated"] == 1 and updated["inserted"] == 0
+                assert updated["accounting"]["posted"] is True
+                assert updated["accounting"]["days"][0]["status"] == "REPLACED"
                 order = db.scalar(select(DgteraSalesOrder))
                 assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 1
-                assert db.scalar(select(func.count(DgteraSalesOrderLine.id))) == 1
-                assert order and order.total == 230 and order.source_hash == "b" * 64
+            assert db.scalar(select(func.count(DgteraSalesOrderLine.id))) == 1
+            assert order and order.total == 230 and order.source_hash == "b" * 64
 
             manual = ok(client.post(
                 "/api/v1/integrations/dgtera/sync",
@@ -804,8 +842,10 @@ def main() -> None:
             assert snap["product_sales"][0]["key"] == "Classic Burger"
             assert len(snap["orders"][0]["lines"]) == 1 and len(snap["orders"][0]["payments"]) == 1
 
-            # Proofs from the pre-pagination-fix marker must never be trusted,
-            # even when their partial local mirror matched itself exactly.
+            # The accounting/history release advances the proof generation.
+            # A V9 row may contain valid pagination, but it has not traversed
+            # the V10 path that creates the idempotent historical journal and
+            # therefore cannot authorize a current financial value.
             with SessionLocal() as db:
                 proof_runs = db.scalars(select(DgteraSyncRun).where(
                     DgteraSyncRun.start_date == sales_date,
@@ -816,7 +856,7 @@ def main() -> None:
                 for proof_run in proof_runs:
                     proof_run.window_label = proof_run.window_label.replace(
                         SOURCE_LOCAL_WINDOW_MARKER,
-                        "dgtera-source-date-line-report-strict-v8",
+                        "dgtera-source-date-line-report-strict-v9",
                     )
                 db.commit()
             legacy_untrusted = ok(client.get(
@@ -829,11 +869,11 @@ def main() -> None:
                 proof_runs = db.scalars(select(DgteraSyncRun).where(
                     DgteraSyncRun.start_date == sales_date,
                     DgteraSyncRun.end_date == sales_date,
-                    DgteraSyncRun.window_label.like("%strict-v8%"),
+                    DgteraSyncRun.window_label.like("%strict-v9%"),
                 )).all()
                 for proof_run in proof_runs:
                     proof_run.window_label = proof_run.window_label.replace(
-                        "dgtera-source-date-line-report-strict-v8",
+                        "dgtera-source-date-line-report-strict-v9",
                         SOURCE_LOCAL_WINDOW_MARKER,
                     )
                 db.commit()
@@ -927,6 +967,24 @@ def main() -> None:
                 assert db.scalar(select(func.count(DgteraConnection.id))) == 1
                 assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 1
 
+            custom = ok(client.get(
+                f"/api/v1/integrations/dgtera/range-comparison?company_id=3&start_date={sales_date}&end_date={sales_date}",
+                headers=headers,
+            ))
+            assert custom["coverage"]["current"]["complete"] is True
+            assert float(custom["metrics"]["current"]["subtotal"]) == 200
+            assert custom["metrics"]["previous"] is None
+            restaurant_statements = ok(client.get(
+                f"/api/v1/finance/statements?company_id=3&start_date={sales_date}&end_date={sales_date}",
+                headers=headers,
+            ))
+            assert float(restaurant_statements["income_statement"]["revenue"]) == 200
+            with SessionLocal() as db:
+                assert db.scalar(select(func.count(JournalEntry.id)).where(
+                    JournalEntry.company_id == 1,
+                    JournalEntry.reference.like("DGTERA-SALES:%"),
+                )) == 0
+
             # KPI aggregates must cover the full selected range even when the
             # drill-down list is deliberately limited.
             with SessionLocal() as db:
@@ -992,11 +1050,8 @@ def main() -> None:
                     assert "1 differences" in str(connection.last_error)
                     assert "order[9001].vat" in str(connection.last_error)
 
-            # The user-triggered endpoint is strict and rejects malformed or
-            # unbounded requests before any source or mirror mutation.  An
-            # unexpected server-side failure must also remain a structured,
-            # actionable API error instead of the empty HTML 500 that hides the
-            # live cause from operators.
+            # The user-triggered endpoint is strict and unexpected dependency
+            # failures remain a sanitized, structured API response.
             with patch(
                 "app.api.dgtera_integration.dgtera_sales_sync.sync_connection",
                 side_effect=RuntimeError("simulated safe diagnostic"),

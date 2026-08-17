@@ -3,7 +3,7 @@ import {Calendar, Download, FileBarChart, ImagePlus, Landmark, Package, Percent,
 import {apiFetch} from '../api/client';
 import {ComparativeStatementTable} from './comparativeStatementTable';
 import {
-  buildStatementRows, currentYearStart, fetchComparativeStatements,
+  buildStatementRows, comparisonPeriods, currentYearStart, fetchComparativeStatements,
   formatStatementAmount, formatVariancePercent, localYmd, statementTitle,
   type ComparativeStatementRow, type ComparisonPeriods, type FinancialStatementKey,
   type StatementRowKind,
@@ -48,6 +48,7 @@ const REPORTS:Report[]=[
   {key:'cashflow',cat:'financial',ar:'قائمة التدفقات النقدية',en:'Cash Flow Statement'},
   {key:'trial',cat:'financial',ar:'ميزان المراجعة',en:'Trial Balance'},
   {key:'sales_invoices',cat:'sales',ar:'فواتير البيع',en:'Sales Invoices'},
+  {key:'dgtera_sales',cat:'sales',ar:'مبيعات DGTERA ومقارنة الفترات',en:'DGTERA Sales & Period Comparison'},
   {key:'receipts',cat:'sales',ar:'سندات القبض',en:'Receipts'},
   {key:'purchase_invoices',cat:'purchases',ar:'فواتير الشراء',en:'Purchase Invoices'},
   {key:'payments',cat:'purchases',ar:'سندات الصرف',en:'Payments'},
@@ -83,6 +84,16 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
       if(['income','balance','cashflow'].includes(rep.key)){
         const key=rep.key as FinancialStatementKey;
         const comparison=await fetchComparativeStatements(companyId,start,end,'indirect');
+        if(key==='income'){
+          const incomplete=[comparison.current,comparison.previous,comparison.priorYear]
+            .map(statement=>statement?.sales_revenue_source)
+            .find(source=>source?.required===true&&source?.complete!==true);
+          if(incomplete){
+            throw new Error(ar
+              ? `لا يمكن إصدار قائمة دخل بأرقام مبيعات جزئية. أول يوم غير مكتمل في DGTERA: ${incomplete.first_missing_date||'—'}`
+              : `An income statement cannot be issued with partial sales. First incomplete DGTERA day: ${incomplete.first_missing_date||'—'}`);
+          }
+        }
         const lines=buildStatementRows(key,comparison,ar);
         H=[ar?'البند':'Item',ar?'الفترة الحالية':'Current period',ar?'الفترة السابقة':'Previous period',ar?'الفترة المماثلة':'Same period last year',ar?'التغير':'Variance',ar?'نسبة التغير':'Variance %'];
         R=lines.map(line=>({
@@ -98,6 +109,43 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
         R=(statement.rows||[]).map((account:Row)=>({[H[0]]:`${account.code} — ${ar?account.name_ar:account.name_en}`,[H[1]]:fmt(Number(account.closing_debit||0)),[H[2]]:fmt(Number(account.closing_credit||0))}));
         R.push({[H[0]]:ar?'الإجمالي':'Total',[H[1]]:fmt(Number(statement.total_debit||0)),[H[2]]:fmt(Number(statement.total_credit||0))});
         K=R.map((_,index)=>index===R.length-1?'total':'line');
+      }else if(rep.key==='dgtera_sales'){
+        const query=new URLSearchParams({company_id:String(companyId),start_date:start,end_date:end});
+        const data=await json(`/api/v1/integrations/dgtera/range-comparison?${query.toString()}`);
+        const current=data?.metrics?.current;
+        if(!current){
+          const firstMissing=data?.coverage?.current?.first_missing_date||'—';
+          const progress=data?.history?.progress_percent??0;
+          throw new Error(ar
+            ? `الفترة غير مكتملة المطابقة مع DGTERA. أول يوم غير مكتمل: ${firstMissing} — تقدم التاريخ: ${progress}%`
+            : `The range is not fully reconciled with DGTERA. First missing day: ${firstMissing} — history progress: ${progress}%`);
+        }
+        const periods=comparisonPeriods(start,end);
+        H=[ar?'المقياس':'Metric',ar?'الفترة الحالية':'Current period',ar?'الفترة السابقة':'Previous period',ar?'الفترة اللاحقة':'Next period',ar?'نفس الفترة 2025/العام السابق':'Same period prior year',ar?'الفرق عن السابقة':'Variance vs previous',ar?'نسبة التغير':'Variance %'];
+        const metric=(window:string,field:string)=>{
+          const value=data?.metrics?.[window]?.[field];
+          return value===null||value===undefined?null:Number(value);
+        };
+        const show=(value:number|null)=>value===null?'—':fmt(value);
+        const row=(label:string,field:string,kind:StatementRowKind='line')=>{
+          const currentValue=metric('current',field);const previousValue=metric('previous',field);
+          const nextValue=metric('next',field);const priorValue=metric('prior_year',field);
+          const variance=currentValue!==null&&previousValue!==null?currentValue-previousValue:null;
+          const variancePercent=variance!==null&&previousValue!==null&&previousValue!==0?variance/Math.abs(previousValue)*100:null;
+          K.push(kind);
+          return {[H[0]]:label,[H[1]]:show(currentValue),[H[2]]:show(previousValue),[H[3]]:show(nextValue),[H[4]]:show(priorValue),[H[5]]:show(variance),[H[6]]:variancePercent===null?'—':`${variancePercent>0?'+':''}${variancePercent.toFixed(1)}%`};
+        };
+        R=[
+          row(ar?'صافي المبيعات دون الضريبة':'Net sales excluding VAT','subtotal','subtotal'),
+          row(ar?'ضريبة المبيعات':'Sales VAT','vat'),
+          row(ar?'إجمالي المبيعات شامل الضريبة':'Gross sales including VAT','sales','total'),
+          row(ar?'عدد الطلبات':'Orders','orders'),
+          row(ar?'الكمية':'Quantity','quantity'),
+        ];
+        T=ar?'مبيعات DGTERA ومقارنة الفترات':'DGTERA Sales & Period Comparison';
+        setFinancialRows([]);setFinancialPeriods({
+          current:periods.current,previous:periods.previous,priorYear:periods.priorYear,
+        });
       }else if(rep.key==='sales_invoices'){
         const data=await json(`/api/v1/subledgers/sales-invoices?company_id=${companyId}`);
         H=[ar?'الرقم':'No.',ar?'التاريخ':'Date',ar?'العميل':'Customer',ar?'الإجمالي':'Total',ar?'الحالة':'Status'];
@@ -129,7 +177,7 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
         H=[ar?'الرقم':'No.',ar?'المستفيد':'Beneficiary',ar?'الفاتورة':'Invoice',ar?'العمولة':'Amount',ar?'قابل للدفع':'Payable',ar?'الحالة':'Status'];
         R=(data||[]).map((item:Row)=>({[H[0]]:item.number,[H[1]]:ar?(item.beneficiary_name_ar||item.beneficiary_name_en||'—'):(item.beneficiary_name_en||item.beneficiary_name_ar||'—'),[H[2]]:item.invoice_number||'—',[H[3]]:fmt(Number(item.amount||0)),[H[4]]:fmt(Number(item.payable_amount||0)),[H[5]]:statusText(item.status,ar)}));
       }
-      if(!['income','balance','cashflow'].includes(rep.key)){setFinancialRows([]);setFinancialPeriods(null);}
+      if(!['income','balance','cashflow','dgtera_sales'].includes(rep.key)){setFinancialRows([]);setFinancialPeriods(null);}
       setTitle(T);setHeaders(H);setRows(R);setRowKinds(K);
       if(!R.length)setMessage(ar?'لا توجد بيانات لهذا التقرير في الفترة المحددة':'No data for this report in the selected period');
     }catch(error:any){

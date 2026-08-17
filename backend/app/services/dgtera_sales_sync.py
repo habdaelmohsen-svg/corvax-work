@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session, defer, selectinload
 
 from app.core.time import utc_now, utc_now_aware
 from app.models import (
+    Account,
     Branch,
+    Company,
     DeliveryPlatform,
     DgteraBranch,
     DgteraConnection,
@@ -26,6 +28,8 @@ from app.models import (
     DgteraSalesOrderLine,
     DgteraSalesPayment,
     DgteraSyncRun,
+    JournalEntry,
+    JournalLine,
     Party,
 )
 from app.services.audit import write_audit
@@ -37,6 +41,7 @@ from app.services.dgtera_connector import (
     money,
     quantity,
 )
+from app.services.posting import create_posted_journal
 
 
 _SYNC_LOCK = Lock()
@@ -49,10 +54,22 @@ HISTORY_START_DATE = date(2025, 1, 1)
 HISTORY_CHUNK_DAYS = 1
 LIVE_SYNC_INTERVAL_MINUTES = 2
 HISTORY_RECHECK_INTERVAL_HOURS = 24
-# V9 deliberately invalidates every proof created before the server-capped
-# pagination repair.  A V8 row may reconcile perfectly with the *partial*
-# 300-order mirror and must therefore never be presented as live-source proof.
-SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v9"
+# V10 starts a fresh proof generation for the accounting/history release.
+# V9 fixed server-capped pagination; V10 additionally guarantees that every
+# trusted historical day has passed the current proof path that can create the
+# idempotent restaurant sales journal.  Older mirror rows remain stored for
+# recovery, but they are never exposed as current live-source proof.
+SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v10"
+DGTERA_JOURNAL_REFERENCE_PREFIX = "DGTERA-SALES"
+
+# DGTERA is authoritative for restaurant sales, but the holding company is a
+# read-only management mirror.  Posting only to the restaurant ledger avoids
+# counting the same sale twice in a future group consolidation.
+DGTERA_LEDGER_ACCOUNTS = {
+    "receivable": ("112010", "ASSET", "RECEIVABLES"),
+    "vat": ("212010", "LIABILITY", "VAT"),
+    "revenue": ("411010", "REVENUE", "OPERATING_REVENUE"),
+}
 _TRANSIENT_DB_SQLSTATES = {
     "08000", "08001", "08003", "08004", "08006", "08007", "08P01",
     "40001", "40P01", "53300", "53400", "55P03", "57P01", "57P02", "57P03",
@@ -147,6 +164,204 @@ def client_for(connection: DgteraConnection) -> Odoo14Client:
         login=str(connection.login),
         api_key=str(connection.api_key),
     )
+
+
+def _restaurant_ledger_company(db: Session, connection: DgteraConnection) -> Company:
+    """Return the legal restaurant ledger that owns the DGTERA revenue.
+
+    Credentials may have been configured from the holding workspace in older
+    releases.  That must not make the holding ledger recognise the same sales
+    a second time.
+    """
+    owner = db.get(Company, connection.company_id)
+    if owner and str(owner.company_type or "").upper() == "RESTAURANT":
+        return owner
+    restaurants = db.scalars(select(Company).where(
+        Company.company_type == "RESTAURANT",
+        Company.active.is_(True),
+    ).order_by(Company.id)).all()
+    if len(restaurants) != 1:
+        raise RuntimeError(
+            "DGTERA accounting requires exactly one active restaurant company "
+            f"when the connection belongs to the holding company; found {len(restaurants)}"
+        )
+    return restaurants[0]
+
+
+def _required_ledger_account(
+    db: Session,
+    company_id: int,
+    purpose: str,
+) -> Account:
+    code, account_type, statement_group = DGTERA_LEDGER_ACCOUNTS[purpose]
+    row = db.scalar(select(Account).where(
+        Account.company_id == company_id,
+        Account.code == code,
+        Account.active.is_(True),
+        Account.is_postable.is_(True),
+    ))
+    if row is None:
+        raise RuntimeError(f"DGTERA accounting account {code} ({purpose}) is missing or inactive")
+    if row.account_type != account_type or row.statement_group != statement_group:
+        raise RuntimeError(
+            f"DGTERA accounting account {code} ({purpose}) has an unsafe classification"
+        )
+    return row
+
+
+def _daily_journal_reference(
+    connection_id: int,
+    sales_date: date,
+    verification_hash: str,
+) -> str:
+    return (
+        f"{DGTERA_JOURNAL_REFERENCE_PREFIX}:{connection_id}:"
+        f"{sales_date.isoformat()}:{verification_hash}"
+    )[:100]
+
+
+def _active_daily_sales_journal(
+    db: Session,
+    company_id: int,
+    connection_id: int,
+    sales_date: date,
+) -> JournalEntry | None:
+    prefix = f"{DGTERA_JOURNAL_REFERENCE_PREFIX}:{connection_id}:{sales_date.isoformat()}:"
+    reversed_ids = select(JournalEntry.reversed_entry_id).where(
+        JournalEntry.reversed_entry_id.is_not(None)
+    )
+    rows = db.scalars(select(JournalEntry).where(
+        JournalEntry.company_id == company_id,
+        JournalEntry.status == "POSTED",
+        JournalEntry.reference.like(f"{prefix}%"),
+        JournalEntry.id.not_in(reversed_ids),
+    ).options(selectinload(JournalEntry.lines)).order_by(JournalEntry.id.desc())).all()
+    if len(rows) > 1:
+        raise RuntimeError(
+            f"Multiple active DGTERA accounting journals exist for {sales_date.isoformat()}"
+        )
+    return rows[0] if rows else None
+
+
+def _reverse_daily_sales_journal(
+    db: Session,
+    entry: JournalEntry,
+    actor_user_id: int,
+    reason_hash: str,
+) -> JournalEntry:
+    reversal = create_posted_journal(
+        db,
+        company_id=entry.company_id,
+        user_id=actor_user_id,
+        posting_date=entry.entry_date,
+        reference=f"DGTERA-REV:{entry.id}:{reason_hash}"[:100],
+        description=f"Automatic reversal of corrected {entry.reference}"[:500],
+        lines=[{
+            "account_id": line.account_id,
+            "debit": money(line.credit),
+            "credit": money(line.debit),
+            "branch_id": line.branch_id,
+            "cost_center_id": line.cost_center_id,
+        } for line in entry.lines],
+    )
+    reversal.reversed_entry_id = entry.id
+    return reversal
+
+
+def _signed_line(account_id: int, amount: object, *, debit_positive: bool) -> dict | None:
+    value = money(amount)
+    if value == 0:
+        return None
+    positive = value > 0
+    debit = (positive and debit_positive) or (not positive and not debit_positive)
+    return {
+        "account_id": account_id,
+        "debit": abs(value) if debit else Decimal("0"),
+        "credit": abs(value) if not debit else Decimal("0"),
+    }
+
+
+def _sync_daily_accounting_journals(
+    db: Session,
+    connection: DgteraConnection,
+    start_date: date,
+    end_date: date,
+    source_orders: list[dict],
+    reconciliation: dict,
+    actor_user_id: int,
+) -> list[dict]:
+    """Post one idempotent, balanced restaurant-sales journal per source day.
+
+    The debit remains in trade receivables/settlement clearing until actual
+    cash, card or delivery-platform settlement is recorded.  This avoids
+    overstating bank cash while the operational report can still classify
+    each order by payment channel.
+    """
+    company = _restaurant_ledger_company(db, connection)
+    receivable = _required_ledger_account(db, company.id, "receivable")
+    vat = _required_ledger_account(db, company.id, "vat")
+    revenue = _required_ledger_account(db, company.id, "revenue")
+    evidence = reconciliation.get("daily") or {}
+    results: list[dict] = []
+    current = start_date
+    while current <= end_date:
+        day_key = current.isoformat()
+        day_orders = [row for row in source_orders if str(row.get("sales_date")) == day_key]
+        metrics = _source_metrics(day_orders)
+        verification_hash = str((evidence.get(day_key) or {}).get("verification_hash") or "")
+        if len(verification_hash) != 64:
+            raise RuntimeError(f"DGTERA day {day_key} has no complete accounting verification hash")
+        reference = _daily_journal_reference(connection.id, current, verification_hash)
+        active = _active_daily_sales_journal(db, company.id, connection.id, current)
+        if active and active.reference == reference:
+            results.append({"date": current, "status": "UNCHANGED", "journal_id": active.id})
+            current += timedelta(days=1)
+            continue
+        if active:
+            reversal = _reverse_daily_sales_journal(
+                db, active, actor_user_id, verification_hash[:16]
+            )
+            db.flush()
+        else:
+            reversal = None
+        gross = money(metrics["gross"])
+        if gross == 0:
+            results.append({
+                "date": current,
+                "status": "REVERSED_TO_ZERO" if reversal else "ZERO",
+                "journal_id": None,
+                "reversal_journal_id": reversal.id if reversal else None,
+            })
+            current += timedelta(days=1)
+            continue
+        lines = [
+            _signed_line(receivable.id, gross, debit_positive=True),
+            _signed_line(revenue.id, metrics["subtotal"], debit_positive=False),
+            _signed_line(vat.id, metrics["vat"], debit_positive=False),
+        ]
+        journal = create_posted_journal(
+            db,
+            company_id=company.id,
+            user_id=actor_user_id,
+            posting_date=current,
+            reference=reference,
+            description=(
+                f"Verified DGTERA restaurant sales {day_key}; net {money(metrics['subtotal'])}; "
+                f"VAT {money(metrics['vat'])}; gross {gross}"
+            )[:500],
+            lines=[line for line in lines if line is not None],
+        )
+        results.append({
+            "date": current,
+            "status": "REPLACED" if reversal else "POSTED",
+            "journal_id": journal.id,
+            "reversal_journal_id": reversal.id if reversal else None,
+            "net": money(metrics["subtotal"]),
+            "vat": money(metrics["vat"]),
+            "gross": gross,
+        })
+        current += timedelta(days=1)
+    return results
 
 
 def _window_label(connection: DgteraConnection) -> str:
@@ -814,7 +1029,7 @@ def _latest_daily_run_ids(
     start_date: date,
     end_date: date,
 ):
-    """Return the newest attempted current-version run id for each business day.
+    """Return the newest attempted strict-v8 run id for each business day.
 
     A later failed attempt must invalidate an older successful proof.  Keeping
     the old proof trusted after DGTERA reports an incomplete page sequence is
@@ -1436,6 +1651,70 @@ def _sync_unlocked(
         db.add(failed)
         db.commit()
         raise
+    # The source mirror is committed before accounting so a closed or missing
+    # fiscal period can never destroy an otherwise complete DGTERA proof or
+    # stall the 2025 history queue.  Accounting is then committed separately
+    # and retried idempotently on the next successful read of the same day.
+    accounting: dict = {"posted": False, "company_id": None, "days": []}
+    try:
+        accounting_days = _sync_daily_accounting_journals(
+            db, connection, start_date, end_date, source_orders,
+            reconciliation, actor_user_id,
+        )
+        restaurant = _restaurant_ledger_company(db, connection)
+        write_audit(
+            db,
+            action="DGTERA_SALES_ACCOUNTING_SYNCED",
+            entity_type="DGTERA_SYNC_RUN",
+            entity_id=run.id,
+            user_id=actor_user_id,
+            company_id=restaurant.id,
+            after={
+                "connection_id": connection.id,
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "days": accounting_days,
+                "holding_mirror_only": connection.company_id != restaurant.id,
+            },
+        )
+        db.commit()
+        accounting = {
+            "posted": True,
+            "company_id": restaurant.id,
+            "days": accounting_days,
+        }
+    except Exception as exc:  # noqa: BLE001 - preserve the verified mirror
+        db.rollback()
+        safe_error = _safe_sync_error(exc)
+        logger.exception(
+            "DGTERA accounting synchronization failed after mirror commit",
+            extra={
+                "connection_id": connection.id,
+                "start": str(start_date),
+                "end": str(end_date),
+                "safe_error": safe_error,
+            },
+        )
+        current_connection = db.get(DgteraConnection, connection.id)
+        if current_connection:
+            current_connection.last_error = (
+                f"Sales matched; accounting posting pending — {safe_error}"
+            )[:1000]
+            write_audit(
+                db,
+                action="DGTERA_SALES_ACCOUNTING_FAILED",
+                entity_type="DGTERA_SYNC_RUN",
+                entity_id=run.id,
+                user_id=actor_user_id,
+                company_id=current_connection.company_id,
+                after={
+                    "start_date": str(start_date),
+                    "end_date": str(end_date),
+                    "error": safe_error,
+                },
+            )
+            db.commit()
+        accounting["error"] = safe_error
     return {
         "run_id": run.id,
         "start_date": start_date,
@@ -1452,6 +1731,7 @@ def _sync_unlocked(
         "strict_reconciled": True,
         "verification_hash": reconciliation["verification_hash"],
         "reconciliation": reconciliation,
+        "accounting": accounting,
         "mode": "SALES_ONLY",
     }
 
