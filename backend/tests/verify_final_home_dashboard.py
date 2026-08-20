@@ -89,7 +89,7 @@ assert 'className="navigation-notice" role="alert"' in SHELL
 assert "/api/v1/system/release" in SHELL
 assert "version-line version-full" in SHELL
 assert all(field in SHELL for field in ("apiVersion", "releaseId", "buildCommit"))
-assert "CORVAX-RC27.4-R9.4-DGTERA-V12-20260820" in CONFIG
+assert "CORVAX-RC27.4-R9.4-DGTERA-V13-20260820" in CONFIG
 
 target_values = set(re.findall(r": '([A-Za-z]+)',", TARGETS))
 route_keys = set(re.findall(r"\s+([A-Za-z]+):<", ROUTES))
