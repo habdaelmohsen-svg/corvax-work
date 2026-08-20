@@ -68,6 +68,9 @@ from app.services.dgtera_sales_sync import (  # noqa: E402
     DgteraReconciliationError,
     HISTORY_CHUNK_DAYS,
     SOURCE_LOCAL_WINDOW_MARKER,
+    _decode_source_payload,
+    _encode_source_payload,
+    _is_transient_operational_error,
     historical_backfill_status,
     historical_backfill_window,
     sync_connection,
@@ -573,6 +576,15 @@ def verify_adaptive_safe_split() -> None:
 
 
 def main() -> None:
+    payload_sample = {"order_id": "519", "sales_date": "2026-08-17", "lines": [{"name": "اختبار"}] * 20}
+    encoded_payload = _encode_source_payload(payload_sample)
+    assert encoded_payload.startswith("zlib:v1:")
+    assert len(encoded_payload) < len(str(payload_sample))
+    assert _decode_source_payload(encoded_payload) == payload_sample
+    managed_disconnect = OperationalError(
+        "INSERT redacted", {}, RuntimeError("consuming input failed: SSL error: unexpected EOF")
+    )
+    assert _is_transient_operational_error(managed_disconnect)
     assert str(DAY_START) == "00:00:00"
     assert str(DAY_END) == "23:59:59"
     assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v10"
@@ -744,7 +756,8 @@ def main() -> None:
                 }
                 order = db.scalar(select(DgteraSalesOrder))
                 assert order and order.sales_scope == "EXTERNAL" and order.service_mode == "DELIVERY"
-                assert str(order.source_payload).startswith("{")  # transparently decrypted by the ORM
+                assert str(order.source_payload).startswith("zlib:v1:")  # transparently decrypted by the ORM
+                assert _decode_source_payload(order.source_payload)["order_id"] == str(order.external_order_id)
                 encrypted_payload = db.execute(text("select source_payload from dgtera_sales_orders where id=:id"), {"id": order.id}).scalar_one()
                 assert str(encrypted_payload).startswith("enc:v1:")
                 branch = db.get(Branch, order.branch_id)
