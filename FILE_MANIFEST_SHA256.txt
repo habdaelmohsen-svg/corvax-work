@@ -95,7 +95,7 @@ d66fbf54126a49f38d79e3f35960c8eb4d78dcb7b1d086b148cfcbe289fbd532  ./backend/app/
 6f65f783513295b11f56d86e1ecd1ee0f0378cb21fb69838660f4a5368995466  ./backend/app/api/workspace.py
 d844ff21c02fe34d727414756149d11d17373ed0114050fc913727c921047bf9  ./backend/app/api/year_end_close.py
 94aa90aec07bfc08e2ce6df6ce7e54fcc2a1cbf3b1f8b0fda990db7528d5fa6f  ./backend/app/api/zakat_income_tax.py
-0d2b18d111dd62c7ad628f840d233815e5edffb5e7a56cf23a1f5759c72a8117  ./backend/app/core/config.py
+8a0926938cc74cf9f3e8b8bd2d4ff02836d434b9e276947be59aae601ea85d30  ./backend/app/core/config.py
 fb8c30f1457611c06216bf84477ccf7bb6dbb48f83c408a5aa0e7a8d2d490c7a  ./backend/app/core/crypto.py
 7cac2735f2be70985d1497a4b74ee21c6526d20b81552a61e32c76e004ef2aad  ./backend/app/core/middleware.py
 3332e4f98e36ddf661859e5bfd3f8d0b8e8783dac9690b4d850839041eb39dbf  ./backend/app/core/migration_head.py
@@ -154,7 +154,7 @@ b3c9016f2a3508b612b81522428996064b960fe38871a91ed9b02b0e08019473  ./backend/app/
 7d167b7f3663b98eeccdf387f2c23f3afcd46c8bd1e3c94f94b0549897831ad5  ./backend/app/services/audit.py
 98b1f11c61c0d9edca8ee21245c6ec5d27a4444e9aa036e1711f75ac49809e29  ./backend/app/services/bootstrap.py
 0c64db600b0473b931a19d37c6f1c2d5c95db53e8d284ab87e9b224695af0447  ./backend/app/services/dgtera_connector.py
-a813144012a5b2421d4756f6b55410b02bfc85f930a20343a83226a75a38d82e  ./backend/app/services/dgtera_sales_sync.py
+8cb467a113089316de60207535f73317eaec3e3ed6941c4614e3c770e34df6ae  ./backend/app/services/dgtera_sales_sync.py
 27d9c6042a9df784f4f371542c0369a0bfb39ad9e8a406c80237734bfe405044  ./backend/app/services/mrp.py
 a49340a6a6942cb910f0771d07bdb6c9412577d76324138d923256bce1e33446  ./backend/app/services/operations.py
 5d47ea45107aa4f23a115405a20d93805f5a0433c662fedb62a09a98780690b3  ./backend/app/services/payroll.py
@@ -362,7 +362,7 @@ b74cf9ed94f1932922363141f766fe83106ebde49947d5cbe64fe834f385f3ef  ./backend/test
 5948dbff1fdf0497188c371d4600d7f95aca9cc9bfd588ccd64c9e1f1c993a7a  ./backend/tests/verify_demo_data_reset_safety.py
 1b6925bc3e07d5f3c6583e165699cc2b3c6c79b7cca17a017e2d8da0c304258f  ./backend/tests/verify_demo_surface_hardening.py
 4b96a2cd603b6e53a971014b4846987d727426e2656673f37dd006192c8659cf  ./backend/tests/verify_dgtera_integration.py
-70e9f0781bd84bbb38db71f602f6b95bddec70965f813b033b05c24e29d9eac6  ./backend/tests/verify_final_home_dashboard.py
+69b3ae62c9f07935caf8508c266c8584bab43bb519f73462f21584f2d5f7833d  ./backend/tests/verify_final_home_dashboard.py
 4c6e084dad72f1c46914e43ab2b13fecd71a702b495661bbc760dbae5e9dde40  ./backend/tests/verify_final_internal.py
 6db739271f0ff19e2178d977202f08fcad3f3a07f7499d7021fc8897f7f28a89  ./backend/tests/verify_health_contract.py
 6629f069619b9caa5975f025086bad08459404786514df5221a18f4951557104  ./backend/tests/verify_modules.py
@@ -612,7 +612,7 @@ ec01c0bbe9ef883ce200625d215dc3a196275c2bfa3f64639d2748a4366b85c6  ./frontend/.np
 6b9b842d6871c6fc7c5bd0fb9bac957c704bb8a7b1fe4be085cc7e0754635717  ./frontend/src/components/ai-assistant/CorvaxAiAssistantHost.tsx
 704253e32106374f4b77fcfaa4fb12f422ba8a9f5c1c786d42b723252101b284  ./frontend/src/components/ai-assistant/ai-assistant.types.ts
 d5fd7b577114133ee96b2280881891bc5c2c63f8783a35e5769403962f1ac5eb  ./frontend/src/components/ai-assistant/index.ts
-449274ade4e81a3c0ad26696ae2042bf3ec7776bcfd4eb4f246939b0a3bef1b3  ./frontend/src/dashboard/Shell.tsx
+91d1b1cf322bdacbb9b892df45fb2ab4e4c9004f7e4e249e68da0c04409ef0e5  ./frontend/src/dashboard/Shell.tsx
 9105b1045c223de8dbde28b2488ca4bf20b71531210e80dcc06ccf01dfca3b93  ./frontend/src/dashboard/accessGovernanceRealPage.tsx
 2596409be735b03be87cb6bd4fae9afab0bca6564fac881f3013b0987f48c56c  ./frontend/src/dashboard/chartOfAccountsPage.tsx
 8214109a430bded08492a40c495b7ef9d13242ebbaef0fde6687f1ff02d4747f  ./frontend/src/dashboard/cipProjectsPage.tsx
