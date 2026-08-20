@@ -95,7 +95,7 @@ d66fbf54126a49f38d79e3f35960c8eb4d78dcb7b1d086b148cfcbe289fbd532  ./backend/app/
 6f65f783513295b11f56d86e1ecd1ee0f0378cb21fb69838660f4a5368995466  ./backend/app/api/workspace.py
 d844ff21c02fe34d727414756149d11d17373ed0114050fc913727c921047bf9  ./backend/app/api/year_end_close.py
 94aa90aec07bfc08e2ce6df6ce7e54fcc2a1cbf3b1f8b0fda990db7528d5fa6f  ./backend/app/api/zakat_income_tax.py
-44ccf08782a98faf4934da78424b97a845fa61cb09add998742518be308f29fb  ./backend/app/core/config.py
+9e5417217af1be988884dd881bd687babffa75941ed8bc09f4ce6ab527996d23  ./backend/app/core/config.py
 fb8c30f1457611c06216bf84477ccf7bb6dbb48f83c408a5aa0e7a8d2d490c7a  ./backend/app/core/crypto.py
 7cac2735f2be70985d1497a4b74ee21c6526d20b81552a61e32c76e004ef2aad  ./backend/app/core/middleware.py
 3332e4f98e36ddf661859e5bfd3f8d0b8e8783dac9690b4d850839041eb39dbf  ./backend/app/core/migration_head.py
@@ -362,7 +362,7 @@ b74cf9ed94f1932922363141f766fe83106ebde49947d5cbe64fe834f385f3ef  ./backend/test
 5948dbff1fdf0497188c371d4600d7f95aca9cc9bfd588ccd64c9e1f1c993a7a  ./backend/tests/verify_demo_data_reset_safety.py
 1b6925bc3e07d5f3c6583e165699cc2b3c6c79b7cca17a017e2d8da0c304258f  ./backend/tests/verify_demo_surface_hardening.py
 505aa6793b7640130595e5ac0ee60036ed968a384652c922883f9775bfad2f6e  ./backend/tests/verify_dgtera_integration.py
-96343c0e9971b41834771254a3f75c7a0104b8d48fb41e4dea3ffa7311301c76  ./backend/tests/verify_final_home_dashboard.py
+eea321014e6a78a170eb4c8dc8f520d6d69a25215e15c42b564f779cc1cf4156  ./backend/tests/verify_final_home_dashboard.py
 4c6e084dad72f1c46914e43ab2b13fecd71a702b495661bbc760dbae5e9dde40  ./backend/tests/verify_final_internal.py
 6db739271f0ff19e2178d977202f08fcad3f3a07f7499d7021fc8897f7f28a89  ./backend/tests/verify_health_contract.py
 6629f069619b9caa5975f025086bad08459404786514df5221a18f4951557104  ./backend/tests/verify_modules.py
@@ -612,7 +612,7 @@ ec01c0bbe9ef883ce200625d215dc3a196275c2bfa3f64639d2748a4366b85c6  ./frontend/.np
 6b9b842d6871c6fc7c5bd0fb9bac957c704bb8a7b1fe4be085cc7e0754635717  ./frontend/src/components/ai-assistant/CorvaxAiAssistantHost.tsx
 704253e32106374f4b77fcfaa4fb12f422ba8a9f5c1c786d42b723252101b284  ./frontend/src/components/ai-assistant/ai-assistant.types.ts
 d5fd7b577114133ee96b2280881891bc5c2c63f8783a35e5769403962f1ac5eb  ./frontend/src/components/ai-assistant/index.ts
-f18d235871d02d85ab9f6ccf658312c2cd617338c878dc5b8226894acf1acca0  ./frontend/src/dashboard/Shell.tsx
+8498f40e50a0c9db2c3fc66ce2493c07375e43258849f3ed89825f3c4627e27a  ./frontend/src/dashboard/Shell.tsx
 9105b1045c223de8dbde28b2488ca4bf20b71531210e80dcc06ccf01dfca3b93  ./frontend/src/dashboard/accessGovernanceRealPage.tsx
 2596409be735b03be87cb6bd4fae9afab0bca6564fac881f3013b0987f48c56c  ./frontend/src/dashboard/chartOfAccountsPage.tsx
 8214109a430bded08492a40c495b7ef9d13242ebbaef0fde6687f1ff02d4747f  ./frontend/src/dashboard/cipProjectsPage.tsx
@@ -646,7 +646,7 @@ b82ff350dd06fecb43798b9e70d0082a2f5dcb8be562a33d84fd45cb62a986a6  ./frontend/src
 fc278f539b2378e8a35ee6373d72472b5d372339dee85cabcee80fd62160c0e4  ./frontend/src/dashboard/printDocument.ts
 696a6cf2c5d6063a925b755736fc8cb1d654d26d305da0c2be7ad274cf81eefe  ./frontend/src/dashboard/purchasesPage.tsx
 78c48d7cc8ec1b9c8cf9e10ed2cac9eef609638f9c4209f788760c65bbd112b5  ./frontend/src/dashboard/reportBuilderTab.tsx
-f994a411706bc518f0f3776e2059104f0cd11ddbf6e77c964250e490f4298814  ./frontend/src/dashboard/reportsCenterPage.tsx
+20bddd650c79c78dadc9013d749697fc2c012ab2b62c0da0da6c7b838dbdf3ad  ./frontend/src/dashboard/reportsCenterPage.tsx
 229860c7c496242b6656dd0c0f70047f5569e030152335b6a36036ecd30da911  ./frontend/src/dashboard/restaurantRealPage.tsx
 cd8a89e92093ac76ff6cfdcfc4a1df1c99e39de2b01fd78b8da0a1a739ff0a74  ./frontend/src/dashboard/routes.tsx
 bda855196bee5e5de03608c605c122ede0773fee68a81c1474ef7e0a63152a0c  ./frontend/src/dashboard/salesCommissionsTab.tsx
