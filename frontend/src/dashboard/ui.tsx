@@ -1,12 +1,13 @@
 import type { ReactNode } from 'react';
 import { CheckCircle2, ChevronRight, Clock3 } from 'lucide-react';
+import {ButtonBase, Paper} from '@mui/material';
 
 export const money = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 export const pct = (n: number) => `${n.toFixed(1)}%`;
 
 export function AgeLine({label,value,percent,tone}:{label:string;value:string;percent:string;tone:string}){return <div className="age-line"><span><i className={tone}/>{label}</span><strong>{value}</strong><b>{percent}</b></div>}
 
-export function QuickAction({icon,ar,arLabel,enLabel,tone,onClick}:{icon:ReactNode;ar:boolean;arLabel:string;enLabel:string;tone:string;onClick:()=>void}){return <button type="button" className={`quick-action ${tone}`} onClick={onClick} aria-label={ar?arLabel:enLabel}><span>{icon}</span><strong>{ar?arLabel:enLabel}</strong><small>{ar?enLabel:arLabel}</small></button>}
+export function QuickAction({icon,ar,arLabel,enLabel,tone,onClick}:{icon:ReactNode;ar:boolean;arLabel:string;enLabel:string;tone:string;onClick:()=>void}){return <ButtonBase className={`quick-action ${tone}`} onClick={onClick} aria-label={ar?arLabel:enLabel}><span>{icon}</span><strong>{ar?arLabel:enLabel}</strong><small>{ar?enLabel:arLabel}</small></ButtonBase>}
 
 export function authHeaders():Record<string,string>{const token=sessionStorage.getItem('corvax_token');return token?{Authorization:`Bearer ${token}`}:{}}
 
@@ -17,12 +18,12 @@ export function Kpi({title,value,trend,good,icon,tone='blue',unit,onClick}:{titl
   const content = <><div className="kpi-heading"><div><span>{title}</span></div>{icon&&<div className="kpi-icon">{icon}</div>}</div><div className="kpi-value"><strong>{value}</strong>{unit&&<span>{unit}</span>}</div><small className={good?'good':'bad'}>{good?'✓':'!'} {trend}</small><svg className="kpi-spark" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true"><polyline points={points}/></svg></>;
   return onClick
     ? <button type="button" className={`kpi-card tone-${tone} is-clickable`} onClick={onClick} aria-label={title}>{content}</button>
-    : <article className={`kpi-card tone-${tone}`}>{content}</article>;
+    : <Paper component="article" className={`kpi-card tone-${tone}`}>{content}</Paper>;
 }
 
-export function SimpleKpi({t,v}:{t:string,v:string}) { return <article><span>{t}</span><strong>{v}</strong></article>; }
+export function SimpleKpi({t,v}:{t:string,v:string}) { return <Paper component="article"><span>{t}</span><strong>{v}</strong></Paper>; }
 
-export function Panel({title,icon,children,className='',onOpen,openLabel}:{title:string,icon:ReactNode,children:ReactNode,className?:string,onOpen?:()=>void,openLabel?:string}) { return <section className={`panel ${className}`}><div className="panel-head"><div>{icon}<h3>{title}</h3></div>{onOpen&&<button type="button" className="panel-open" onClick={onOpen} aria-label={openLabel||title} title={openLabel||title}><ChevronRight size={17}/></button>}</div>{children}</section>; }
+export function Panel({title,icon,children,className='',onOpen,openLabel}:{title:string,icon:ReactNode,children:ReactNode,className?:string,onOpen?:()=>void,openLabel?:string}) { return <Paper component="section" className={`panel ${className}`}><div className="panel-head"><div>{icon}<h3>{title}</h3></div>{onOpen&&<button type="button" className="panel-open" onClick={onOpen} aria-label={openLabel||title} title={openLabel||title}><ChevronRight size={17}/></button>}</div>{children}</Paper>; }
 
 export function AlertRow({severity,title,meta,onClick}:{severity:'high'|'medium'|'low',title:string,meta:string,onClick?:()=>void}) {
   const content = <><i className={severity}/><div><strong>{title}</strong><span>{meta}</span></div><ChevronRight size={16}/></>;
@@ -31,9 +32,9 @@ export function AlertRow({severity,title,meta,onClick}:{severity:'high'|'medium'
     : <div className="alert-row">{content}</div>;
 }
 
-export function MiniStatus({icon,title,value,status}:{icon:ReactNode,title:string,value:string,status:string}) { return <article className="mini-status"><div className="module-icon">{icon}</div><span>{title}</span><strong>{value}</strong><small>{status}</small></article>; }
+export function MiniStatus({icon,title,value,status}:{icon:ReactNode,title:string,value:string,status:string}) { return <Paper component="article" className="mini-status"><div className="module-icon">{icon}</div><span>{title}</span><strong>{value}</strong><small>{status}</small></Paper>; }
 
-export function ModuleCard({icon,title,text}:{icon:ReactNode,title:string,text:string}) { return <article className="module-card"><div className="module-icon">{icon}</div><div><strong>{title}</strong><span>{text}</span></div></article>; }
+export function ModuleCard({icon,title,text}:{icon:ReactNode,title:string,text:string}) { return <Paper component="article" className="module-card"><div className="module-icon">{icon}</div><div><strong>{title}</strong><span>{text}</span></div></Paper>; }
 
 export function ProgressRow({label,value}:{label:string,value:number}) { return <div className="progress-row"><div><span>{label}</span><strong>{value}%</strong></div><div className="progress"><i style={{width:`${value}%`}}/></div></div>; }
 
@@ -49,6 +50,6 @@ export function SummaryLine({label,value,warn=false}:{label:string,value:string,
 
 export function CostBar({label,value,max}:{label:string,value:number,max:number}) { return <div className="cost-bar"><div><span>{label}</span><strong>{value.toFixed(2)}</strong></div><div><i style={{width:`${value/max*100}%`}}/></div></div>; }
 
-export function DataTable({headers,rows}:{headers:string[],rows:ReactNode[][]}) { const ar=headers.some(h=>/[\u0600-\u06FF]/.test(h)); return <div className="data-table responsive" role="table"><div className="tr th" role="row" style={{gridTemplateColumns:`repeat(${headers.length}, minmax(125px, 1fr))`}}>{headers.map(h=><span role="columnheader" key={h}>{h}</span>)}</div>{rows.length===0?<div className="table-empty">{ar?'لا توجد بيانات متاحة':'No data available'}</div>:rows.map((r,i)=><div className="tr" role="row" style={{gridTemplateColumns:`repeat(${headers.length}, minmax(125px, 1fr))`}} key={i}>{r.map((c,j)=><span role="cell" key={`${i}-${j}`}>{c}</span>)}</div>)}</div>; }
+export function DataTable({headers,rows}:{headers:string[],rows:ReactNode[][]}) { const ar=headers.some(h=>/[\u0600-\u06FF]/.test(h)); return <Paper className="data-table responsive" role="table"><div className="tr th" role="row" style={{gridTemplateColumns:`repeat(${headers.length}, minmax(125px, 1fr))`}}>{headers.map(h=><span role="columnheader" key={h}>{h}</span>)}</div>{rows.length===0?<div className="table-empty">{ar?'لا توجد بيانات متاحة':'No data available'}</div>:rows.map((r,i)=><div className="tr" role="row" style={{gridTemplateColumns:`repeat(${headers.length}, minmax(125px, 1fr))`}} key={i}>{r.map((c,j)=><span role="cell" key={`${i}-${j}`}>{c}</span>)}</div>)}</Paper>; }
 
 export function fmt(n:number){return money.format(n);}
