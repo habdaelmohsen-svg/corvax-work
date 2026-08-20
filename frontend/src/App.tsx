@@ -3,6 +3,7 @@ import { Login } from './components/Login';
 import { ForcePasswordChange } from './dashboard/usersPage';
 import { CompanySelector } from './components/CompanySelector';
 import { Dashboard } from './components/Dashboard';
+import { CorvaxThemeProvider } from './theme/CorvaxThemeProvider';
 
 type Lang = 'ar' | 'en';
 type Screen = 'login' | 'password' | 'company' | 'dashboard';
@@ -42,8 +43,9 @@ export default function App() {
     document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
   }, [lang]);
 
+  let content;
   if (screen === 'login') {
-    return <Login lang={lang} setLang={setLang} onLogin={() => {
+    content = <Login lang={lang} setLang={setLang} onLogin={() => {
       // H17: a temporary password must be replaced before anything else.
       try {
         const raw = localStorage.getItem(CORVAX_KEYS.user);
@@ -51,9 +53,8 @@ export default function App() {
       } catch { /* fall through to the normal flow */ }
       setScreen('company');
     }} />;
-  }
-  if (screen === 'password') {
-    return <ForcePasswordChange ar={lang === 'ar'} onDone={() => {
+  } else if (screen === 'password') {
+    content = <ForcePasswordChange ar={lang === 'ar'} onDone={() => {
       try {
         const raw = localStorage.getItem(CORVAX_KEYS.user);
         if (raw) {
@@ -64,24 +65,22 @@ export default function App() {
       } catch { /* ignore */ }
       setScreen('company');
     }} />;
-  }
-
-  if (screen === 'company') {
-    return <CompanySelector lang={lang} setLang={setLang} onContinue={(company: unknown) => {
+  } else if (screen === 'company') {
+    content = <CompanySelector lang={lang} setLang={setLang} onContinue={(company: unknown) => {
       localStorage.setItem(CORVAX_KEYS.company, JSON.stringify(company));
       setScreen('dashboard');
     }} />;
+  } else {
+    content = <Dashboard
+      lang={lang}
+      setLang={setLang}
+      onChangeCompany={() => setScreen('company')}
+      onLogout={() => {
+        sessionStorage.removeItem(CORVAX_KEYS.token);
+        Object.values(CORVAX_KEYS).filter(key => key !== CORVAX_KEYS.token).forEach(key => localStorage.removeItem(key));
+        setScreen('login');
+      }}
+    />;
   }
-  return (
-    <Dashboard
-    lang={lang}
-    setLang={setLang}
-    onChangeCompany={() => setScreen('company')}
-    onLogout={() => {
-      sessionStorage.removeItem(CORVAX_KEYS.token);
-      Object.values(CORVAX_KEYS).filter(key => key !== CORVAX_KEYS.token).forEach(key => localStorage.removeItem(key));
-      setScreen('login');
-    }}
-  />
-  );
+  return <CorvaxThemeProvider lang={lang}>{content}</CorvaxThemeProvider>;
 }

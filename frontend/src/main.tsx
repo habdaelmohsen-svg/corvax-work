@@ -6,6 +6,7 @@ import './styles/rc27_4_hardening.css';
 import './styles/rc27_4_design_h4_1.css';
 import './styles/rc27_4_ai_assistant_h5.css';
 import './styles/financialReports.css';
+import './styles/corvax_mui_v16.css';
 
 // A deployment can replace hashed Vite chunks while an older page is still open.
 // Recover once from that stale-chunk state instead of leaving the dashboard blank.

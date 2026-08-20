@@ -18,6 +18,11 @@ DGTERA_PAGE = (ROOT / "frontend/src/dashboard/dgteraIntegrationPage.tsx").read_t
 REPORTS_CENTER = (ROOT / "frontend/src/dashboard/reportsCenterPage.tsx").read_text(encoding="utf-8")
 DGTERA_API = (ROOT / "backend/app/api/dgtera_integration.py").read_text(encoding="utf-8")
 CONFIG = (ROOT / "backend/app/core/config.py").read_text(encoding="utf-8")
+APP = (ROOT / "frontend/src/App.tsx").read_text(encoding="utf-8")
+MAIN = (ROOT / "frontend/src/main.tsx").read_text(encoding="utf-8")
+MUI_THEME = (ROOT / "frontend/src/theme/CorvaxThemeProvider.tsx").read_text(encoding="utf-8")
+MUI_CSS = (ROOT / "frontend/src/styles/corvax_mui_v16.css").read_text(encoding="utf-8")
+PACKAGE = (ROOT / "frontend/package.json").read_text(encoding="utf-8")
 
 
 for forbidden in (
@@ -89,7 +94,24 @@ assert 'className="navigation-notice" role="alert"' in SHELL
 assert "/api/v1/system/release" in SHELL
 assert "version-line version-full" in SHELL
 assert all(field in SHELL for field in ("apiVersion", "releaseId", "buildCommit"))
-assert "CORVAX-RC27.4-R9.4-DGTERA-V15-20260820" in CONFIG
+assert "CORVAX-RC27.4-R9.4-MUI-V16-20260821" in CONFIG
+assert "CorvaxThemeProvider" in APP
+assert "@mui/material" in PACKAGE and "@mui/stylis-plugin-rtl" in PACKAGE
+assert "createTheme" in MUI_THEME and "rtlPlugin" in MUI_THEME and "CssBaseline" in MUI_THEME
+assert "./styles/corvax_mui_v16.css" in MAIN
+assert all(marker in MUI_CSS for marker in (
+    "CORVAX V16 — MUI Executive Workspace",
+    ".page-heading",
+    ".kpi-card",
+    ".data-table",
+    ".journal-form",
+    ".dash.theme-dark",
+    ".auth-page",
+    ".company-card",
+    "width: min(88vw, 304px)",
+    "@media print",
+    "prefers-reduced-motion",
+))
 
 target_values = set(re.findall(r": '([A-Za-z]+)',", TARGETS))
 route_keys = set(re.findall(r"\s+([A-Za-z]+):<", ROUTES))
