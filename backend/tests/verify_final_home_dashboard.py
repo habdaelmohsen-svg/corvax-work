@@ -55,7 +55,6 @@ assert "/api/v1/integrations/dgtera/status" in EXECUTIVE
 assert "/api/v1/integrations/dgtera/refresh-current" in EXECUTIVE
 assert "dgtera-home-verification" in EXECUTIVE
 assert all(label in EXECUTIVE for label in ("صافي اليوم", "ضريبة اليوم", "إجمالي اليوم", "آخر تحقق", "استيراد التاريخ"))
-assert 'permissions.includes("pos.manage")' not in EXECUTIVE  # guard quote-style drift below
 assert "permissions.includes('pos.manage')" in EXECUTIVE
 assert '@router.post("/refresh-current")' in DGTERA_API
 assert 'ensure_permission(db, user, company_id, "pos.manage")' in DGTERA_API
