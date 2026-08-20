@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import calendar
 import hashlib
 import json
 import logging
@@ -25,11 +26,14 @@ from app.models import (
     DgteraBranch,
     DgteraConnection,
     DgteraCustomer,
+    DgteraDailyProof,
     DgteraProduct,
     DgteraSalesOrder,
     DgteraSalesOrderLine,
     DgteraSalesPayment,
     DgteraSyncRun,
+    FiscalPeriod,
+    FiscalYear,
     JournalEntry,
     JournalLine,
     Party,
@@ -61,7 +65,7 @@ HISTORY_RECHECK_INTERVAL_HOURS = 24
 # trusted historical day has passed the current proof path that can create the
 # idempotent restaurant sales journal.  Older mirror rows remain stored for
 # recovery, but they are never exposed as current live-source proof.
-SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v10"
+SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v11-durable"
 DGTERA_JOURNAL_REFERENCE_PREFIX = "DGTERA-SALES"
 SYNC_RUN_HISTORY_LIMIT = 20
 
@@ -97,7 +101,7 @@ class DgteraReconciliationError(RuntimeError):
 
 
 def _prune_sync_run_history(db: Session, connection_id: int) -> int:
-    """Bound scheduler history so SQLite deployments cannot fill the disk."""
+    """Bound diagnostic history without touching durable daily proofs."""
     stale_ids = list(db.scalars(
         select(DgteraSyncRun.id)
         .where(DgteraSyncRun.connection_id == connection_id)
@@ -111,6 +115,126 @@ def _prune_sync_run_history(db: Session, connection_id: int) -> int:
             # Return committed WAL pages to the constrained runtime volume.
             db.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
     return len(stale_ids)
+
+
+def _proof_for_date(
+    db: Session,
+    connection_id: int,
+    sales_date: date,
+) -> DgteraDailyProof | None:
+    return db.scalar(select(DgteraDailyProof).where(
+        DgteraDailyProof.connection_id == connection_id,
+        DgteraDailyProof.sales_date == sales_date,
+    ))
+
+
+def _proof_metrics(proof: DgteraDailyProof) -> dict:
+    return {
+        "orders": int(proof.source_orders or 0),
+        "lines": int(proof.source_lines or 0),
+        "payments": int(proof.source_payments or 0),
+        "quantity": quantity(proof.source_quantity),
+        "subtotal": money(proof.source_subtotal),
+        "vat": money(proof.source_vat),
+        "gross": money(proof.source_total),
+        "paid": money(proof.source_paid),
+        "returns": money(proof.source_return),
+        "discounts": money(proof.source_discount),
+    }
+
+
+def _upsert_verified_daily_proofs(
+    db: Session,
+    connection: DgteraConnection,
+    reconciliation: dict,
+    verified_at: datetime,
+) -> list[DgteraDailyProof]:
+    """Persist one compact proof per source-report day in the mirror commit."""
+    proofs: list[DgteraDailyProof] = []
+    for day_key, evidence in sorted((reconciliation.get("daily") or {}).items()):
+        sales_date = date.fromisoformat(day_key)
+        metrics = evidence.get("source") or {}
+        verification_hash = str(evidence.get("verification_hash") or "")
+        if len(verification_hash) != 64:
+            raise RuntimeError(f"DGTERA day {day_key} has an invalid durable proof hash")
+        proof = _proof_for_date(db, connection.id, sales_date)
+        previous_hash = str(proof.verification_hash or "") if proof else ""
+        if proof is None:
+            proof = DgteraDailyProof(
+                connection_id=connection.id,
+                company_id=connection.company_id,
+                sales_date=sales_date,
+                proof_generation=SOURCE_LOCAL_WINDOW_MARKER,
+            )
+            db.add(proof)
+        proof.company_id = connection.company_id
+        proof.proof_generation = SOURCE_LOCAL_WINDOW_MARKER
+        proof.strict_reconciled = True
+        proof.source_orders = int(metrics.get("orders") or 0)
+        proof.source_lines = int(metrics.get("lines") or 0)
+        proof.source_payments = int(metrics.get("payments") or 0)
+        proof.source_quantity = quantity(metrics.get("quantity"))
+        proof.source_subtotal = money(metrics.get("subtotal"))
+        proof.source_vat = money(metrics.get("vat"))
+        proof.source_total = money(metrics.get("gross"))
+        proof.source_paid = money(metrics.get("paid"))
+        proof.source_return = money(metrics.get("returns"))
+        proof.source_discount = money(metrics.get("discounts"))
+        proof.verification_hash = verification_hash
+        proof.verified_at = verified_at
+        proof.last_attempt_at = verified_at
+        proof.last_attempt_status = "VERIFIED"
+        proof.last_error = None
+        if previous_hash != verification_hash or proof.accounting_status not in {"POSTED", "NO_ACTIVITY"}:
+            proof.accounting_status = "PENDING"
+            proof.accounting_journal_id = None
+            proof.accounting_error = None
+            proof.accounting_updated_at = None
+        proofs.append(proof)
+    db.flush()
+    return proofs
+
+
+def _record_daily_proof_failure(
+    db: Session,
+    connection: DgteraConnection,
+    start_date: date,
+    end_date: date,
+    *,
+    status: str,
+    error: str,
+    invalidate_verified_source: bool,
+) -> None:
+    """Record the latest attempt without letting log pruning erase evidence.
+
+    A completed source response that fails strict reconciliation invalidates
+    the affected day. A transport/auth/database failure before a new source
+    snapshot exists keeps the last verified values visible, while exposing a
+    stale-source warning through ``last_attempt_status``.
+    """
+    attempted_at = utc_now()
+    current = start_date
+    while current <= end_date:
+        proof = _proof_for_date(db, connection.id, current)
+        if proof is None:
+            proof = DgteraDailyProof(
+                connection_id=connection.id,
+                company_id=connection.company_id,
+                sales_date=current,
+                proof_generation=SOURCE_LOCAL_WINDOW_MARKER,
+                strict_reconciled=False,
+                accounting_status="BLOCKED",
+            )
+            db.add(proof)
+        proof.last_attempt_at = attempted_at
+        proof.last_attempt_status = status
+        proof.last_error = error[:1000]
+        if invalidate_verified_source:
+            proof.strict_reconciled = False
+            proof.accounting_status = "BLOCKED"
+            proof.accounting_error = error[:1000]
+            proof.accounting_updated_at = attempted_at
+        current += timedelta(days=1)
 
 
 def _operational_error_chain(exc: OperationalError) -> list[BaseException]:
@@ -235,6 +359,122 @@ def _required_ledger_account(
     return row
 
 
+def _ensure_dgtera_posting_period(
+    db: Session,
+    connection: DgteraConnection,
+    company: Company,
+    posting_date: date,
+    actor_user_id: int,
+) -> FiscalPeriod:
+    """Provision/open only the period needed for verified DGTERA revenue.
+
+    Existing soft- or hard-closed periods remain protected. Missing calendar
+    years are created for the historical import, while an already configured
+    FUTURE period is opened only when its date is no longer in the future for
+    the connection's business timezone.
+    """
+    period = db.scalar(select(FiscalPeriod).join(FiscalYear).where(
+        FiscalYear.company_id == company.id,
+        FiscalPeriod.start_date <= posting_date,
+        FiscalPeriod.end_date >= posting_date,
+    ))
+    zone = ZoneInfo(connection.timezone or "Asia/Riyadh")
+    business_today = utc_now_aware().astimezone(zone).date()
+    created_year = False
+    created_period = False
+    if period is None:
+        fiscal_year = db.scalar(select(FiscalYear).where(
+            FiscalYear.company_id == company.id,
+            FiscalYear.start_date <= posting_date,
+            FiscalYear.end_date >= posting_date,
+        ))
+        if fiscal_year is None:
+            base_name = f"FY {posting_date.year}"
+            name = base_name
+            suffix = 1
+            while db.scalar(select(FiscalYear.id).where(
+                FiscalYear.company_id == company.id,
+                FiscalYear.name == name,
+            )):
+                suffix += 1
+                name = f"{base_name} DGTERA {suffix}"
+            fiscal_year = FiscalYear(
+                company_id=company.id,
+                name=name,
+                start_date=date(posting_date.year, 1, 1),
+                end_date=date(posting_date.year, 12, 31),
+                status="OPEN",
+            )
+            db.add(fiscal_year)
+            db.flush()
+            created_year = True
+            for month in range(1, 13):
+                last_day = calendar.monthrange(posting_date.year, month)[1]
+                candidate = FiscalPeriod(
+                    fiscal_year_id=fiscal_year.id,
+                    number=month,
+                    name_ar=f"الفترة {month} - {posting_date.year}",
+                    name_en=f"Period {month} - {posting_date.year}",
+                    start_date=date(posting_date.year, month, 1),
+                    end_date=date(posting_date.year, month, last_day),
+                    status="OPEN" if month == posting_date.month and posting_date <= business_today else "FUTURE",
+                )
+                db.add(candidate)
+                if month == posting_date.month:
+                    period = candidate
+            created_period = True
+            db.flush()
+        else:
+            if str(fiscal_year.status or "").upper() not in {"OPEN", "ACTIVE"}:
+                raise RuntimeError(
+                    f"DGTERA posting fiscal year is not open: {fiscal_year.status}"
+                )
+            used_numbers = set(db.scalars(select(FiscalPeriod.number).where(
+                FiscalPeriod.fiscal_year_id == fiscal_year.id,
+            )).all())
+            number = posting_date.month
+            while number in used_numbers:
+                number += 1
+            last_day = calendar.monthrange(posting_date.year, posting_date.month)[1]
+            period = FiscalPeriod(
+                fiscal_year_id=fiscal_year.id,
+                number=number,
+                name_ar=f"فترة DGTERA {posting_date.year}-{posting_date.month:02d}",
+                name_en=f"DGTERA {posting_date.year}-{posting_date.month:02d}",
+                start_date=date(posting_date.year, posting_date.month, 1),
+                end_date=date(posting_date.year, posting_date.month, last_day),
+                status="OPEN" if posting_date <= business_today else "FUTURE",
+            )
+            db.add(period)
+            db.flush()
+            created_period = True
+    opened = False
+    if period.status == "FUTURE" and posting_date <= business_today:
+        period.status = "OPEN"
+        opened = True
+    if period.status != "OPEN":
+        raise RuntimeError(f"DGTERA posting period is not open: {period.status}")
+    if created_year or created_period or opened:
+        write_audit(
+            db,
+            action="DGTERA_FISCAL_PERIOD_PROVISIONED" if created_period else "DGTERA_FISCAL_PERIOD_OPENED",
+            entity_type="FISCAL_PERIOD",
+            entity_id=period.id,
+            user_id=actor_user_id,
+            company_id=company.id,
+            after={
+                "connection_id": connection.id,
+                "posting_date": posting_date,
+                "period_id": period.id,
+                "created_fiscal_year": created_year,
+                "created_period": created_period,
+                "opened_from_future": opened,
+                "purpose": "VERIFIED_DGTERA_REVENUE",
+            },
+        )
+    return period
+
+
 def _daily_journal_reference(
     connection_id: int,
     sales_date: date,
@@ -343,6 +583,9 @@ def _sync_daily_accounting_journals(
             results.append({"date": current, "status": "UNCHANGED", "journal_id": active.id})
             current += timedelta(days=1)
             continue
+        _ensure_dgtera_posting_period(
+            db, connection, company, current, actor_user_id,
+        )
         if active:
             reversal = _reverse_daily_sales_journal(
                 db, active, actor_user_id, verification_hash[:16]
@@ -388,6 +631,47 @@ def _sync_daily_accounting_journals(
         })
         current += timedelta(days=1)
     return results
+
+
+def _apply_accounting_results_to_proofs(
+    db: Session,
+    connection: DgteraConnection,
+    results: list[dict],
+) -> None:
+    updated_at = utc_now()
+    for result in results:
+        sales_date = result.get("date")
+        if not isinstance(sales_date, date):
+            sales_date = date.fromisoformat(str(sales_date))
+        proof = _proof_for_date(db, connection.id, sales_date)
+        if proof is None:
+            continue
+        status = str(result.get("status") or "")
+        proof.accounting_status = (
+            "NO_ACTIVITY" if status in {"ZERO", "REVERSED_TO_ZERO"} else "POSTED"
+        )
+        proof.accounting_journal_id = result.get("journal_id")
+        proof.accounting_error = None
+        proof.accounting_updated_at = updated_at
+
+
+def _mark_accounting_error(
+    db: Session,
+    connection_id: int,
+    start_date: date,
+    end_date: date,
+    error: str,
+) -> None:
+    rows = db.scalars(select(DgteraDailyProof).where(
+        DgteraDailyProof.connection_id == connection_id,
+        DgteraDailyProof.sales_date >= start_date,
+        DgteraDailyProof.sales_date <= end_date,
+        DgteraDailyProof.strict_reconciled.is_(True),
+    )).all()
+    for proof in rows:
+        proof.accounting_status = "PENDING"
+        proof.accounting_error = error[:1000]
+        proof.accounting_updated_at = utc_now()
 
 
 def _window_label(connection: DgteraConnection) -> str:
@@ -1077,12 +1361,7 @@ def _latest_daily_run_ids(
     start_date: date,
     end_date: date,
 ):
-    """Return the newest attempted strict-v8 run id for each business day.
-
-    A later failed attempt must invalidate an older successful proof.  Keeping
-    the old proof trusted after DGTERA reports an incomplete page sequence is
-    exactly how stale partial sales were previously shown as a green match.
-    """
+    """Return retained diagnostic run ids; financial proof lives separately."""
     return select(func.max(DgteraSyncRun.id).label("run_id")).where(
         DgteraSyncRun.connection_id == connection.id,
         DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
@@ -1098,18 +1377,18 @@ def _strict_completed_intervals(
     start_date: date,
     end_date: date,
 ) -> list[tuple[date, date]]:
-    latest_daily_ids = _latest_daily_run_ids(connection, start_date, end_date)
     rows = db.execute(select(
-        DgteraSyncRun.start_date,
-        DgteraSyncRun.end_date,
+        DgteraDailyProof.sales_date,
     ).where(
-        DgteraSyncRun.id.in_(select(latest_daily_ids.c.run_id)),
-        DgteraSyncRun.status == "COMPLETED",
-        DgteraSyncRun.strict_reconciled.is_(True),
-    ).distinct().order_by(DgteraSyncRun.start_date, DgteraSyncRun.end_date)).all()
+        DgteraDailyProof.connection_id == connection.id,
+        DgteraDailyProof.proof_generation == SOURCE_LOCAL_WINDOW_MARKER,
+        DgteraDailyProof.strict_reconciled.is_(True),
+        DgteraDailyProof.sales_date >= start_date,
+        DgteraDailyProof.sales_date <= end_date,
+    ).distinct().order_by(DgteraDailyProof.sales_date)).all()
     merged: list[tuple[date, date]] = []
-    for row_start, row_end in rows:
-        current_start, current_end = max(row_start, start_date), min(row_end, end_date)
+    for (sales_date,) in rows:
+        current_start = current_end = sales_date
         if not merged or current_start > merged[-1][1] + timedelta(days=1):
             merged.append((current_start, current_end))
         else:
@@ -1151,26 +1430,17 @@ def strict_range_coverage_status(
     if cursor <= historical_end and first_missing is None:
         first_missing = cursor
     required_days = (historical_end - start_date).days + 1
-    latest_daily_ids = _latest_daily_run_ids(connection, start_date, historical_end)
     verification_rows = db.execute(select(
-        DgteraSyncRun.start_date,
-        DgteraSyncRun.end_date,
-        DgteraSyncRun.completed_at,
+        DgteraDailyProof.sales_date,
+        DgteraDailyProof.verified_at,
     ).where(
-        DgteraSyncRun.id.in_(select(latest_daily_ids.c.run_id)),
-        DgteraSyncRun.status == "COMPLETED",
-        DgteraSyncRun.strict_reconciled.is_(True),
+        DgteraDailyProof.connection_id == connection.id,
+        DgteraDailyProof.proof_generation == SOURCE_LOCAL_WINDOW_MARKER,
+        DgteraDailyProof.strict_reconciled.is_(True),
+        DgteraDailyProof.sales_date >= start_date,
+        DgteraDailyProof.sales_date <= historical_end,
     )).all()
-    day_verifications: list[datetime] = []
-    day = start_date
-    while day <= historical_end:
-        candidates = [
-            completed_at for run_start, run_end, completed_at in verification_rows
-            if completed_at is not None and run_start <= day <= run_end
-        ]
-        if candidates:
-            day_verifications.append(max(candidates))
-        day += timedelta(days=1)
+    day_verifications = [verified_at for _, verified_at in verification_rows if verified_at is not None]
     return {
         "complete": first_missing is None,
         "first_missing_date": first_missing,
@@ -1245,25 +1515,22 @@ def strict_range_reconciliation_evidence(
     if coverage["required_days"] == 0:
         mismatch("order_ids", "range.live_source", "historical/current period", "future period")
 
-    # One proof row per business day is sufficient.  The former query loaded
-    # and parsed every successful two-minute run for the requested range, so a
-    # yearly dashboard became slower every day even though the proof was the
-    # same.  Each chosen row was already committed atomically with its mirror.
-    latest_daily_ids = _latest_daily_run_ids(connection, start_date, end_date)
-    runs = db.scalars(select(DgteraSyncRun).where(
-        DgteraSyncRun.id.in_(select(latest_daily_ids.c.run_id)),
-        DgteraSyncRun.status == "COMPLETED",
-        DgteraSyncRun.strict_reconciled.is_(True),
-    ).order_by(DgteraSyncRun.start_date)).all()
+    # Exactly one compact proof row exists per business day. Diagnostic sync
+    # runs may be pruned without changing financial coverage or report totals.
+    proofs = db.scalars(select(DgteraDailyProof).where(
+        DgteraDailyProof.connection_id == connection.id,
+        DgteraDailyProof.proof_generation == SOURCE_LOCAL_WINDOW_MARKER,
+        DgteraDailyProof.strict_reconciled.is_(True),
+        DgteraDailyProof.sales_date >= start_date,
+        DgteraDailyProof.sales_date <= end_date,
+    ).order_by(DgteraDailyProof.sales_date)).all()
     daily: dict[str, dict] = {}
-    for run in runs:
-        try:
-            details = json.loads(run.reconciliation_details or "{}")
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        for day_key, evidence in (details.get("daily") or {}).items():
-            if start_date <= date.fromisoformat(day_key) <= end_date and day_key not in daily:
-                daily[day_key] = evidence
+    for proof in proofs:
+        day_key = proof.sales_date.isoformat()
+        daily[day_key] = {
+            "source": _shown_metrics(_proof_metrics(proof)),
+            "verification_hash": proof.verification_hash,
+        }
 
     required_end = min(end_date, utc_now_aware().astimezone(ZoneInfo(connection.timezone)).date())
     day = start_date
@@ -1358,6 +1625,124 @@ def strict_range_reconciliation_evidence(
     }
 
 
+def repair_pending_accounting_journals(
+    db: Session,
+    connection: DgteraConnection,
+    actor_user_id: int,
+    *,
+    limit: int = 8,
+) -> dict:
+    """Post verified mirror days that previously missed the restaurant ledger.
+
+    This path deliberately uses the encrypted immutable payload already stored
+    with the mirror. It can repair revenue while DGTERA is temporarily offline,
+    but only after re-running the same strict order/line/payment reconciliation.
+    """
+    proofs = db.scalars(select(DgteraDailyProof).where(
+        DgteraDailyProof.connection_id == connection.id,
+        DgteraDailyProof.proof_generation == SOURCE_LOCAL_WINDOW_MARKER,
+        DgteraDailyProof.strict_reconciled.is_(True),
+        DgteraDailyProof.accounting_status == "PENDING",
+    ).order_by(DgteraDailyProof.sales_date.desc()).limit(max(1, min(limit, 31)))).all()
+    outcomes: list[dict] = []
+    for proof in proofs:
+        proof_id = proof.id
+        sales_date = proof.sales_date
+        rows = db.scalars(select(DgteraSalesOrder).where(
+            DgteraSalesOrder.connection_id == connection.id,
+            DgteraSalesOrder.sales_date == sales_date,
+        )).all()
+        try:
+            source_orders = [_decode_source_payload(row.source_payload) for row in rows]
+            reconciliation = _strict_reconciliation(
+                db, connection, sales_date, sales_date, source_orders,
+            )
+            daily_hash = str(
+                ((reconciliation.get("daily") or {}).get(sales_date.isoformat()) or {}).get("verification_hash")
+                or ""
+            )
+            if not reconciliation.get("matched") or daily_hash != proof.verification_hash:
+                raise DgteraReconciliationError(reconciliation)
+            results = _sync_daily_accounting_journals(
+                db,
+                connection,
+                sales_date,
+                sales_date,
+                source_orders,
+                reconciliation,
+                actor_user_id,
+            )
+            _apply_accounting_results_to_proofs(db, connection, results)
+            restaurant = _restaurant_ledger_company(db, connection)
+            write_audit(
+                db,
+                action="DGTERA_PENDING_ACCOUNTING_REPAIRED",
+                entity_type="DGTERA_DAILY_PROOF",
+                entity_id=proof_id,
+                user_id=actor_user_id,
+                company_id=restaurant.id,
+                after={
+                    "connection_id": connection.id,
+                    "sales_date": sales_date,
+                    "results": results,
+                    "source": "IMMUTABLE_DGTERA_MIRROR_PAYLOAD",
+                },
+            )
+            db.commit()
+            outcomes.append({"date": sales_date, "status": "REPAIRED", "results": results})
+        except DgteraReconciliationError as exc:
+            db.rollback()
+            current_proof = db.get(DgteraDailyProof, proof_id)
+            if current_proof:
+                current_proof.strict_reconciled = False
+                current_proof.last_attempt_status = "MIRROR_DRIFT"
+                current_proof.last_attempt_at = utc_now()
+                current_proof.last_error = _safe_sync_error(exc)
+                current_proof.accounting_status = "BLOCKED"
+                current_proof.accounting_error = _safe_sync_error(exc)
+                current_proof.accounting_updated_at = utc_now()
+                db.commit()
+            outcomes.append({"date": sales_date, "status": "BLOCKED_MIRROR_DRIFT"})
+        except Exception as exc:  # noqa: BLE001 - continue later scheduler cycles
+            db.rollback()
+            safe_error = _safe_sync_error(exc)
+            current_proof = db.get(DgteraDailyProof, proof_id)
+            if current_proof:
+                current_proof.accounting_status = "PENDING"
+                current_proof.accounting_error = safe_error
+                current_proof.accounting_updated_at = utc_now()
+                db.commit()
+            logger.exception(
+                "DGTERA pending accounting repair failed",
+                extra={
+                    "connection_id": connection.id,
+                    "sales_date": str(sales_date),
+                    "safe_error": safe_error,
+                },
+            )
+            outcomes.append({"date": sales_date, "status": "PENDING", "error": safe_error})
+            break
+    remaining = db.scalar(select(func.count(DgteraDailyProof.id)).where(
+        DgteraDailyProof.connection_id == connection.id,
+        DgteraDailyProof.proof_generation == SOURCE_LOCAL_WINDOW_MARKER,
+        DgteraDailyProof.strict_reconciled.is_(True),
+        DgteraDailyProof.accounting_status == "PENDING",
+    )) or 0
+    if remaining == 0:
+        current_connection = db.get(DgteraConnection, connection.id)
+        if current_connection and str(current_connection.last_error or "").startswith(
+            "Sales matched; accounting posting pending"
+        ):
+            current_connection.last_error = None
+            db.commit()
+    return {
+        "attempted": len(outcomes),
+        "repaired": sum(1 for row in outcomes if row["status"] == "REPAIRED"),
+        "remaining": int(remaining),
+        "outcomes": outcomes,
+    }
+
+
 def historical_backfill_status(db: Session, connection: DgteraConnection) -> dict:
     """Return progress for the contiguous DGTERA report-date history import.
 
@@ -1434,22 +1819,15 @@ def historical_recheck_window(
     status = historical_backfill_status(db, connection)
     if not status["completed"]:
         return None
-    rows = db.execute(select(
-        DgteraSyncRun.start_date,
-        DgteraSyncRun.end_date,
-        func.max(DgteraSyncRun.completed_at).label("last_verified_at"),
-    ).where(
-        DgteraSyncRun.connection_id == connection.id,
-        DgteraSyncRun.status == "COMPLETED",
-        DgteraSyncRun.strict_reconciled.is_(True),
-        DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
-    ).group_by(
-        DgteraSyncRun.start_date,
-        DgteraSyncRun.end_date,
-    ).order_by("last_verified_at", DgteraSyncRun.start_date)).all()
-    if not rows:
+    proof = db.scalar(select(DgteraDailyProof).where(
+        DgteraDailyProof.connection_id == connection.id,
+        DgteraDailyProof.proof_generation == SOURCE_LOCAL_WINDOW_MARKER,
+        DgteraDailyProof.strict_reconciled.is_(True),
+    ).order_by(DgteraDailyProof.verified_at, DgteraDailyProof.sales_date))
+    if proof is None:
         return None
-    start_date, end_date, last_verified_at = rows[0]
+    start_date = proof.sales_date
+    last_verified_at = proof.verified_at
     if last_verified_at and last_verified_at > utc_now() - timedelta(hours=HISTORY_RECHECK_INTERVAL_HOURS):
         return None
     # Legacy releases sometimes stored multi-day audit runs. Recheck only one
@@ -1538,6 +1916,15 @@ def _sync_unlocked(
         raise
     except (DgteraRemoteError, ValueError) as exc:
         connection.last_error = str(exc)
+        _record_daily_proof_failure(
+            db,
+            connection,
+            start_date,
+            end_date,
+            status="SOURCE_ERROR",
+            error=str(exc),
+            invalidate_verified_source=False,
+        )
         run = DgteraSyncRun(
             connection_id=connection.id,
             company_id=connection.company_id,
@@ -1623,6 +2010,9 @@ def _sync_unlocked(
         )
         run.status = "COMPLETED"
         run.completed_at = utc_now()
+        _upsert_verified_daily_proofs(
+            db, connection, reconciliation, run.completed_at,
+        )
         if mark_current_sync:
             connection.last_sync_at = utc_now()
         connection.last_error = None
@@ -1708,6 +2098,20 @@ def _sync_unlocked(
             completed_at=utc_now(),
         )
         db.add(failed)
+        if connection:
+            _record_daily_proof_failure(
+                db,
+                connection,
+                start_date,
+                end_date,
+                status=(
+                    "RECONCILIATION_ERROR"
+                    if isinstance(exc, DgteraReconciliationError)
+                    else "MIRROR_ERROR"
+                ),
+                error=_safe_sync_error(exc),
+                invalidate_verified_source=isinstance(exc, DgteraReconciliationError),
+            )
         try:
             db.commit()
         except Exception:
@@ -1725,6 +2129,7 @@ def _sync_unlocked(
             db, connection, start_date, end_date, source_orders,
             reconciliation, actor_user_id,
         )
+        _apply_accounting_results_to_proofs(db, connection, accounting_days)
         restaurant = _restaurant_ledger_company(db, connection)
         write_audit(
             db,
@@ -1761,6 +2166,9 @@ def _sync_unlocked(
         )
         current_connection = db.get(DgteraConnection, connection.id)
         if current_connection:
+            _mark_accounting_error(
+                db, current_connection.id, start_date, end_date, safe_error,
+            )
             current_connection.last_error = (
                 f"Sales matched; accounting posting pending — {safe_error}"
             )[:1000]

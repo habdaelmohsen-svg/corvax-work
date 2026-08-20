@@ -8,6 +8,8 @@ type Status={
   company_id?:number;connection_company_id?:number;inherited?:boolean;
   last_tested_at?:string|null;last_sync_at?:string|null;last_error?:string|null;
   timezone?:string;day_window?:string;sync_interval_minutes?:number;history?:HistoryStatus;
+  proof?:{verified_days:number;first_verified_date?:string|null;last_verified_date?:string|null;latest_attempt_status?:string|null;serving_last_verified_after_source_error?:boolean};
+  accounting?:{posted_days:number;no_activity_days:number;pending_days:number;blocked_days:number;restaurant_ledger_only:boolean};
 };
 type HistoryStatus={start_date:string;target_end_date:string;earliest_imported_date?:string|null;covered_days:number;total_days:number;progress_percent:number;completed:boolean};
 type Coverage={complete:boolean;requested_start_date:string;requested_end_date:string;earliest_imported_date?:string|null;target_end_date:string;progress_percent:number};
@@ -49,9 +51,6 @@ type Analytics={
 };
 type DisplayFilters={startDate:string;endDate:string;branchId:string;scope:string;service:string};
 
-const field={display:'block',width:'100%',marginTop:5,padding:9,border:'1px solid var(--border)',borderRadius:9,background:'var(--surface)',color:'var(--text)'} as const;
-const grid={display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(210px,1fr))',gap:12,padding:12} as const;
-const btn={padding:'9px 16px',borderRadius:9,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:600} as const;
 const money2=(value:number,ar=false)=>new Intl.NumberFormat(ar?'ar-SA':'en-US',{minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(value||0));
 const pct=(value:number|null|undefined,ar=false)=>value==null?'—':`${new Intl.NumberFormat(ar?'ar-SA':'en-US',{minimumFractionDigits:1,maximumFractionDigits:1,signDisplay:'exceptZero'}).format(Number(value))}%`;
 const localDateTime=(value?:string|null,ar=false)=>{
@@ -209,18 +208,18 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
   const windowText=(key:'current'|'previous'|'next'|'prior_year')=>{
     const w=analytics?.windows[key];if(!w)return '—';return w.start_date===w.end_date?w.start_date:`${w.start_date} → ${w.end_date}`;
   };
-  return <>
+  return <div className="dgtera-workspace">
     <div className="kpis">
-      <Kpi title={ar?'صافي المبيعات':'Net sales'} value={reportComplete?money2(Number(totals.subtotal||0),ar):'—'} trend={ar?'دون الضريبة — الرقم الأساسي للتقارير':'Excluding VAT — primary report value'} good icon={<Receipt size={22}/>} tone="blue"/>
-      <Kpi title={ar?'ضريبة المبيعات':'Sales VAT'} value={reportComplete?money2(Number(totals.vat||0),ar):'—'} trend={ar?'كما وردت من DGTERA':'As received from DGTERA'} good icon={<Store size={22}/>} tone="violet"/>
-      <Kpi title={ar?'إجمالي المبيعات':'Gross sales'} value={reportComplete?money2(Number(totals.sales||0),ar):'—'} trend={ar?'شامل الضريبة':'Including VAT'} good icon={<Bike size={22}/>} tone="amber"/>
-      <Kpi title={ar?'عدد الطلبات':'Orders'} value={reportComplete?String(totals.orders||0):'—'} trend="00:00–23:59:59" good icon={<DatabaseZap size={22}/>} tone="green"/>
+      <Kpi title={ar?'صافي المبيعات':'Net sales'} value={reportComplete?money2(Number(totals.subtotal||0),ar):'—'} trend={ar?'دون الضريبة — الرقم الأساسي للتقارير':'Excluding VAT — primary report value'} good={reportComplete} icon={<Receipt size={22}/>} tone="blue"/>
+      <Kpi title={ar?'ضريبة المبيعات':'Sales VAT'} value={reportComplete?money2(Number(totals.vat||0),ar):'—'} trend={ar?'كما وردت من DGTERA':'As received from DGTERA'} good={reportComplete} icon={<Store size={22}/>} tone="violet"/>
+      <Kpi title={ar?'إجمالي المبيعات':'Gross sales'} value={reportComplete?money2(Number(totals.sales||0),ar):'—'} trend={ar?'شامل الضريبة':'Including VAT'} good={reportComplete} icon={<Bike size={22}/>} tone="amber"/>
+      <Kpi title={ar?'عدد الطلبات':'Orders'} value={reportComplete?String(totals.orders||0):'—'} trend="00:00–23:59:59" good={reportComplete} icon={<DatabaseZap size={22}/>} tone="green"/>
     </div>
 
-    {msg&&<div style={{padding:11,margin:'12px 0',borderRadius:9,lineHeight:1.8,background:isError?'#fee2e2':'#dcfce7',color:isError?'#991b1b':'#166534'}}>{msg}</div>}
+    {msg&&<div className={`system-banner ${isError?'danger':'success'}`}>{msg}</div>}
 
     <Panel title={ar?'اتصال DGTERA الآلي':'Automatic DGTERA connection'} icon={<Link2 size={18}/>}>
-      <div style={{padding:'10px 12px 0',fontSize:13,lineHeight:1.9,opacity:.9}}>
+      <div className="panel-intro integration-intro">
         {status.inherited
           ? (ar
             ? 'هذا هو ربط DGTERA المشترك بين الشركة القابضة وشركة المطاعم. تظهر المبيعات في الشركتين من السجل نفسه دون نسخ الطلبات أو مضاعفة الإجماليات.'
@@ -229,42 +228,45 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
             ? 'يحفظ CORVAX بيانات الاتصال مشفرة ويطابق اليوم مع تاريخ تقرير مبيعات الفروع في DGTERA كما هو، دون إزاحة زمنية. يبدأ من اليوم ثم يستكمل التاريخ تلقائيًا حتى 1 يناير 2025.'
             : 'CORVAX encrypts the connection and matches the DGTERA Branch Sales source-report date without a time-zone shift. It imports today first, then automatically backfills sales to 1 January 2025.')}
       </div>
-      {!status.inherited&&<div style={grid}>
-        <label>{ar?'رابط DGTERA':'DGTERA URL'}<input style={field} value={baseUrl} onChange={e=>setBaseUrl(e.target.value)}/></label>
-        <label>{ar?'اسم قاعدة Odoo':'Odoo database'}<input style={field} value={database} onChange={e=>setDatabase(e.target.value)} placeholder={status.configured?(ar?'اتركه كما هو إن لم يتغير':'Leave unchanged'):''}/></label>
-        <label>{ar?'مستخدم API للقراءة':'Read-only API login'}<input style={field} value={login} onChange={e=>setLogin(e.target.value)} autoComplete="off" placeholder={status.configured?(ar?'اتركه فارغًا للحفاظ عليه':'Leave blank to keep'):''}/></label>
-        <label>{ar?'مفتاح API':'API key'}<input type="password" style={field} value={apiKey} onChange={e=>setApiKey(e.target.value)} autoComplete="new-password" placeholder={status.configured?'••••••••••••':''}/></label>
+      {!status.inherited&&<div className="integration-form-grid">
+        <label>{ar?'رابط DGTERA':'DGTERA URL'}<input value={baseUrl} onChange={e=>setBaseUrl(e.target.value)}/><small>{ar?'رابط مصدر Odoo 14':'Odoo 14 source endpoint'}</small></label>
+        <label>{ar?'اسم قاعدة Odoo':'Odoo database'}<input value={database} onChange={e=>setDatabase(e.target.value)} placeholder={status.configured?(ar?'اتركه كما هو إن لم يتغير':'Leave unchanged'):''}/><small>{ar?'لا يظهر بعد الحفظ':'Hidden after save'}</small></label>
+        <label>{ar?'مستخدم API للقراءة':'Read-only API login'}<input value={login} onChange={e=>setLogin(e.target.value)} autoComplete="off" placeholder={status.configured?(ar?'اتركه فارغًا للحفاظ عليه':'Leave blank to keep'):''}/><small>{ar?'صلاحية قراءة فقط':'Read-only access'}</small></label>
+        <label>{ar?'مفتاح API':'API key'}<input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)} autoComplete="new-password" placeholder={status.configured?'••••••••••••':''}/><small>{ar?'تخزين مشفر':'Encrypted at rest'}</small></label>
       </div>}
-      <div style={{display:'flex',gap:12,padding:'0 12px 14px',alignItems:'center',flexWrap:'wrap'}}>
-        {!status.inherited&&<button style={{...btn,opacity:busy?.6:1}} disabled={busy} onClick={saveConnection}>{ar?'حفظ وتفعيل الربط الآلي':'Save & activate automatic sync'}</button>}
-        <span style={{fontSize:13,lineHeight:1.8}}>
+      <div className="integration-actions">
+        {!status.inherited&&<button className="primary-action" disabled={busy} onClick={saveConnection}>{busy?<RefreshCw className="spin" size={17}/>:<Link2 size={17}/>} {ar?'حفظ واختبار وتفعيل الربط':'Save, test & activate'}</button>}
+        <span>
           <Clock3 size={16}/> {ar?'يوم المبيعات: 00:00 إلى 23:59:59 حسب تاريخ تقرير DGTERA — تحديث ومطابقة تلقائية كل دقيقتين.':'Sales day: 00:00–23:59:59 by DGTERA source-report date — automatic refresh and reconciliation every 2 minutes.'}
         </span>
       </div>
-      {status.configured&&<div style={{padding:'0 12px 14px',fontSize:13,lineHeight:1.8}}>
-        {ar?'الحالة':'Status'}: <b>{status.connected?(ar?'متصل ويعمل تلقائيًا':'Connected and automatic'):(ar?'الاتصال يحتاج فحصًا':'Connection needs attention')}</b>
-        {status.inherited&&<b style={{color:'#166534'}}> — {ar?'مشترك بين القابضة والمطاعم':'Shared by holding and restaurant'}</b>}
-        {' — '}{ar?'آخر مزامنة بتوقيت الرياض':'Last sync (Riyadh)'}: {localDateTime(status.last_sync_at,ar)}
-        {status.last_error&&<span style={{color:'#b91c1c'}}> — {status.last_error}</span>}
-        {status.history&&<div style={{marginTop:10}}>
-          <div style={{display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap'}}>
+      {status.configured&&<div className="integration-status-board">
+        <div className="integration-status-metrics">
+          <article><span>{ar?'المصدر':'Source'}</span><strong>{status.connected?(ar?'متصل':'Connected'):(ar?'يحتاج فحصًا':'Attention')}</strong><small>{localDateTime(status.last_sync_at,ar)}</small></article>
+          <article><span>{ar?'الأيام الموثقة':'Verified days'}</span><strong>{status.proof?.verified_days||0}</strong><small>{status.proof?.latest_attempt_status||'—'}</small></article>
+          <article><span>{ar?'الأيام المرحلة':'Posted days'}</span><strong>{status.accounting?.posted_days||0}</strong><small>{ar?`${status.accounting?.pending_days||0} معلّق`:`${status.accounting?.pending_days||0} pending`}</small></article>
+          <article><span>{ar?'ملكية القيد':'Ledger ownership'}</span><strong>{ar?'المطاعم فقط':'Restaurant only'}</strong><small>{status.inherited?(ar?'عرض مشترك':'Shared view'):(ar?'مالك الربط':'Connection owner')}</small></article>
+        </div>
+        {status.last_error&&<div className="system-banner warning">{status.last_error}</div>}
+        {status.history&&<div className="history-progress">
+          <div className="history-progress-head">
             <b>{status.history.completed?(ar?'اكتمل تاريخ المبيعات من 2025':'Sales history from 2025 is complete'):(ar?'جارٍ استيراد تاريخ 2025 تلقائيًا':'Automatically importing 2025 history')}</b>
             <span>{money2(status.history.progress_percent,ar)}%</span>
           </div>
-          <div style={{height:9,borderRadius:99,background:'#e5e7eb',overflow:'hidden',marginTop:6}}><div style={{height:'100%',width:`${Math.min(100,status.history.progress_percent)}%`,background:'#16a34a'}}/></div>
+          <div className="history-progress-track"><i style={{width:`${Math.min(100,status.history.progress_percent)}%`}}/></div>
           <small>{ar?'أقدم تاريخ تم استيراده':'Earliest imported date'}: {status.history.earliest_imported_date||'—'} — {ar?'الهدف':'Target'}: {status.history.start_date}</small>
         </div>}
       </div>}
     </Panel>
 
     {status.configured&&<>
-      {snapshot&&!reportComplete&&<div style={{padding:12,margin:'12px 0',borderRadius:10,background:snapshot.reconciliation?.mismatch_count?'#fee2e2':'#fef3c7',color:snapshot.reconciliation?.mismatch_count?'#991b1b':'#92400e',fontSize:13,lineHeight:1.9}}>
+      {snapshot&&!reportComplete&&<div className={`system-banner ${snapshot.reconciliation?.mismatch_count?'danger':'warning'}`}>
         <b>{snapshot.reconciliation?.mismatch_count?(ar?'⛔ فشلت المطابقة الصارمة':'⛔ Strict reconciliation failed'):(ar?'⏳ جارٍ استكمال الفترة من DGTERA':'⏳ Completing the selected period from DGTERA')}</b>
         {' — '}{ar?'تم إخفاء الإجماليات حتى تكتمل كل الأيام وتنجح مطابقة الطلبات والسطور والمدفوعات والصافي والضريبة والإجمالي دون أي فرق.':'Totals are hidden until every day is covered and orders, lines, payments, net, VAT and gross all reconcile with no difference.'}
         {snapshot.reconciliation?.mismatch_count?` ${ar?'عدد الفروقات':'Differences'}: ${snapshot.reconciliation.mismatch_count}`:` ${money2(Number(snapshot.coverage.progress_percent||0),ar)}%`}
         {!!snapshot.reconciliation?.mismatches?.length&&<div style={{marginTop:6}}>{snapshot.reconciliation.mismatches.slice(0,3).map((item,index)=><div key={`${item.path}-${index}`}><code>{item.path}</code>: {item.expected} ≠ {item.actual}</div>)}</div>}
       </div>}
-      {reportComplete&&snapshot?.reconciliation?.available&&<div style={{padding:12,margin:'12px 0',borderRadius:10,background:snapshot.reconciliation.matched?'#dcfce7':'#fee2e2',color:snapshot.reconciliation.matched?'#166534':'#991b1b',fontSize:13,lineHeight:1.9}}>
+      {reportComplete&&snapshot?.reconciliation?.available&&<div className={`system-banner ${snapshot.reconciliation.matched?'success':'danger'} reconciliation-banner`}>
         <b>{snapshot.reconciliation.matched?(ar?'✓ مطابقة صارمة 100% للفترة المستوردة':'✓ Strict 100% reconciliation for the imported period'):(ar?'⚠ يوجد فرق يحتاج مراجعة':'⚠ Reconciliation difference')}</b>
         {' — '}{ar?'الصافي':'Net'}: {money2(Number(snapshot.reconciliation.source_subtotal||0),ar)}
         {' — '}{ar?'الضريبة':'VAT'}: {money2(Number(snapshot.reconciliation.source_vat||0),ar)}
@@ -277,39 +279,39 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
         <div><small>{ar?'آخر تحقق مباشر من المصدر':'Last live-source verification'}: {localDateTime(snapshot.reconciliation.last_verified_at,ar)} — {ar?'تم فحص كل طلب بصورة منفردة':'Every order was checked individually'} — SHA-256: {snapshot.reconciliation.verification_hash?.slice(0,16)}…</small></div>
       </div>}
       <Panel title={ar?'فترة عرض المبيعات':'Sales display period'} icon={<Clock3 size={18}/>}>
-        <div style={grid}>
-          <label>{ar?'من':'From'}<input type="date" min="2025-01-01" style={field} value={startDate} onChange={e=>setStartDate(e.target.value)}/></label>
-          <label>{ar?'إلى':'To'}<input type="date" min="2025-01-01" style={field} value={endDate} onChange={e=>setEndDate(e.target.value)}/></label>
-          <label>{ar?'الفرع':'Branch'}<select style={field} value={branchId} onChange={e=>setBranchId(e.target.value)}><option value="">{ar?'كل الفروع':'All branches'}</option>{(snapshot?.branches||[]).map(x=><option key={x.branch_id} value={x.branch_id}>{x.name}</option>)}</select></label>
-          <label>{ar?'داخلي / خارجي':'Internal / external'}<select style={field} value={scope} onChange={e=>setScope(e.target.value)}><option value="">{ar?'الكل':'All'}</option><option value="INTERNAL">{ar?'داخلي':'Internal'}</option><option value="EXTERNAL">{ar?'خارجي':'External'}</option></select></label>
-          <label>{ar?'نوع الخدمة':'Service mode'}<select style={field} value={service} onChange={e=>setService(e.target.value)}><option value="">{ar?'الكل':'All'}</option><option value="DINE_IN">{ar?'داخل المطعم':'Dine-in'}</option><option value="TAKEAWAY">{ar?'سفري / استلام':'Takeaway'}</option><option value="DELIVERY">{ar?'توصيل':'Delivery'}</option></select></label>
-          <div style={{display:'flex',alignItems:'end'}}><button type="button" style={{...btn,width:'100%',opacity:reportLoading?.65:1}} disabled={reportLoading} onClick={showSales}>{reportLoading?(ar?'جارٍ عرض المبيعات…':'Loading sales…'):(ar?'عرض المبيعات':'Show sales')}</button></div>
+        <div className="integration-form-grid report-filter-grid">
+          <label>{ar?'من':'From'}<input type="date" min="2025-01-01" value={startDate} onChange={e=>setStartDate(e.target.value)}/></label>
+          <label>{ar?'إلى':'To'}<input type="date" min="2025-01-01" value={endDate} onChange={e=>setEndDate(e.target.value)}/></label>
+          <label>{ar?'الفرع':'Branch'}<select value={branchId} onChange={e=>setBranchId(e.target.value)}><option value="">{ar?'كل الفروع':'All branches'}</option>{(snapshot?.branches||[]).map(x=><option key={x.branch_id} value={x.branch_id}>{x.name}</option>)}</select></label>
+          <label>{ar?'داخلي / خارجي':'Internal / external'}<select value={scope} onChange={e=>setScope(e.target.value)}><option value="">{ar?'الكل':'All'}</option><option value="INTERNAL">{ar?'داخلي':'Internal'}</option><option value="EXTERNAL">{ar?'خارجي':'External'}</option></select></label>
+          <label>{ar?'نوع الخدمة':'Service mode'}<select value={service} onChange={e=>setService(e.target.value)}><option value="">{ar?'الكل':'All'}</option><option value="DINE_IN">{ar?'داخل المطعم':'Dine-in'}</option><option value="TAKEAWAY">{ar?'سفري / استلام':'Takeaway'}</option><option value="DELIVERY">{ar?'توصيل':'Delivery'}</option></select></label>
+          <div className="form-action"><button type="button" className="primary-action" disabled={reportLoading} onClick={showSales}>{reportLoading?<RefreshCw size={17} className="spin"/>:<DatabaseZap size={17}/>} {reportLoading?(ar?'جارٍ القراءة والمطابقة…':'Reading & reconciling…'):(ar?'قراءة ومطابقة الفترة':'Read & reconcile period')}</button></div>
         </div>
-        <div style={{padding:'0 12px 12px',fontSize:13,opacity:.8}}>{ar?'الفترة المعروضة حاليًا':'Currently displayed period'}: <b>{appliedFilters.startDate} → {appliedFilters.endDate}</b></div>
+        <div className="active-filter-summary">{ar?'الفترة المعروضة حاليًا':'Currently displayed period'}: <b>{appliedFilters.startDate} → {appliedFilters.endDate}</b></div>
       </Panel>
 
       <Panel title={ar?'مقارنة المبيعات اليومية والأسبوعية والشهرية والسنوية':'Daily, weekly, monthly and yearly sales comparison'} icon={<Receipt size={18}/> }>
-        <div style={{...grid,alignItems:'end'}}>
-          <label>{ar?'تاريخ المقارنة':'Comparison date'}<input type="date" min="2025-01-01" style={field} value={compareDate} onChange={e=>setCompareDate(e.target.value)}/></label>
-          <label>{ar?'نوع الفترة':'Period'}<select style={field} value={period} onChange={e=>setPeriod(e.target.value as Period)}>
+        <div className="integration-form-grid comparison-filter-grid">
+          <label>{ar?'تاريخ المقارنة':'Comparison date'}<input type="date" min="2025-01-01" value={compareDate} onChange={e=>setCompareDate(e.target.value)}/></label>
+          <label>{ar?'نوع الفترة':'Period'}<select value={period} onChange={e=>setPeriod(e.target.value as Period)}>
             <option value="DAY">{ar?'يومي':'Daily'}</option><option value="WEEK">{ar?'أسبوعي حتى التاريخ':'Week to date'}</option><option value="MONTH">{ar?'شهري حتى التاريخ':'Month to date'}</option><option value="YEAR">{ar?'سنوي حتى التاريخ':'Year to date'}</option>
           </select></label>
         </div>
         {analytics&&<>
-          <div className="kpis" style={{padding:'0 12px 12px'}}>
+          <div className="kpis comparison-kpis">
             <Kpi title={`${periodLabel(period)} — ${ar?'صافي الحالي':'Current net'}`} value={periodComplete('current')?money2(Number(currentMetrics?.subtotal||0),ar):'—'} trend={periodComplete('current')?windowText('current'):(ar?'جارٍ استكمال الفترة':'Importing period')} good icon={<Receipt size={22}/>} tone="blue"/>
             <Kpi title={ar?'صافي الفترة السابقة':'Previous period net'} value={periodComplete('previous')?money2(Number(previousMetrics?.subtotal||0),ar):'—'} trend={periodComplete('previous')?`${windowText('previous')} • ${pct(analytics.comparison.previous_change_percent,ar)}`:(ar?'جارٍ استكمال الفترة':'Importing period')} good={(analytics.comparison.previous_change_percent||0)>=0} icon={<Clock3 size={22}/>} tone="violet"/>
             <Kpi title={ar?'صافي الفترة اللاحقة':'Next period net'} value={periodComplete('next')?money2(Number(nextMetrics?.subtotal||0),ar):'—'} trend={periodComplete('next')?`${windowText('next')} • ${pct(analytics.comparison.next_change_percent,ar)}`:(ar?'جارٍ استكمال الفترة':'Importing period')} good={(analytics.comparison.next_change_percent||0)>=0} icon={<Clock3 size={22}/>} tone="green"/>
             <Kpi title={ar?'نفس الفترة من 2025':'Same period in 2025'} value={periodComplete('prior_year')?money2(Number(priorYearMetrics?.subtotal||0),ar):'—'} trend={periodComplete('prior_year')?`${windowText('prior_year')} • ${pct(analytics.comparison.prior_year_change_percent,ar)}`:(ar?'جارٍ استكمال تاريخ 2025':'Importing 2025 history')} good={(analytics.comparison.prior_year_change_percent||0)>=0} icon={<Clock3 size={22}/>} tone="amber"/>
           </div>
-          <div style={{padding:'2px 14px 16px',display:'grid',gap:10}}>
+          <div className="comparison-bars">
             {[
               {label:ar?'صافي الحالي':'Current net',value:metricNet('current',currentMetrics),complete:periodComplete('current'),color:'#2563eb'},
               {label:ar?'صافي الفترة السابقة':'Previous net',value:metricNet('previous',previousMetrics),complete:periodComplete('previous'),color:'#7c3aed'},
               {label:ar?'صافي الفترة اللاحقة':'Next net',value:metricNet('next',nextMetrics),complete:periodComplete('next'),color:'#16a34a'},
               {label:ar?'صافي 2025':'2025 net',value:metricNet('prior_year',priorYearMetrics),complete:periodComplete('prior_year'),color:'#d97706'},
-            ].map(item=><div key={item.label} style={{display:'grid',gridTemplateColumns:'minmax(90px,150px) 1fr minmax(100px,150px)',gap:10,alignItems:'center',fontSize:13}}>
-              <span>{item.label}</span><div style={{height:18,borderRadius:5,background:'#e5e7eb',overflow:'hidden'}}><div style={{height:'100%',width:`${Math.max(item.value?2:0,item.value/comparisonMax*100)}%`,background:item.color}}/></div><b>{item.complete?money2(item.value,ar):'—'}</b>
+            ].map(item=><div className="comparison-bar" key={item.label}>
+              <span>{item.label}</span><div className="comparison-bar-track"><i style={{width:`${Math.max(item.value?2:0,item.value/comparisonMax*100)}%`,background:item.color}}/></div><b>{item.complete?money2(item.value,ar):'—'}</b>
             </div>)}
           </div>
           <DataTable headers={[ar?'المقياس':'Metric',ar?'الحالي':'Current',ar?'الفترة السابقة':'Previous',ar?'الفترة اللاحقة':'Next',ar?'2025':'2025']} rows={[
@@ -370,12 +372,12 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
           `${scopeLabel(x.sales_scope,ar)} — ${serviceLabel(x.service_mode,ar)}`,
           x.platform||x.customer||(ar?'عميل نقدي':'Walk-in'),
           money2(Number(x.subtotal),ar),money2(Number(x.vat),ar),money2(Number(x.total),ar),
-          <button key={x.id} style={{...btn,padding:'6px 10px'}} onClick={()=>setSelectedOrder(x)}>{ar?'التفاصيل':'Details'}</button>,
+          <button key={x.id} className="table-action" onClick={()=>setSelectedOrder(x)}>{ar?'التفاصيل':'Details'}</button>,
         ])}/>
       </Panel>
 
       {selectedOrder&&<Panel title={ar?`تفاصيل الطلب ${selectedOrder.pos_reference||selectedOrder.order_name}`:`Order details ${selectedOrder.pos_reference||selectedOrder.order_name}`} icon={<Receipt size={18}/>}>
-        <div style={{padding:12,fontSize:13,lineHeight:1.9}}>
+        <div className="panel-intro order-summary">
           {ar?'الفرع':'Branch'}: <b>{selectedOrder.branch}</b> — {ar?'العميل':'Customer'}: <b>{selectedOrder.platform||selectedOrder.customer||(ar?'غير محدد في DGTERA':'Not set in DGTERA')}</b> — {ar?'الدفع':'Payments'}: <b>{selectedOrder.payments.map(x=>`${x.method} ${money2(Number(x.amount),ar)}`).join('، ')||'—'}</b>
         </div>
         <DataTable headers={[ar?'الكود':'Code',ar?'الصنف':'Product',ar?'الكمية':'Qty',ar?'سعر الوحدة':'Unit price',ar?'الخصم %':'Discount %',ar?'الصافي':'Net',ar?'الضريبة':'VAT',ar?'الإجمالي':'Total']} rows={selectedOrder.lines.map(x=>[x.code,x.product,money2(Number(x.quantity),ar),money2(Number(x.unit_price),ar),String(Number(x.discount_percent)),money2(Number(x.subtotal),ar),money2(Number(x.vat),ar),money2(Number(x.total),ar)])}/>
@@ -387,11 +389,11 @@ export function DgteraIntegrationPage({ar,companyId}:{ar:boolean;companyId:numbe
         ])}/>
       </Panel>
 
-      <div style={{padding:12,borderRadius:10,background:'#eff6ff',color:'#1e3a8a',fontSize:13,lineHeight:1.9}}>
+      <div className="system-banner info integration-policy-note">
         {ar
           ? 'الربط يقرأ المبيعات فقط ولا يسحب المخزون أو تكلفة البضاعة. بعد مطابقة اليوم دون أي فرق، ينشئ CORVAX قيدًا يوميًا واحدًا في شركة المطاعم: إجمالي مستحق، وصافي إيراد، وضريبة مخرجات. القابضة تعرض نفس المصدر دون قيد ثانٍ، وأي تعديل في DGTERA يعكس القيد السابق ويستبدله دون تكرار.'
           : 'The integration reads sales only and does not import inventory or COGS. After a day reconciles with zero difference, CORVAX creates one restaurant-company summary journal: gross receivable, net revenue and output VAT. The holding workspace displays the same source without a second journal; a DGTERA correction reverses and replaces the prior journal without duplication.'}
       </div>
     </>}
-  </>;
+  </div>;
 }

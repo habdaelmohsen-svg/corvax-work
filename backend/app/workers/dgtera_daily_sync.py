@@ -23,6 +23,7 @@ from app.services.dgtera_sales_sync import (
     connection_is_due,
     historical_recheck_window,
     historical_backfill_window,
+    repair_pending_accounting_journals,
     sync_connection,
 )
 from app.core.time import utc_now
@@ -51,6 +52,25 @@ def run_due_syncs() -> None:
             connection = db.get(DgteraConnection, connection_id)
             if not connection:
                 continue
+            # Ledger repair is independent from the remote read. A verified
+            # mirror day can therefore reach restaurant revenue even when the
+            # next DGTERA poll is not due or the source is temporarily offline.
+            try:
+                repair = repair_pending_accounting_journals(
+                    db, connection, connection.created_by, limit=HISTORY_CHUNKS_PER_CYCLE,
+                )
+                if repair["attempted"]:
+                    logger.info(
+                        "DGTERA pending accounting repair processed",
+                        extra={"connection_id": connection.id, "result": repair},
+                    )
+            except Exception:  # noqa: BLE001 - keep source synchronization alive
+                db.rollback()
+                logger.exception(
+                    "DGTERA pending accounting repair scheduler failure",
+                    extra={"connection_id": connection.id},
+                )
+            connection = db.get(DgteraConnection, connection_id)
             # One scheduler cycle is one serialized queue: current day first,
             # then at most one historical day.  The former implementation ran
             # current, changed-history, four backfill days and a rolling audit
