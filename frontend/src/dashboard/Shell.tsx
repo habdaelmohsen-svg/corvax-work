@@ -51,7 +51,7 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   const {menuOpen, darkMode, setMenuOpen, toggleTheme} = useDashboardUi();
   const [apiOnline, setApiOnline] = useState(false);
   const [apiVersion, setApiVersion] = useState('1.0.0-agreement-completion-rc27.4-r9.4');
-  const [releaseId, setReleaseId] = useState('CORVAX-RC27.4-R9.4-DGTERA-V13-20260820');
+  const [releaseId, setReleaseId] = useState('CORVAX-RC27.4-R9.4-DGTERA-V14-20260820');
   const [buildCommit, setBuildCommit] = useState('loading');
   const [globalQuery,setGlobalQuery]=useState('');
   const [navigationNotice, setNavigationNotice] = useState('');
