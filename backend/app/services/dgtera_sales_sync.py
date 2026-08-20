@@ -1,10 +1,12 @@
 """Automatic, idempotent DGTERA sales mirroring."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
 import re
+import zlib
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from threading import Lock
@@ -123,7 +125,13 @@ def _is_transient_operational_error(exc: OperationalError) -> bool:
         "connection refused",
         "connection is closed",
         "connection has been closed",
+        "connection not open",
         "server closed the connection",
+        "ssl connection has been closed",
+        "ssl error",
+        "unexpected eof",
+        "consuming input failed",
+        "could not receive data from server",
         "terminating connection",
         "timeout expired",
         "remaining connection slots",
@@ -393,6 +401,24 @@ def _generated_code(prefix: str, external_id: str, maximum: int) -> str:
 
 def _normalized_name(value: str) -> str:
     return re.sub(r"[^\w\u0600-\u06ff]+", "", (value or "").casefold())
+
+
+def _encode_source_payload(source: dict) -> str:
+    """Keep complete immutable source evidence compact before encryption."""
+    raw = json.dumps(
+        source, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return "zlib:v1:" + base64.b64encode(zlib.compress(raw, level=6)).decode("ascii")
+
+
+def _decode_source_payload(value: object) -> dict:
+    text = str(value or "")
+    if text.startswith("zlib:v1:"):
+        text = zlib.decompress(base64.b64decode(text[8:])).decode("utf-8")
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("payload is not an object")
+    return payload
 
 
 def _upsert_branch(
@@ -697,7 +723,11 @@ def _apply_order(
     order.discount_amount = money(source.get("discount_amount"))
     order.line_total_difference = money(source.get("line_total_difference"))
     order.source_hash = str(source["source_hash"])
-    order.source_payload = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    # Preserve the complete immutable source evidence, but compress it before
+    # field encryption.  A 500-order day previously duplicated megabytes of
+    # nested JSON in one PostgreSQL transaction and repeatedly lost the
+    # managed connection during ``mirror_apply``.
+    order.source_payload = _encode_source_payload(source)
     order.source_updated_at = _source_datetime(source.get("source_updated_at"))
     order.imported_at = utc_now()
 
@@ -1149,9 +1179,7 @@ def strict_persisted_reconciliation(
     payload_errors: list[str] = []
     for row in rows:
         try:
-            payload = json.loads(str(row.source_payload))
-            if not isinstance(payload, dict):
-                raise ValueError("payload is not an object")
+            payload = _decode_source_payload(row.source_payload)
             source_orders.append(payload)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             payload_errors.append(f"order[{row.external_order_id}]: {type(exc).__name__}")
@@ -1544,8 +1572,15 @@ def _sync_unlocked(
         if stale_ids:
             removed = len(stale_ids)
             db.execute(delete(DgteraSalesOrder).where(DgteraSalesOrder.id.in_(stale_ids)))
-        for source in source_orders:
+        for order_index, source in enumerate(source_orders, start=1):
             counts[_apply_order(db, connection, source, caches)] += 1
+            # Bound each PostgreSQL INSERT batch and keep the managed
+            # connection active.  The transaction remains atomic: any later
+            # failure still rolls the complete DGTERA business day back.
+            if order_index % 100 == 0:
+                phase = f"mirror_apply_batch_{order_index}"
+                db.flush()
+                phase = "mirror_apply"
         db.flush()
         phase = "strict_reconciliation"
         reconciliation = _strict_reconciliation(

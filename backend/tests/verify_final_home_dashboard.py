@@ -15,6 +15,7 @@ ROUTES = (ROOT / "frontend/src/dashboard/routes.tsx").read_text(encoding="utf-8"
 SHELL = (ROOT / "frontend/src/dashboard/Shell.tsx").read_text(encoding="utf-8")
 UI = (ROOT / "frontend/src/dashboard/ui.tsx").read_text(encoding="utf-8")
 DGTERA_PAGE = (ROOT / "frontend/src/dashboard/dgteraIntegrationPage.tsx").read_text(encoding="utf-8")
+REPORTS_CENTER = (ROOT / "frontend/src/dashboard/reportsCenterPage.tsx").read_text(encoding="utf-8")
 DGTERA_API = (ROOT / "backend/app/api/dgtera_integration.py").read_text(encoding="utf-8")
 CONFIG = (ROOT / "backend/app/core/config.py").read_text(encoding="utf-8")
 
@@ -66,6 +67,11 @@ assert "reportComplete?" in DGTERA_PAGE and "Totals are hidden until every day i
 assert "Strict 100% reconciliation" in DGTERA_PAGE and "verification_hash" in DGTERA_PAGE
 assert "setInterval(()=>load().catch(rejectStale),120000)" in DGTERA_PAGE
 assert "setSnapshot(null);setAnalytics(null)" in DGTERA_PAGE
+assert "rangeDays<=32" in REPORTS_CENTER
+assert "'/api/v1/integrations/dgtera/sync'" in REPORTS_CENTER
+assert "sync.strict_reconciled!==true" in REPORTS_CENTER
+assert "120000" in REPORTS_CENTER
+assert "Request timed out after" in REPORTS_CENTER
 
 quick_actions = [line for line in EXECUTIVE.splitlines() if "<QuickAction " in line]
 assert len(quick_actions) == 8
@@ -83,7 +89,7 @@ assert 'className="navigation-notice" role="alert"' in SHELL
 assert "/api/v1/system/release" in SHELL
 assert "version-line version-full" in SHELL
 assert all(field in SHELL for field in ("apiVersion", "releaseId", "buildCommit"))
-assert "CORVAX-RC27.4-R9.4-DGTERA-V11-20260820" in CONFIG
+assert "CORVAX-RC27.4-R9.4-DGTERA-V13-20260820" in CONFIG
 
 target_values = set(re.findall(r": '([A-Za-z]+)',", TARGETS))
 route_keys = set(re.findall(r"\s+([A-Za-z]+):<", ROUTES))

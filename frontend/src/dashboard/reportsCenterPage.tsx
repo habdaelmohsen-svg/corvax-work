@@ -12,10 +12,23 @@ import {printBusinessDocument} from './printDocument';
 import {ReportBuilderTab} from './reportBuilderTab';
 import {Kpi, Panel, fmt} from './ui';
 
-async function json(url:string,init?:RequestInit){
-  const response=await apiFetch(url,init);const payload=await response.json().catch(()=>({}));
-  if(!response.ok)throw new Error(typeof payload.detail==='string'?payload.detail:JSON.stringify(payload.detail||payload));
-  return payload;
+async function json(url:string,init?:RequestInit,timeoutMs=30000){
+  const controller=new AbortController();
+  const timer=window.setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    const response=await apiFetch(url,{...(init||{}),signal:controller.signal});
+    const raw=await response.text();
+    let payload:any={};
+    try{payload=raw?JSON.parse(raw):{}}catch{payload={detail:raw.trim()||`HTTP ${response.status}`}}
+    if(!response.ok){
+      const detail=typeof payload.detail==='string'?payload.detail:JSON.stringify(payload.detail||payload);
+      throw new Error(detail&&detail!=='{}'?detail:`Request failed with HTTP ${response.status}`);
+    }
+    return payload;
+  }catch(error:any){
+    if(controller.signal.aborted)throw new Error(`Request timed out after ${timeoutMs/1000} seconds`);
+    throw error;
+  }finally{window.clearTimeout(timer)}
 }
 
 const btn={padding:'9px 16px',borderRadius:9,border:'none',background:'var(--accent, #1e40af)',color:'#fff',cursor:'pointer',fontWeight:600} as const;
@@ -110,6 +123,17 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
         R.push({[H[0]]:ar?'الإجمالي':'Total',[H[1]]:fmt(Number(statement.total_debit||0)),[H[2]]:fmt(Number(statement.total_credit||0))});
         K=R.map((_,index)=>index===R.length-1?'total':'line');
       }else if(rep.key==='dgtera_sales'){
+        const rangeDays=Math.floor((new Date(`${end}T00:00:00Z`).getTime()-new Date(`${start}T00:00:00Z`).getTime())/86400000)+1;
+        if(rangeDays<1)throw new Error(ar?'تاريخ النهاية لا يمكن أن يسبق تاريخ البداية.':'End date cannot be before start date.');
+        if(rangeDays<=32){
+          const sync=await json('/api/v1/integrations/dgtera/sync',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({company_id:companyId,start_date:start,end_date:end}),
+          },120000);
+          if(sync.strict_reconciled!==true){
+            throw new Error(ar?'لم تجتز الفترة المطابقة الصارمة مع DGTERA.':'The period did not pass strict DGTERA reconciliation.');
+          }
+        }
         const query=new URLSearchParams({company_id:String(companyId),start_date:start,end_date:end});
         const data=await json(`/api/v1/integrations/dgtera/range-comparison?${query.toString()}`);
         const current=data?.metrics?.current;
@@ -117,8 +141,8 @@ export function ReportsCenterPage({ar,companyId}:{ar:boolean;companyId:number}){
           const firstMissing=data?.coverage?.current?.first_missing_date||'—';
           const progress=data?.history?.progress_percent??0;
           throw new Error(ar
-            ? `الفترة غير مكتملة المطابقة مع DGTERA. أول يوم غير مكتمل: ${firstMissing} — تقدم التاريخ: ${progress}%`
-            : `The range is not fully reconciled with DGTERA. First missing day: ${firstMissing} — history progress: ${progress}%`);
+            ? `الفترة غير مكتملة المطابقة مع DGTERA. أول يوم غير مكتمل: ${firstMissing} — تقدم التاريخ: ${progress}%${rangeDays>32?' — اختر فترة لا تتجاوز 32 يومًا للقراءة المباشرة، أو انتظر اكتمال الاستيراد التاريخي.':''}`
+            : `The range is not fully reconciled with DGTERA. First missing day: ${firstMissing} — history progress: ${progress}%${rangeDays>32?' — select up to 32 days for a fresh source read, or wait for historical import to complete.':''}`);
         }
         const periods=comparisonPeriods(start,end);
         H=[ar?'المقياس':'Metric',ar?'الفترة الحالية':'Current period',ar?'الفترة السابقة':'Previous period',ar?'الفترة اللاحقة':'Next period',ar?'نفس الفترة 2025/العام السابق':'Same period prior year',ar?'الفرق عن السابقة':'Variance vs previous',ar?'نسبة التغير':'Variance %'];
