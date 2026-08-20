@@ -291,6 +291,48 @@ def _synchronize_range_strict(data: SyncRangeIn, user: User, db: Session):
     }
 
 
+@router.post("/refresh-current")
+def refresh_current_sales(
+    company_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Refresh today's authoritative DGTERA mirror from the executive home.
+
+    This is deliberately limited to the current source-report day and to users
+    with POS management permission.  A fresh, already-proven day is returned
+    from cache until the two-minute interval expires; page opens therefore do
+    not create an unbounded stream of expensive upstream reads.
+    """
+    ensure_permission(db, user, company_id, "pos.manage")
+    connection = _connection(db, company_id)
+    if not connection.active:
+        raise HTTPException(409, "DGTERA connection is inactive")
+    today = utc_now_aware().astimezone(ZoneInfo(connection.timezone)).date()
+    coverage = dgtera_sales_sync.strict_range_coverage_status(db, connection, today, today)
+    if coverage["complete"] and not dgtera_sales_sync.connection_is_due(connection):
+        return {
+            "refreshed": False,
+            "reason": "CURRENT_DAY_ALREADY_VERIFIED",
+            "sales_date": today,
+            "last_sync_at": connection.last_sync_at,
+        }
+    try:
+        result = dgtera_sales_sync.sync_connection(db, connection, today, today, user.id)
+    except dgtera_sales_sync.DgteraSyncBusy as exc:
+        raise HTTPException(409, "DGTERA synchronization is already running; retry shortly") from exc
+    except (DgteraRemoteError, ValueError, dgtera_sales_sync.DgteraReconciliationError) as exc:
+        raise HTTPException(502, f"DGTERA current-day refresh failed safely: {exc}") from exc
+    return {
+        "refreshed": True,
+        "sales_date": today,
+        "strict_reconciled": bool(result.get("strict_reconciled")),
+        "source_orders": int(result.get("source_orders") or 0),
+        "source_total": money(result.get("source_total")),
+        "verification_hash": result.get("verification_hash"),
+    }
+
+
 def _date_window(row: DgteraConnection, start_date: date | None, end_date: date | None) -> tuple[date, date]:
     today = utc_now_aware().astimezone(ZoneInfo(row.timezone)).date()
     start = start_date or today
@@ -987,6 +1029,8 @@ def executive_summary(
         "as_of_date": as_of,
         "timezone": connection.timezone,
         "periods": periods,
+        "connection": _connection_out(connection, company_id),
+        "proof_generation": dgtera_sales_sync.SOURCE_LOCAL_WINDOW_MARKER,
         "history": dgtera_sales_sync.historical_backfill_status(db, connection),
     }
 

@@ -818,6 +818,17 @@ def main() -> None:
             assert float(manual["source_total"]) == 230
             assert manual["verification_hash"]
 
+            # Opening the executive home may request a current-day refresh.
+            # A day proven inside the two-minute freshness window must be
+            # served without a redundant upstream read.
+            home_refresh = ok(client.post(
+                "/api/v1/integrations/dgtera/refresh-current?company_id=1",
+                headers=headers,
+            ))
+            assert home_refresh["refreshed"] is False
+            assert home_refresh["reason"] == "CURRENT_DAY_ALREADY_VERIFIED"
+            assert home_refresh["sales_date"] == sales_date.isoformat()
+
             snap = ok(client.get(
                 f"/api/v1/integrations/dgtera/snapshot?company_id=1&start_date={sales_date}&end_date={sales_date}",
                 headers=headers,
@@ -957,6 +968,9 @@ def main() -> None:
                 headers=headers,
             ))
             assert not holding_home["inherited"] and restaurant_home["inherited"]
+            assert holding_home["connection"]["connected"] is True
+            assert restaurant_home["connection"]["inherited"] is True
+            assert holding_home["proof_generation"] == SOURCE_LOCAL_WINDOW_MARKER
             assert holding_home["periods"] == restaurant_home["periods"]
             assert float(holding_home["periods"]["DAY"]["metrics"]["current"]["sales"]) == 230
             assert holding_home["periods"]["DAY"]["coverage"]["current"]["complete"] is True

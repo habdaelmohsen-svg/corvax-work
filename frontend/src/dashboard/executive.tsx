@@ -5,7 +5,8 @@ import {
   CircleDollarSign, ClipboardCheck, CreditCard, FileCheck2, FileText, Landmark,
   LayoutDashboard, ShieldCheck, ShoppingCart, Sparkles, TrendingUp, Users, WalletCards,
 } from 'lucide-react';
-import { AgeLine, AlertRow, Kpi, Panel, QuickAction, authHeaders, fmt } from './ui';
+import { apiFetch } from '../api/client';
+import { AgeLine, AlertRow, Kpi, Panel, QuickAction, fmt } from './ui';
 import { navigateFromExecutive, type ExecutiveNavigationKey } from './executiveNavigation';
 import type { View } from './types';
 
@@ -19,10 +20,11 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
      Fabricated figures are never rendered - unavailable values show an em dash. */
   const [live, setLive] = useState<any>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [dgteraRefreshState, setDgteraRefreshState] = useState<'idle' | 'refreshing' | 'failed'>('idle');
   useEffect(() => {
     let active = true;
     setLive(null); setLoadFailed(false);
-    const get = (url: string) => fetch(url, { headers: authHeaders() })
+    const get = (url: string) => apiFetch(url)
       .then((r) => (r.ok ? r.json() : null)).catch(() => null);
     const today = new Date().toISOString().slice(0, 10);
     const load = () => Promise.all([
@@ -33,19 +35,55 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
         companyId === 'holding' || companyId === 'restaurant'
           ? get(`/api/v1/integrations/dgtera/executive-summary?company_id=${apiCompanyId}`)
           : Promise.resolve(null),
+        companyId === 'holding' || companyId === 'restaurant'
+          ? get(`/api/v1/integrations/dgtera/status?company_id=${apiCompanyId}`)
+          : Promise.resolve(null),
         get(`/api/v1/subledgers/aging?company_id=${apiCompanyId}&ledger_type=AR&as_of_date=${today}`),
         get(`/api/v1/subledgers/aging?company_id=${apiCompanyId}&ledger_type=AP&as_of_date=${today}`),
         get(`/api/v1/inventory/stock-summary?company_id=${apiCompanyId}`),
         get(`/api/v1/governance/summary?company_id=${apiCompanyId}`),
       ]).then((results) => {
         if (!active) return;
-        const [statements, trialBalance, pos, gym, dgtera, arAging, apAging, inventory, governance] = results;
+        const [statements, trialBalance, pos, gym, dgtera, dgteraStatus, arAging, apAging, inventory, governance] = results;
         if (!results.some(Boolean)) { setLoadFailed(true); return; }
         setLoadFailed(false);
-        setLive({ statements, trialBalance, pos, gym, dgtera, arAging, apAging, inventory, governance });
+        setLive({ statements, trialBalance, pos, gym, dgtera, dgteraStatus, arAging, apAging, inventory, governance });
       });
-    load();
-    const timer = window.setInterval(load, 120000);
+    const canManageDgtera = (() => {
+      try {
+        const user = JSON.parse(localStorage.getItem('corvax_user') || '{}');
+        const byCompany = user?.permissions_by_company || {};
+        const permissions = byCompany[String(apiCompanyId)] || byCompany[apiCompanyId] || [];
+        return Array.isArray(permissions) && (
+          permissions.includes('*') || permissions.includes('pos.manage')
+        );
+      } catch { return false; }
+    })();
+    const refreshCurrent = async () => {
+      if (!canManageDgtera || (companyId !== 'holding' && companyId !== 'restaurant')) return;
+      if (active) setDgteraRefreshState('refreshing');
+      try {
+        const response = await apiFetch(
+          `/api/v1/integrations/dgtera/refresh-current?company_id=${apiCompanyId}`,
+          {method: 'POST'},
+        );
+        if (!active) return;
+        if (response.ok || response.status === 409) {
+          setDgteraRefreshState('idle');
+          await load();
+        } else {
+          setDgteraRefreshState('failed');
+        }
+      } catch {
+        if (active) setDgteraRefreshState('failed');
+      }
+    };
+    const cycle = async () => {
+      await load();
+      await refreshCurrent();
+    };
+    void cycle();
+    const timer = window.setInterval(() => { void cycle(); }, 120000);
     return () => { active = false; window.clearInterval(timer); };
   }, [apiCompanyId, companyId]);
 
@@ -160,6 +198,15 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
   const cashBarMax = Math.max(1, ...cashBars.map((item) => Math.abs(item.value ?? 0)));
   const dgteraYear = live?.dgtera?.periods?.YEAR?.metrics?.current;
   const dgteraYearComplete = live?.dgtera?.periods?.YEAR?.coverage?.current?.complete === true;
+  const dgteraStatus = live?.dgtera?.connection ?? live?.dgteraStatus ?? null;
+  const dgteraHistory = live?.dgtera?.history ?? dgteraStatus?.history ?? null;
+  const dgteraDay = live?.dgtera?.periods?.DAY ?? null;
+  const dgteraDayComplete = dgteraDay?.coverage?.current?.complete === true;
+  const dgteraDayMetrics = dgteraDayComplete ? dgteraDay?.metrics?.current : null;
+  const dgteraLastVerified = dgteraDay?.reconciliation?.last_verified_at
+    ?? dgteraDay?.coverage?.current?.last_verified_at
+    ?? dgteraStatus?.last_sync_at
+    ?? null;
 
   const kpis: Array<[string, string | number, string, boolean, string, ExecutiveNavigationKey]> = companyId === 'gym'
     ? [[ar?'الأعضاء النشطون':'Active members', live?.gym?.active_members ?? dash, '', true, 'blue', 'gymMembers'],
@@ -204,11 +251,9 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
 
     {showDgteraHome && <>
       <div className="kpi-source-note">
-        {live?.dgtera
-          ? (live.dgtera.history?.completed
-            ? (ar ? 'صافي مبيعات DGTERA دون الضريبة — تظهر في القابضة وشركة المطاعم من نفس السجل دون تكرار.' : 'DGTERA net sales excluding VAT — shared by holding and restaurant from one non-duplicated record set.')
-            : (ar ? 'جارٍ استكمال تاريخ DGTERA؛ أُخفيت الأرقام الجزئية حتى تصبح الفترة كاملة ومطابقة.' : 'DGTERA history is being completed; partial figures are hidden until the period is complete and reconciled.'))
-          : (ar ? 'مبيعات DGTERA غير متاحة حاليًا؛ افتح بطاقة المبيعات لمراجعة حالة الربط.' : 'DGTERA sales are currently unavailable; open a sales card to review the connection.')}
+        {dgteraDayComplete
+          ? (ar ? 'مبيعات DGTERA لليوم مطابقة من المصدر؛ القابضة والمطاعم تقرآن نفس السجل دون تكرار.' : 'Today\'s DGTERA sales are source-reconciled; holding and restaurant read one non-duplicated record set.')
+          : (ar ? 'لن تظهر أرقام غير مكتملة: يجري تحديث DGTERA وإثبات المطابقة تلقائيًا في هذه الصفحة.' : 'Incomplete figures are never shown: DGTERA refresh and proof run automatically on this page.')}
       </div>
       <div className="kpis executive-kpis dgtera-home-kpis">{dgteraCards.map((card) => {
         const period = live?.dgtera?.periods?.[card.key];
@@ -223,6 +268,35 @@ export function ExecutivePage({ ar, companyId, apiCompanyId, onNavigate }: {
           onClick={()=>go(card.target)}
         />;
       })}</div>
+      <div className={`dgtera-home-verification ${dgteraDayComplete ? 'matched' : 'pending'}`} role="status">
+        <div className="dgtera-verification-head">
+          <div>
+            <strong>{ar ? 'تفاصيل ربط ومطابقة المبيعات' : 'Sales connection and reconciliation details'}</strong>
+            <span>{dgteraDayComplete
+              ? (ar ? 'مطابقة صارمة 100% لليوم — صافي + ضريبة = إجمالي' : 'Strict 100% current-day match — net + VAT = gross')
+              : dgteraRefreshState === 'refreshing'
+                ? (ar ? 'يتم الآن قراءة مبيعات اليوم من DGTERA والتحقق منها' : 'Reading and verifying today\'s DGTERA sales now')
+                : (ar ? 'المبيعات محجوبة لحين اكتمال إثبات المصدر دون أي فرق' : 'Sales remain hidden until zero-difference source proof completes')}
+            </span>
+          </div>
+          <b>{dgteraDayComplete ? (ar ? 'مطابق' : 'MATCHED') : (ar ? 'قيد التحقق' : 'VERIFYING')}</b>
+        </div>
+        <div className="dgtera-verification-meta">
+          <div><span>{ar ? 'الاتصال' : 'Connection'}</span><strong>{dgteraStatus?.connected ? (ar ? 'متصل' : 'Connected') : (ar ? 'غير متصل' : 'Offline')}</strong></div>
+          <div><span>{ar ? 'تاريخ المبيعات' : 'Sales date'}</span><strong>{live?.dgtera?.as_of_date ?? dash}</strong></div>
+          <div><span>{ar ? 'آخر تحقق' : 'Last verified'}</span><strong>{dgteraLastVerified ? String(dgteraLastVerified).replace('T', ' ').slice(0, 19) : dash}</strong></div>
+          <div><span>{ar ? 'استيراد التاريخ' : 'History import'}</span><strong>{dgteraHistory ? `${dgteraHistory.progress_percent}%` : dash}</strong></div>
+          <div><span>{ar ? 'منذ' : 'History from'}</span><strong>{dgteraHistory?.earliest_imported_date ?? dash}</strong></div>
+          <div><span>{ar ? 'مصدر السجل' : 'Record source'}</span><strong>{live?.dgtera?.inherited ? (ar ? 'شركة المطاعم — مرآة للقابضة' : 'Restaurant — holding mirror') : 'DGTERA'}</strong></div>
+        </div>
+        <div className="dgtera-today-breakdown">
+          <div><span>{ar ? 'صافي اليوم' : 'Today net'}</span><strong>{num(dgteraDayMetrics?.subtotal)}</strong><small>SAR</small></div>
+          <div><span>{ar ? 'ضريبة اليوم' : 'Today VAT'}</span><strong>{num(dgteraDayMetrics?.vat)}</strong><small>SAR</small></div>
+          <div><span>{ar ? 'إجمالي اليوم' : 'Today gross'}</span><strong>{num(dgteraDayMetrics?.sales)}</strong><small>SAR</small></div>
+          <div><span>{ar ? 'عدد الطلبات' : 'Orders'}</span><strong>{num(dgteraDayMetrics?.orders)}</strong><small>{ar ? 'طلب' : 'orders'}</small></div>
+        </div>
+        {dgteraRefreshState === 'failed' && <div className="dgtera-refresh-warning">{ar ? 'تعذر التحديث المباشر الآن؛ تُعرض فقط آخر أرقام مثبتة ولن تُستخدم أرقام جزئية.' : 'Live refresh failed; only proven figures are eligible and partial values remain hidden.'}</div>}
+      </div>
     </>}
 
     <div className="executive-main-grid">

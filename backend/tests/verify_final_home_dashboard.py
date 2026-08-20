@@ -15,6 +15,8 @@ ROUTES = (ROOT / "frontend/src/dashboard/routes.tsx").read_text(encoding="utf-8"
 SHELL = (ROOT / "frontend/src/dashboard/Shell.tsx").read_text(encoding="utf-8")
 UI = (ROOT / "frontend/src/dashboard/ui.tsx").read_text(encoding="utf-8")
 DGTERA_PAGE = (ROOT / "frontend/src/dashboard/dgteraIntegrationPage.tsx").read_text(encoding="utf-8")
+DGTERA_API = (ROOT / "backend/app/api/dgtera_integration.py").read_text(encoding="utf-8")
+CONFIG = (ROOT / "backend/app/core/config.py").read_text(encoding="utf-8")
 
 
 for forbidden in (
@@ -49,6 +51,16 @@ assert "dataQuality" in EXECUTIVE and "controlEffectiveness" in EXECUTIVE
 assert all(label in EXECUTIVE for label in ("صافي مبيعات اليوم", "صافي مبيعات الأسبوع", "صافي مبيعات الشهر", "صافي مبيعات السنة"))
 assert "metrics?.current?.subtotal" in EXECUTIVE
 assert "إجمالي الإيرادات (صافي)" in EXECUTIVE
+assert "/api/v1/integrations/dgtera/status" in EXECUTIVE
+assert "/api/v1/integrations/dgtera/refresh-current" in EXECUTIVE
+assert "dgtera-home-verification" in EXECUTIVE
+assert all(label in EXECUTIVE for label in ("صافي اليوم", "ضريبة اليوم", "إجمالي اليوم", "آخر تحقق", "استيراد التاريخ"))
+assert 'permissions.includes("pos.manage")' not in EXECUTIVE  # guard quote-style drift below
+assert "permissions.includes('pos.manage')" in EXECUTIVE
+assert '@router.post("/refresh-current")' in DGTERA_API
+assert 'ensure_permission(db, user, company_id, "pos.manage")' in DGTERA_API
+assert "connection_is_due(connection)" in DGTERA_API
+assert '"proof_generation"' in DGTERA_API
 assert all(target in TARGETS for target in ("dgteraDailySales", "dgteraWeeklySales", "dgteraMonthlySales", "dgteraYearlySales"))
 assert "عرض المبيعات" in DGTERA_PAGE and "setAppliedFilters" in DGTERA_PAGE
 assert "reportComplete?" in DGTERA_PAGE and "Totals are hidden until every day is covered" in DGTERA_PAGE
@@ -69,6 +81,10 @@ assert "onNavigate: (view: View) => void" in ROUTES
 assert "onNavigate={selectView}" in SHELL
 assert "availableNav.some((item) => item.key === next)" in SHELL
 assert 'className="navigation-notice" role="alert"' in SHELL
+assert "/api/v1/system/release" in SHELL
+assert "version-line version-full" in SHELL
+assert all(field in SHELL for field in ("apiVersion", "releaseId", "buildCommit"))
+assert "CORVAX-RC27.4-R9.4-DGTERA-V11-20260820" in CONFIG
 
 target_values = set(re.findall(r": '([A-Za-z]+)',", TARGETS))
 route_keys = set(re.findall(r"\s+([A-Za-z]+):<", ROUTES))
