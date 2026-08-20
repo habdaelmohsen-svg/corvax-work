@@ -50,7 +50,9 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   }, []);
   const {menuOpen, darkMode, setMenuOpen, toggleTheme} = useDashboardUi();
   const [apiOnline, setApiOnline] = useState(false);
-  const [apiVersion, setApiVersion] = useState('RC27.4 · R9.4');
+  const [apiVersion, setApiVersion] = useState('1.0.0-agreement-completion-rc27.4-r9.4');
+  const [releaseId, setReleaseId] = useState('CORVAX-RC27.4-R9.4-DGTERA-V11-20260820');
+  const [buildCommit, setBuildCommit] = useState('loading');
   const [globalQuery,setGlobalQuery]=useState('');
   const [navigationNotice, setNavigationNotice] = useState('');
   const company = useMemo(() => JSON.parse(localStorage.getItem('corvax_company') || '{}'), []);
@@ -96,13 +98,17 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   }, []);
 
   useEffect(() => {
-    apiFetch('/api/v1/modules/summary')
-      .then(async(response) => {
-        setApiOnline(response.ok);
-        if(response.ok){
-          const payload=await response.json().catch(()=>({}));
-          const match=String(payload.version||'').match(/rc(\d+\.\d+)-r(\d+\.\d+)$/i);
-          if(match)setApiVersion(`RC${match[1]} · R${match[2]}`);
+    Promise.all([
+      apiFetch('/api/v1/modules/summary'),
+      apiFetch('/api/v1/system/release'),
+    ])
+      .then(async([modulesResponse, releaseResponse]) => {
+        setApiOnline(modulesResponse.ok && releaseResponse.ok);
+        if (releaseResponse.ok) {
+          const payload = await releaseResponse.json().catch(() => ({}));
+          if (payload.version) setApiVersion(String(payload.version));
+          if (payload.release_id) setReleaseId(String(payload.release_id));
+          if (payload.commit) setBuildCommit(String(payload.commit).slice(0, 12));
         }
       })
       .catch(() => setApiOnline(false));
@@ -198,7 +204,12 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
           <div><strong>{userName}</strong><span>{ar ? 'مستخدم معتمد' : 'Authorized user'}</span></div>
           <button className="logout-icon" onClick={onLogout} title={ar ? 'تسجيل الخروج' : 'Logout'}><LogOut size={17}/></button>
         </div>
-        <div className="version-line"><span>© 2026 CORVAX</span><b>{apiVersion}</b></div>
+        <div className="version-line version-full" title={`${apiVersion} · ${releaseId} · ${buildCommit}`}>
+          <strong>{apiVersion}</strong>
+          <small>{releaseId}</small>
+          <small>Commit: {buildCommit}</small>
+          <span>© 2026 CORVAX</span>
+        </div>
       </div>
     </aside>
 

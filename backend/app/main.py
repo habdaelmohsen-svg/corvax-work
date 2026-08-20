@@ -205,13 +205,20 @@ def health() -> dict[str, str]:
         "status": "ok",
         "app": settings.app_name,
         "version": settings.app_version,
+        "release_id": settings.release_id,
+        "commit": settings.render_git_commit,
         "environment": settings.environment,
     }
 
 
 @app.get("/health/live")
 def liveness() -> dict[str, str]:
-    return {"status": "alive", "version": settings.app_version}
+    return {
+        "status": "alive",
+        "version": settings.app_version,
+        "release_id": settings.release_id,
+        "commit": settings.render_git_commit,
+    }
 
 
 @app.get("/health/ready")
@@ -233,6 +240,8 @@ def readiness() -> dict:
     return {
         "status": "ready",
         "version": settings.app_version,
+        "release_id": settings.release_id,
+        "commit": settings.render_git_commit,
         "environment": settings.environment,
         "database": "reachable",
         "migration_head": current_head,
@@ -263,6 +272,8 @@ def release_information() -> dict:
     return {
         "product": settings.app_name,
         "version": settings.app_version,
+        "release_id": settings.release_id,
+        "commit": settings.render_git_commit,
         "stage": "FINAL_INTERNAL_RELEASE",
         "database_schema_head": expected_migration_head(),
         "production_claim": "INTERNAL_SCOPE_COMPLETE_WITH_EXTERNAL_CREDENTIALS_AND_SIGNED_PRODUCTION_EVIDENCE_PENDING",
