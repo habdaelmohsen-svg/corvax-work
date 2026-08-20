@@ -12,7 +12,7 @@ from decimal import Decimal
 from threading import Lock
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, defer, selectinload
 
@@ -63,7 +63,7 @@ HISTORY_RECHECK_INTERVAL_HOURS = 24
 # recovery, but they are never exposed as current live-source proof.
 SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v10"
 DGTERA_JOURNAL_REFERENCE_PREFIX = "DGTERA-SALES"
-SYNC_RUN_HISTORY_LIMIT = 200
+SYNC_RUN_HISTORY_LIMIT = 20
 
 # DGTERA is authoritative for restaurant sales, but the holding company is a
 # read-only management mirror.  Posting only to the restaurant ledger avoids
@@ -107,6 +107,9 @@ def _prune_sync_run_history(db: Session, connection_id: int) -> int:
     if stale_ids:
         db.execute(delete(DgteraSyncRun).where(DgteraSyncRun.id.in_(stale_ids)))
         db.commit()
+        if db.bind and db.bind.dialect.name == "sqlite":
+            # Return committed WAL pages to the constrained runtime volume.
+            db.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
     return len(stale_ids)
 
 
