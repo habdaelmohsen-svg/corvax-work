@@ -197,6 +197,57 @@ class DgteraSalesPayment(Base):
     order = relationship("DgteraSalesOrder", back_populates="payments")
 
 
+class DgteraDailyProof(Base):
+    """Compact, durable proof for one DGTERA business day.
+
+    Operational sync runs are intentionally pruned on constrained deployments.
+    Financial reporting must never depend on that short-lived diagnostic log,
+    so the live-source totals and accounting state are retained here once per
+    connection and source-report date.
+    """
+
+    __tablename__ = "dgtera_daily_proofs"
+    __table_args__ = (
+        UniqueConstraint("connection_id", "sales_date", name="uq_dgtera_daily_proof_date"),
+        Index(
+            "ix_dgtera_daily_proofs_connection_generation_date",
+            "connection_id", "proof_generation", "sales_date", "strict_reconciled",
+        ),
+        Index(
+            "ix_dgtera_daily_proofs_accounting_queue",
+            "connection_id", "strict_reconciled", "accounting_status", "sales_date",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    connection_id = Column(Integer, ForeignKey("dgtera_connections.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    sales_date = Column(Date, nullable=False, index=True)
+    proof_generation = Column(String(100), nullable=False)
+    strict_reconciled = Column(Boolean, nullable=False, default=False, index=True)
+    source_orders = Column(Integer, nullable=False, default=0)
+    source_lines = Column(Integer, nullable=False, default=0)
+    source_payments = Column(Integer, nullable=False, default=0)
+    source_quantity = Column(Numeric(18, 4), nullable=False, default=0)
+    source_subtotal = Column(Numeric(18, 2), nullable=False, default=0)
+    source_vat = Column(Numeric(18, 2), nullable=False, default=0)
+    source_total = Column(Numeric(18, 2), nullable=False, default=0)
+    source_paid = Column(Numeric(18, 2), nullable=False, default=0)
+    source_return = Column(Numeric(18, 2), nullable=False, default=0)
+    source_discount = Column(Numeric(18, 2), nullable=False, default=0)
+    verification_hash = Column(String(64))
+    verified_at = Column(DateTime)
+    last_attempt_at = Column(DateTime, nullable=False, default=utc_now)
+    last_attempt_status = Column(String(30), nullable=False, default="PENDING", index=True)
+    last_error = Column(Text)
+    accounting_status = Column(String(30), nullable=False, default="PENDING", index=True)
+    accounting_journal_id = Column(Integer, ForeignKey("journal_entries.id", ondelete="SET NULL"), index=True)
+    accounting_error = Column(Text)
+    accounting_updated_at = Column(DateTime)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class DgteraSyncRun(Base):
     __tablename__ = "dgtera_sync_runs"
     __table_args__ = (

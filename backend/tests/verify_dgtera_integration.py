@@ -43,6 +43,7 @@ from app.models import (  # noqa: E402
     DgteraBranch,
     DgteraConnection,
     DgteraCustomer,
+    DgteraDailyProof,
     DgteraProduct,
     DgteraSalesOrder,
     DgteraSalesOrderLine,
@@ -71,8 +72,11 @@ from app.services.dgtera_sales_sync import (  # noqa: E402
     _decode_source_payload,
     _encode_source_payload,
     _is_transient_operational_error,
+    _prune_sync_run_history,
     historical_backfill_status,
     historical_backfill_window,
+    repair_pending_accounting_journals,
+    strict_range_coverage_status,
     sync_connection,
 )
 from app.workers.dgtera_daily_sync import (  # noqa: E402
@@ -125,6 +129,7 @@ def verify_scheduler_queue_serialization() -> None:
     with (
         patch.object(daily_worker, "SessionLocal", session_factory),
         patch.object(daily_worker, "connection_is_due", return_value=True),
+        patch.object(daily_worker, "repair_pending_accounting_journals", return_value={"attempted": 0}),
         patch.object(daily_worker, "catchup_window", return_value=(current_day, current_day)),
         patch.object(daily_worker, "sync_connection", sync),
         patch.object(daily_worker, "historical_backfill_window", side_effect=[
@@ -153,6 +158,7 @@ def verify_scheduler_queue_serialization() -> None:
     with (
         patch.object(daily_worker, "SessionLocal", session_factory),
         patch.object(daily_worker, "connection_is_due", return_value=True),
+        patch.object(daily_worker, "repair_pending_accounting_journals", return_value={"attempted": 0}),
         patch.object(daily_worker, "catchup_window", return_value=(current_day, current_day)),
         patch.object(daily_worker, "sync_connection", sync),
         patch.object(daily_worker, "historical_backfill_window", return_value=None),
@@ -587,7 +593,7 @@ def main() -> None:
     assert _is_transient_operational_error(managed_disconnect)
     assert str(DAY_START) == "00:00:00"
     assert str(DAY_END) == "23:59:59"
-    assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v10"
+    assert SOURCE_LOCAL_WINDOW_MARKER == "dgtera-source-date-line-report-strict-v11-durable"
     assert BRANCH_REPORT_ORDER_STATES == ("draft", "paid", "done", "invoiced")
     assert HISTORY_CHUNK_DAYS == 1
     assert HISTORY_CHUNKS_PER_CYCLE == 8
@@ -690,15 +696,6 @@ def main() -> None:
         with TestClient(app) as client:
             token = ok(client.post("/api/v1/auth/login", json={"email": "admin@corvaxplatform.com", "password": "Corvax@123"}))["access_token"]
             headers = {"Authorization": f"Bearer {token}"}
-            with SessionLocal() as db:
-                restaurant_period = db.scalar(select(FiscalPeriod).join(FiscalYear).where(
-                    FiscalYear.company_id == 3,
-                    FiscalPeriod.start_date <= sales_date,
-                    FiscalPeriod.end_date >= sales_date,
-                ))
-                assert restaurant_period
-                restaurant_period.status = "OPEN"
-                db.commit()
             secrets = ("private_odoo_database", "integration@example.invalid", "api-key-never-returned-12345")
             saved = ok(client.put(
                 "/api/v1/integrations/dgtera/connection",
@@ -729,6 +726,7 @@ def main() -> None:
                 assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 1
                 assert db.scalar(select(func.count(DgteraSalesOrderLine.id))) == 1
                 assert db.scalar(select(func.count(DgteraSalesPayment.id))) == 1
+                assert db.scalar(select(func.count(DgteraDailyProof.id))) == 1
                 assert db.scalar(select(func.count(DgteraBranch.id))) == 1
                 assert db.scalar(select(func.count(DgteraProduct.id))) == 1
                 assert db.scalar(select(func.count(DgteraCustomer.id))) == 1
@@ -754,6 +752,12 @@ def main() -> None:
                     "411010": (Decimal("0.00"), Decimal("100.00")),
                     "212010": (Decimal("0.00"), Decimal("15.00")),
                 }
+                restaurant_period = db.scalar(select(FiscalPeriod).join(FiscalYear).where(
+                    FiscalYear.company_id == 3,
+                    FiscalPeriod.start_date <= sales_date,
+                    FiscalPeriod.end_date >= sales_date,
+                ))
+                assert restaurant_period and restaurant_period.status == "OPEN"
                 order = db.scalar(select(DgteraSalesOrder))
                 assert order and order.sales_scope == "EXTERNAL" and order.service_mode == "DELIVERY"
                 assert str(order.source_payload).startswith("zlib:v1:")  # transparently decrypted by the ORM
@@ -866,22 +870,14 @@ def main() -> None:
             assert snap["product_sales"][0]["key"] == "Classic Burger"
             assert len(snap["orders"][0]["lines"]) == 1 and len(snap["orders"][0]["payments"]) == 1
 
-            # The accounting/history release advances the proof generation.
-            # A V9 row may contain valid pagination, but it has not traversed
-            # the V10 path that creates the idempotent historical journal and
-            # therefore cannot authorize a current financial value.
+            # Financial coverage is authorized by the durable proof generation,
+            # never by the short-lived diagnostic run log.
             with SessionLocal() as db:
-                proof_runs = db.scalars(select(DgteraSyncRun).where(
-                    DgteraSyncRun.start_date == sales_date,
-                    DgteraSyncRun.end_date == sales_date,
-                    DgteraSyncRun.window_label.like(f"%{SOURCE_LOCAL_WINDOW_MARKER}%"),
-                )).all()
-                assert proof_runs
-                for proof_run in proof_runs:
-                    proof_run.window_label = proof_run.window_label.replace(
-                        SOURCE_LOCAL_WINDOW_MARKER,
-                        "dgtera-source-date-line-report-strict-v9",
-                    )
+                durable_proof = db.scalar(select(DgteraDailyProof).where(
+                    DgteraDailyProof.sales_date == sales_date,
+                ))
+                assert durable_proof
+                durable_proof.proof_generation = "dgtera-source-date-line-report-strict-v9"
                 db.commit()
             legacy_untrusted = ok(client.get(
                 f"/api/v1/integrations/dgtera/snapshot?company_id=1&start_date={sales_date}&end_date={sales_date}",
@@ -890,16 +886,10 @@ def main() -> None:
             assert legacy_untrusted["trusted_sales"] is False
             assert legacy_untrusted["totals"] is None
             with SessionLocal() as db:
-                proof_runs = db.scalars(select(DgteraSyncRun).where(
-                    DgteraSyncRun.start_date == sales_date,
-                    DgteraSyncRun.end_date == sales_date,
-                    DgteraSyncRun.window_label.like("%strict-v9%"),
-                )).all()
-                for proof_run in proof_runs:
-                    proof_run.window_label = proof_run.window_label.replace(
-                        "dgtera-source-date-line-report-strict-v9",
-                        SOURCE_LOCAL_WINDOW_MARKER,
-                    )
+                durable_proof = db.scalar(select(DgteraDailyProof).where(
+                    DgteraDailyProof.sales_date == sales_date,
+                ))
+                durable_proof.proof_generation = SOURCE_LOCAL_WINDOW_MARKER
                 db.commit()
             analytics = ok(client.get(
                 f"/api/v1/integrations/dgtera/analytics?company_id=1&as_of_date={sales_date}&period=DAY",
@@ -917,12 +907,39 @@ def main() -> None:
                 headers=headers,
             ))
             assert connection_status["history"]["earliest_imported_date"] == sales_date.isoformat()
+            assert connection_status["proof"]["verified_days"] == 1
+            assert connection_status["accounting"]["posted_days"] == 1
             runs = ok(client.get("/api/v1/integrations/dgtera/sync-runs?company_id=1", headers=headers))
             assert len(runs) == 4 and all(row["status"] == "COMPLETED" for row in runs)
 
-            # A newer failed read invalidates the older green proof for that
-            # day.  CORVAX may retain the last atomic rows for recovery, but it
-            # must not expose their financial values as trusted sales.
+            # A verified day whose accounting state was lost is repaired from
+            # the immutable mirror payload without rereading DGTERA or adding
+            # a duplicate restaurant journal.
+            with SessionLocal() as db:
+                connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
+                durable_proof = db.scalar(select(DgteraDailyProof).where(
+                    DgteraDailyProof.sales_date == sales_date,
+                ))
+                durable_proof.accounting_status = "PENDING"
+                durable_proof.accounting_journal_id = None
+                db.commit()
+                repaired = repair_pending_accounting_journals(db, connection, 1)
+                assert repaired["repaired"] == 1 and repaired["remaining"] == 0
+                db.refresh(durable_proof)
+                assert durable_proof.accounting_status == "POSTED"
+                reversed_entry_ids = select(JournalEntry.reversed_entry_id).where(
+                    JournalEntry.reversed_entry_id.is_not(None)
+                )
+                assert db.scalar(select(func.count(JournalEntry.id)).where(
+                    JournalEntry.company_id == 3,
+                    JournalEntry.reference.like("DGTERA-SALES:%"),
+                    JournalEntry.status == "POSTED",
+                    JournalEntry.id.not_in(reversed_entry_ids),
+                )) == 1
+
+            # Diagnostic run retention no longer controls financial evidence.
+            # A transport/pagination log row cannot erase the last atomic,
+            # verified mirror; a real reconciliation mismatch still does.
             with SessionLocal() as db:
                 connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
                 failed_run = DgteraSyncRun(
@@ -939,16 +956,38 @@ def main() -> None:
                 db.add(failed_run)
                 db.commit()
                 failed_run_id = failed_run.id
-            untrusted = ok(client.get(
+            still_trusted = ok(client.get(
                 f"/api/v1/integrations/dgtera/snapshot?company_id=1&start_date={sales_date}&end_date={sales_date}",
                 headers=headers,
             ))
-            assert untrusted["trusted_sales"] is False
-            assert untrusted["totals"] is None and untrusted["orders"] == []
-            assert untrusted["reconciliation"]["matched"] is False
-            assert untrusted["coverage"]["complete"] is False
+            assert still_trusted["trusted_sales"] is True
+            assert float(still_trusted["totals"]["sales"]) == 230
+            assert still_trusted["reconciliation"]["matched"] is True
+            assert still_trusted["coverage"]["complete"] is True
             with SessionLocal() as db:
-                db.delete(db.get(DgteraSyncRun, failed_run_id))
+                connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
+                for index in range(25):
+                    db.add(DgteraSyncRun(
+                        connection_id=connection.id,
+                        company_id=connection.company_id,
+                        start_date=sales_date,
+                        end_date=sales_date,
+                        window_label=f"diagnostic-{index}",
+                        status="ERROR",
+                        completed_at=datetime.now(),
+                    ))
+                db.commit()
+                _prune_sync_run_history(db, connection.id)
+                assert db.scalar(select(func.count(DgteraSyncRun.id)).where(
+                    DgteraSyncRun.connection_id == connection.id,
+                )) <= 20
+                assert strict_range_coverage_status(
+                    db, connection, sales_date, sales_date,
+                )["complete"] is True
+                assert db.scalar(select(func.count(DgteraDailyProof.id))) == 1
+                retained_failed = db.get(DgteraSyncRun, failed_run_id)
+                if retained_failed:
+                    db.delete(retained_failed)
                 db.commit()
 
             # The holding owns one encrypted connection, while the restaurant
@@ -989,7 +1028,11 @@ def main() -> None:
             assert holding_home["periods"]["DAY"]["coverage"]["current"]["complete"] is True
             assert holding_home["periods"]["YEAR"]["coverage"]["current"]["complete"] is False
             restaurant_runs = ok(client.get("/api/v1/integrations/dgtera/sync-runs?company_id=3", headers=headers))
-            assert restaurant_runs == runs
+            holding_runs_after_prune = ok(client.get(
+                "/api/v1/integrations/dgtera/sync-runs?company_id=1", headers=headers,
+            ))
+            assert restaurant_runs == holding_runs_after_prune
+            assert len(restaurant_runs) <= 20
             with SessionLocal() as db:
                 assert db.scalar(select(func.count(DgteraConnection.id))) == 1
                 assert db.scalar(select(func.count(DgteraSalesOrder.id))) == 1
@@ -1151,6 +1194,57 @@ def main() -> None:
                 f"initial={first_elapsed:.2f}s idempotent={second_elapsed:.2f}s "
                 "net=200000.00 vat=30000.00 gross=230000.00"
             )
+
+            # Historical coverage is accounting coverage, not only an API
+            # archive.  A verified 2025 business day must create its missing
+            # fiscal year/month and post net revenue + VAT in the restaurant
+            # ledger without touching the holding ledger.
+            history_date = date(2025, 1, 2)
+            history_row = deepcopy(source)
+            history_row.update({
+                "order_id": "HISTORY-2025-0001",
+                "order_name": "Historical order 2025",
+                "pos_reference": "POS/HISTORY/2025/0001",
+                "sales_date": history_date.isoformat(),
+                "date_order_utc": f"{history_date.isoformat()} 09:30:00",
+                "date_order_local": f"{history_date.isoformat()} 12:30:00",
+                "source_updated_at": f"{history_date.isoformat()} 09:32:00",
+                "source_hash": "f" * 64,
+            })
+            history_row["lines"][0]["line_id"] = "HISTORY-LINE-2025-0001"
+            history_row["payments"][0]["payment_id"] = "HISTORY-PAY-2025-0001"
+            fake.source = history_row
+            fake.sales_date = history_date
+            with SessionLocal() as db:
+                connection = db.scalar(select(DgteraConnection).where(DgteraConnection.company_id == 1))
+                historical = sync_connection(db, connection, history_date, history_date, 1)
+                assert historical["inserted"] == 1 and historical["strict_reconciled"] is True
+                fiscal_year = db.scalar(select(FiscalYear).where(
+                    FiscalYear.company_id == 3,
+                    FiscalYear.start_date <= history_date,
+                    FiscalYear.end_date >= history_date,
+                ))
+                assert fiscal_year and fiscal_year.status == "OPEN"
+                historical_period = db.scalar(select(FiscalPeriod).where(
+                    FiscalPeriod.fiscal_year_id == fiscal_year.id,
+                    FiscalPeriod.start_date <= history_date,
+                    FiscalPeriod.end_date >= history_date,
+                ))
+                assert historical_period and historical_period.status == "OPEN"
+                history_journal = db.scalar(select(JournalEntry).where(
+                    JournalEntry.company_id == 3,
+                    JournalEntry.reference.like(
+                        f"DGTERA-SALES:{connection.id}:{history_date.isoformat()}:%"
+                    ),
+                ))
+                assert history_journal and history_journal.total_debit == Decimal("230.00")
+                assert history_journal.total_credit == Decimal("230.00")
+                assert db.scalar(select(func.count(JournalEntry.id)).where(
+                    JournalEntry.company_id == 1,
+                    JournalEntry.reference.like(
+                        f"DGTERA-SALES:{connection.id}:{history_date.isoformat()}:%"
+                    ),
+                )) == 0
 
     print("verify_dgtera_integration: PASSED")
 

@@ -22,6 +22,7 @@ APP = (ROOT / "frontend/src/App.tsx").read_text(encoding="utf-8")
 MAIN = (ROOT / "frontend/src/main.tsx").read_text(encoding="utf-8")
 MUI_THEME = (ROOT / "frontend/src/theme/CorvaxThemeProvider.tsx").read_text(encoding="utf-8")
 MUI_CSS = (ROOT / "frontend/src/styles/corvax_mui_v16.css").read_text(encoding="utf-8")
+V17_CSS = (ROOT / "frontend/src/styles/corvax_v17.css").read_text(encoding="utf-8")
 PACKAGE = (ROOT / "frontend/package.json").read_text(encoding="utf-8")
 
 
@@ -94,11 +95,12 @@ assert 'className="navigation-notice" role="alert"' in SHELL
 assert "/api/v1/system/release" in SHELL
 assert "version-line version-full" in SHELL
 assert all(field in SHELL for field in ("apiVersion", "releaseId", "buildCommit"))
-assert "CORVAX-RC27.4-R9.4-MUI-V16-20260821" in CONFIG
+assert "CORVAX-RC27.4-R9.4-CORE-V17-20260821" in CONFIG
 assert "CorvaxThemeProvider" in APP
 assert "@mui/material" in PACKAGE and "@mui/stylis-plugin-rtl" in PACKAGE
 assert "createTheme" in MUI_THEME and "rtlPlugin" in MUI_THEME and "CssBaseline" in MUI_THEME
 assert "./styles/corvax_mui_v16.css" in MAIN
+assert "./styles/corvax_v17.css" in MAIN
 assert all(marker in MUI_CSS for marker in (
     "CORVAX V16 — MUI Executive Workspace",
     ".page-heading",
@@ -111,6 +113,16 @@ assert all(marker in MUI_CSS for marker in (
     "width: min(88vw, 304px)",
     "@media print",
     "prefers-reduced-motion",
+))
+assert all(marker in V17_CSS for marker in (
+    "CORVAX V17 — unified business operating system",
+    ".page-stage",
+    ".mobile-tabbar",
+    ".panel-body",
+    ".data-table .tr:not(.th) > span::before",
+    ".integration-status-board",
+    ".auth-showcase",
+    ".selected-workspace",
 ))
 
 target_values = set(re.findall(r": '([A-Za-z]+)',", TARGETS))

@@ -33,7 +33,7 @@
 
 ## التطبيق
 
-- [ ] `alembic upgrade head` يصل إلى `e20200000001`، مع التحقق عبر `/health/ready`.
+- [ ] `alembic upgrade head` يصل إلى `e20300000001`، مع التحقق عبر `/health/ready`.
 - [ ] التأكد أن دورة DGTERA تشغّل اليوم الحالي ثم يومًا تاريخيًا واحدًا فقط، دون أخطاء `OperationalError` متبادلة.
 - [ ] `/health/live` و`/health/ready` يعملان.
 - [ ] مراجعة logs و`X-Request-ID` في منصة المراقبة.

@@ -245,6 +245,13 @@ def readiness() -> dict:
         "environment": settings.environment,
         "database": "reachable",
         "migration_head": current_head,
+        "dgtera": {
+            "scheduler_enabled": settings.dgtera_scheduler_enabled,
+            "poll_seconds": settings.dgtera_scheduler_poll_seconds,
+            "sync_interval_minutes": 2,
+            "history_days_per_cycle": settings.dgtera_history_days_per_cycle,
+            "durable_daily_proof": True,
+        },
     }
 
 

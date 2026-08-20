@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import {
   ArrowLeft, ArrowRight, Building2, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, Command,
-  LogOut, Menu, Moon, Search, Sun,
+  Grid2X2, LogOut, Menu, Moon, Search, Sun,
 } from 'lucide-react';
 import {apiFetch} from '../api/client';
 import {CorvaxAiAssistantHost} from '../components/ai-assistant';
@@ -51,7 +51,7 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
   const {menuOpen, darkMode, setMenuOpen, toggleTheme} = useDashboardUi();
   const [apiOnline, setApiOnline] = useState(false);
   const [apiVersion, setApiVersion] = useState('1.0.0-agreement-completion-rc27.4-r9.4');
-  const [releaseId, setReleaseId] = useState('CORVAX-RC27.4-R9.4-MUI-V16-20260821');
+  const [releaseId, setReleaseId] = useState('CORVAX-RC27.4-R9.4-CORE-V17-20260821');
   const [buildCommit, setBuildCommit] = useState('loading');
   const [globalQuery,setGlobalQuery]=useState('');
   const [navigationNotice, setNavigationNotice] = useState('');
@@ -82,6 +82,11 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
     });
   }, [scope, userPermissions]);
   const current = availableNav.find((item) => item.key === view) || availableNav[0];
+  const currentGroup = NAV_GROUPS.find((group) => group.key === current?.group);
+  const CurrentIcon = current?.icon || Grid2X2;
+  const mobilePrimary = ['executive', 'finance', 'sales']
+    .map((key) => availableNav.find((item) => item.key === key))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
   const formattedDate = new Intl.DateTimeFormat(ar ? 'ar-SA' : 'en-GB', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   }).format(new Date());
@@ -218,6 +223,9 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
     <section className="workspace">
       <header className="app-header">
         <button className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label={ar ? 'فتح القائمة' : 'Open menu'}><Menu size={20}/></button>
+        <button className="mobile-brand" onClick={() => selectView('executive')} aria-label={ar ? 'الصفحة الرئيسية' : 'Home'}>
+          <span className="mobile-brand-mark">C</span><span><strong>CORVAX</strong><small>BUSINESS OS</small></span>
+        </button>
         <div className="global-search"><Search size={18}/><input value={globalQuery} onChange={(e)=>setGlobalQuery(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter'&&globalQuery.trim().length>=2){navigate(`/workbench?q=${encodeURIComponent(globalQuery.trim())}`,{replace:false})}}} aria-label={ar ? 'البحث في النظام' : 'Search system'} placeholder={ar ? 'البحث في النظام...' : 'Search in system...'}/><kbd><Command size={12}/> K</kbd></div>
         <CorvaxAiAssistantHost lang={lang}/>
         <div className="header-actions">
@@ -232,17 +240,26 @@ export function Shell({lang, setLang, onChangeCompany, onLogout}: {
       </header>
 
       <div className="page-heading">
+        <div className="page-heading-icon" aria-hidden="true"><CurrentIcon size={23}/></div>
         <div className="page-heading-copy">
           {view !== 'executive' && <button type="button" className="page-back-button" onClick={goBack} aria-label={ar ? 'الرجوع إلى الصفحة السابقة' : 'Back to previous page'}>
             {ar ? <ArrowRight size={16}/> : <ArrowLeft size={16}/>}<span>{ar ? 'رجوع' : 'Back'}</span>
           </button>}
-          <span>{ar ? 'مرحبًا بعودتك' : 'Welcome back'}</span><h1>{view === 'executive' ? (ar ? `مرحبًا ${String(userName).split(' ')[0]} 👋` : `Hello ${String(userName).split(' ')[0]} 👋`) : (ar ? current.ar : current.en)}</h1><p>{view === 'executive' ? (ar ? 'إليك ملخصًا حيًا لأداء أعمالك والقرارات التي تحتاج اهتمامك.' : 'Here is a live view of business performance and decisions needing attention.') : (ar ? 'بيانات تشغيلية ومالية مترابطة مع إمكانية التتبع حتى المستند الأصلي.' : 'Connected operational and financial data with drill-through to source documents.')}</p>
+          <div className="page-breadcrumb"><span>CORVAX</span><b>/</b>{currentGroup&&<><span>{ar ? currentGroup.ar : currentGroup.en}</span><b>/</b></>}<strong>{ar ? current.ar : current.en}</strong></div>
+          <h1>{view === 'executive' ? (ar ? `مركز قيادة ${String(userName).split(' ')[0]}` : `${String(userName).split(' ')[0]}'s command center`) : (ar ? current.ar : current.en)}</h1><p>{view === 'executive' ? (ar ? 'الأرقام والمهام والتنبيهات المهمة في مساحة قرار واحدة.' : 'Numbers, tasks and priority alerts in one decision workspace.') : (ar ? 'مساحة عمل مترابطة للتنفيذ والمراجعة والتتبع من الملخص حتى المستند.' : 'A connected workspace to execute, review and trace from summary to source.')}</p>
         </div>
         <div className="heading-side"><div className="current-date"><CalendarDays size={18}/><span><strong>{formattedDate}</strong><small>{new Date().toLocaleDateString(ar ? 'ar-SA' : 'en-GB')}</small></span></div><div className={`status-pill ${apiOnline ? '' : 'offline'}`}><CheckCircle2 size={16}/>{apiOnline ? (ar ? 'متصل' : 'Connected') : (ar ? 'غير متصل' : 'Offline')}</div></div>
       </div>
 
       {navigationNotice&&<div className="navigation-notice" role="alert">{navigationNotice}</div>}
-      <DashboardRoutes ar={ar} companyId={apiCompanyId} scope={scope} view={view} onNavigate={selectView}/>
+      <div className={`page-stage view-${view}`}>
+        <DashboardRoutes ar={ar} companyId={apiCompanyId} scope={scope} view={view} onNavigate={selectView}/>
+      </div>
     </section>
+
+    <nav className="mobile-tabbar" aria-label={ar ? 'التنقل السريع' : 'Quick navigation'}>
+      {mobilePrimary.map((item) => { const Icon = item.icon; return <button key={item.key} className={view===item.key?'active':''} onClick={()=>selectView(item.key)}><Icon size={20}/><span>{ar?item.ar:item.en}</span></button>; })}
+      <button className={menuOpen?'active':''} onClick={()=>setMenuOpen(true)}><Grid2X2 size={20}/><span>{ar?'المزيد':'More'}</span></button>
+    </nav>
   </main>;
 }

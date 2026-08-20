@@ -23,6 +23,7 @@ export function CompanySelector({lang,setLang,onContinue}:{lang:Lang;setLang:(l:
     const id_scope=scopeMap[c.code]||'holding';
     return {...c,id_scope,apiId:c.id,icon:iconMap[id_scope],accent:c.primary_color||'#3157d5'};
   }),[apiCompanies]);
+  const selectedCompany=companies.find(c=>c.apiId===selected);
 
   const [loadError,setLoadError]=useState(false);
 
@@ -56,8 +57,9 @@ export function CompanySelector({lang,setLang,onContinue}:{lang:Lang;setLang:(l:
 
   return <main className="page" dir={ar?'rtl':'ltr'}>
     <header className="topbar"><div className="brand"><div className="corvax-symbol"><span>C</span></div><div><strong>CORVAX</strong><span>BUSINESS PLATFORM</span></div></div><button className="lang-btn" onClick={()=>setLang(ar?'en':'ar')}><Languages size={18}/>{ar?'English':'العربية'}</button></header>
-    <section className="hero"><div className="hero-copy"><span className="eyebrow">CORVAX BUSINESS WORKSPACE</span><h1>{t.chooseCompany}</h1><p>{t.subtitle}</p></div>
+    <section className="hero"><div className="hero-copy"><span className="eyebrow">CORVAX BUSINESS WORKSPACE</span><h1>{t.chooseCompany}</h1><p>{t.subtitle}</p><div className="workspace-stats"><span><strong>{companies.length}</strong>{ar?'شركات متاحة':'Available companies'}</span><span><strong>1</strong>{ar?'هوية موحدة':'Unified identity'}</span><span><strong>24/7</strong>{ar?'مراقبة النظام':'System monitoring'}</span></div></div>
       <div className="company-grid">{companies.map(c=>{const Icon=c.icon;const active=selected===c.apiId;return <button key={c.apiId} className={`company-card ${active?'active':''}`} onClick={()=>setSelected(c.apiId)} style={{'--accent':c.accent} as React.CSSProperties}><div className="icon-wrap"><Icon size={26}/></div><div><strong>{ar?c.name_ar:c.name_en}</strong><span>{c.currency} · Multi Branch</span></div><div className="radio">{active&&<div/>}</div></button>})}</div>
+      {selectedCompany&&<div className="selected-workspace"><div className="selected-workspace-mark"><selectedCompany.icon size={22}/></div><div><span>{ar?'سيتم فتح مساحة':'Opening workspace'}</span><strong>{ar?selectedCompany.name_ar:selectedCompany.name_en}</strong></div><small>{selectedCompany.currency} · {ar?'بيانات وصلاحيات مستقلة':'isolated data & permissions'}</small></div>}
       {error&&<div className="error">{error}</div>}
       <button className="continue-btn" disabled={loading} onClick={continueToCompany}>{loading?(ar?'جارٍ التفعيل...':'Activating...'):t.continue}<Arrow size={19}/></button>
       <div className="module-strip"><span>{t.finance}</span><span>{t.inventory}</span><span>{t.manufacturingModule}</span><span>{t.hr}</span></div>

@@ -21,6 +21,7 @@ from app.models import (
     DgteraBranch,
     DgteraConnection,
     DgteraCustomer,
+    DgteraDailyProof,
     DgteraProduct,
     DgteraSalesOrder,
     DgteraSalesOrderLine,
@@ -161,6 +162,47 @@ def status(company_id: int, user: User = Depends(get_current_user), db: Session 
     payload = _connection_out(row, company_id)
     if row:
         payload["history"] = dgtera_sales_sync.historical_backfill_status(db, row)
+        proof_summary = db.execute(select(
+            func.count(DgteraDailyProof.id),
+            func.min(DgteraDailyProof.sales_date),
+            func.max(DgteraDailyProof.sales_date),
+            func.sum(case((DgteraDailyProof.accounting_status == "POSTED", 1), else_=0)),
+            func.sum(case((DgteraDailyProof.accounting_status == "NO_ACTIVITY", 1), else_=0)),
+            func.sum(case((DgteraDailyProof.accounting_status == "PENDING", 1), else_=0)),
+        ).where(
+            DgteraDailyProof.connection_id == row.id,
+            DgteraDailyProof.proof_generation == dgtera_sales_sync.SOURCE_LOCAL_WINDOW_MARKER,
+            DgteraDailyProof.strict_reconciled.is_(True),
+        )).one()
+        latest_attempt = db.scalar(select(DgteraDailyProof).where(
+            DgteraDailyProof.connection_id == row.id,
+            DgteraDailyProof.proof_generation == dgtera_sales_sync.SOURCE_LOCAL_WINDOW_MARKER,
+        ).order_by(DgteraDailyProof.last_attempt_at.desc(), DgteraDailyProof.id.desc()))
+        blocked_days = db.scalar(select(func.count(DgteraDailyProof.id)).where(
+            DgteraDailyProof.connection_id == row.id,
+            DgteraDailyProof.proof_generation == dgtera_sales_sync.SOURCE_LOCAL_WINDOW_MARKER,
+            DgteraDailyProof.accounting_status == "BLOCKED",
+        )) or 0
+        payload["proof"] = {
+            "generation": dgtera_sales_sync.SOURCE_LOCAL_WINDOW_MARKER,
+            "verified_days": int(proof_summary[0] or 0),
+            "first_verified_date": proof_summary[1],
+            "last_verified_date": proof_summary[2],
+            "latest_attempt_status": latest_attempt.last_attempt_status if latest_attempt else None,
+            "latest_attempt_at": latest_attempt.last_attempt_at if latest_attempt else None,
+            "serving_last_verified_after_source_error": bool(
+                latest_attempt
+                and latest_attempt.strict_reconciled
+                and latest_attempt.last_attempt_status != "VERIFIED"
+            ),
+        }
+        payload["accounting"] = {
+            "posted_days": int(proof_summary[3] or 0),
+            "no_activity_days": int(proof_summary[4] or 0),
+            "pending_days": int(proof_summary[5] or 0),
+            "blocked_days": int(blocked_days),
+            "restaurant_ledger_only": True,
+        }
     return payload
 
 
