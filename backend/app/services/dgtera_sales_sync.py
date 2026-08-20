@@ -63,6 +63,7 @@ HISTORY_RECHECK_INTERVAL_HOURS = 24
 # recovery, but they are never exposed as current live-source proof.
 SOURCE_LOCAL_WINDOW_MARKER = "dgtera-source-date-line-report-strict-v10"
 DGTERA_JOURNAL_REFERENCE_PREFIX = "DGTERA-SALES"
+SYNC_RUN_HISTORY_LIMIT = 200
 
 # DGTERA is authoritative for restaurant sales, but the holding company is a
 # read-only management mirror.  Posting only to the restaurant ledger avoids
@@ -93,6 +94,20 @@ class DgteraReconciliationError(RuntimeError):
             f"strict reconciliation failed ({report.get('mismatch_count', 0)} differences)"
             + (f": {preview}" if preview else "")
         )
+
+
+def _prune_sync_run_history(db: Session, connection_id: int) -> int:
+    """Bound scheduler history so SQLite deployments cannot fill the disk."""
+    stale_ids = list(db.scalars(
+        select(DgteraSyncRun.id)
+        .where(DgteraSyncRun.connection_id == connection_id)
+        .order_by(DgteraSyncRun.id.desc())
+        .offset(SYNC_RUN_HISTORY_LIMIT)
+    ).all())
+    if stale_ids:
+        db.execute(delete(DgteraSyncRun).where(DgteraSyncRun.id.in_(stale_ids)))
+        db.commit()
+    return len(stale_ids)
 
 
 def _operational_error_chain(exc: OperationalError) -> list[BaseException]:
@@ -1505,6 +1520,12 @@ def _sync_unlocked(
     *,
     mark_current_sync: bool,
 ) -> dict:
+    # The scheduler used to append unbounded proof rows even for empty and
+    # repeatedly failing days. On a SQLite fallback this can exhaust the disk
+    # before a real sales day is inserted. Only old run logs are removed;
+    # sales, journals and audit evidence remain untouched.
+    phase = "history_prune"
+    _prune_sync_run_history(db, connection.id)
     phase = "source_read"
     try:
         source_orders = client_for(connection).daily_sales(start_date, end_date, connection.timezone)
@@ -1684,7 +1705,12 @@ def _sync_unlocked(
             completed_at=utc_now(),
         )
         db.add(failed)
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            # Do not mask the original mirror/storage failure when even its
+            # diagnostic row cannot be persisted.
+            db.rollback()
         raise
     # The source mirror is committed before accounting so a closed or missing
     # fiscal period can never destroy an otherwise complete DGTERA proof or
