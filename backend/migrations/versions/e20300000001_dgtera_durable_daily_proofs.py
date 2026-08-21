@@ -6,6 +6,7 @@ Revises: e20200000001
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, timezone
 
 import sqlalchemy as sa
 from alembic import op
@@ -18,6 +19,23 @@ depends_on = None
 
 LEGACY_PROOF_MARKER = "dgtera-source-date-line-report-strict-v10"
 CURRENT_PROOF_MARKER = "dgtera-source-date-line-report-strict-v11-durable"
+
+PROOF_TABLE = "dgtera_daily_proofs"
+PROOF_INDEXES = {
+    "ix_dgtera_daily_proofs_connection_id": ["connection_id"],
+    "ix_dgtera_daily_proofs_company_id": ["company_id"],
+    "ix_dgtera_daily_proofs_sales_date": ["sales_date"],
+    "ix_dgtera_daily_proofs_strict_reconciled": ["strict_reconciled"],
+    "ix_dgtera_daily_proofs_last_attempt_status": ["last_attempt_status"],
+    "ix_dgtera_daily_proofs_accounting_status": ["accounting_status"],
+    "ix_dgtera_daily_proofs_accounting_journal_id": ["accounting_journal_id"],
+    "ix_dgtera_daily_proofs_connection_generation_date": [
+        "connection_id", "proof_generation", "sales_date", "strict_reconciled",
+    ],
+    "ix_dgtera_daily_proofs_accounting_queue": [
+        "connection_id", "strict_reconciled", "accounting_status", "sales_date",
+    ],
+}
 
 
 def _decimal_value(metrics: dict, key: str) -> str:
@@ -44,6 +62,7 @@ def _backfill_recent_verified_days(bind, proof_table: sa.Table) -> None:
         sa.column("window_label", sa.String),
         sa.column("reconciliation_details", sa.Text),
         sa.column("error_message", sa.Text),
+        sa.column("started_at", sa.DateTime),
         sa.column("completed_at", sa.DateTime),
     )
     rows = bind.execute(
@@ -68,10 +87,23 @@ def _backfill_recent_verified_days(bind, proof_table: sa.Table) -> None:
             if int(details.get("mismatch_count") or 0) > 0:
                 state["invalidated"] = True
 
+    existing_keys = {
+        (
+            int(connection_id),
+            sales_date if isinstance(sales_date, date) else date.fromisoformat(str(sales_date)),
+        )
+        for connection_id, sales_date in bind.execute(sa.select(
+            proof_table.c.connection_id,
+            proof_table.c.sales_date,
+        )).all()
+    }
     inserts: list[dict] = []
     for (_, sales_date), state in by_day.items():
         row = state["success"]
         if row is None or state["invalidated"]:
+            continue
+        proof_key = (int(row["connection_id"]), sales_date)
+        if proof_key in existing_keys:
             continue
         try:
             details = json.loads(row["reconciliation_details"] or "{}")
@@ -83,6 +115,12 @@ def _backfill_recent_verified_days(bind, proof_table: sa.Table) -> None:
         if len(verification_hash) != 64:
             continue
         latest = state["latest"] or row
+        verified_at = (
+            row["completed_at"]
+            or row["started_at"]
+            or datetime.now(timezone.utc).replace(tzinfo=None)
+        )
+        attempted_at = latest["completed_at"] or latest["started_at"] or verified_at
         inserts.append({
             "connection_id": int(row["connection_id"]),
             "company_id": int(row["company_id"]),
@@ -100,67 +138,63 @@ def _backfill_recent_verified_days(bind, proof_table: sa.Table) -> None:
             "source_return": _decimal_value(metrics, "returns"),
             "source_discount": _decimal_value(metrics, "discounts"),
             "verification_hash": verification_hash,
-            "verified_at": row["completed_at"],
-            "last_attempt_at": latest["completed_at"] or row["completed_at"],
+            "verified_at": verified_at,
+            "last_attempt_at": attempted_at,
             "last_attempt_status": "VERIFIED" if latest["id"] == row["id"] else "SOURCE_ERROR",
             "last_error": latest["error_message"] if latest["id"] != row["id"] else None,
             "accounting_status": "PENDING",
-            "created_at": row["completed_at"],
-            "updated_at": row["completed_at"],
+            "created_at": verified_at,
+            "updated_at": attempted_at,
         })
+        existing_keys.add(proof_key)
     if inserts:
         bind.execute(proof_table.insert(), inserts)
 
 
 def upgrade() -> None:
-    op.create_table(
-        "dgtera_daily_proofs",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("connection_id", sa.Integer(), sa.ForeignKey("dgtera_connections.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("company_id", sa.Integer(), sa.ForeignKey("companies.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("sales_date", sa.Date(), nullable=False),
-        sa.Column("proof_generation", sa.String(length=100), nullable=False),
-        sa.Column("strict_reconciled", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("source_orders", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("source_lines", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("source_payments", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("source_quantity", sa.Numeric(18, 4), nullable=False, server_default="0"),
-        sa.Column("source_subtotal", sa.Numeric(18, 2), nullable=False, server_default="0"),
-        sa.Column("source_vat", sa.Numeric(18, 2), nullable=False, server_default="0"),
-        sa.Column("source_total", sa.Numeric(18, 2), nullable=False, server_default="0"),
-        sa.Column("source_paid", sa.Numeric(18, 2), nullable=False, server_default="0"),
-        sa.Column("source_return", sa.Numeric(18, 2), nullable=False, server_default="0"),
-        sa.Column("source_discount", sa.Numeric(18, 2), nullable=False, server_default="0"),
-        sa.Column("verification_hash", sa.String(length=64)),
-        sa.Column("verified_at", sa.DateTime()),
-        sa.Column("last_attempt_at", sa.DateTime(), nullable=False),
-        sa.Column("last_attempt_status", sa.String(length=30), nullable=False, server_default="PENDING"),
-        sa.Column("last_error", sa.Text()),
-        sa.Column("accounting_status", sa.String(length=30), nullable=False, server_default="PENDING"),
-        sa.Column("accounting_journal_id", sa.Integer(), sa.ForeignKey("journal_entries.id", ondelete="SET NULL")),
-        sa.Column("accounting_error", sa.Text()),
-        sa.Column("accounting_updated_at", sa.DateTime()),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.UniqueConstraint("connection_id", "sales_date", name="uq_dgtera_daily_proof_date"),
-    )
-    op.create_index("ix_dgtera_daily_proofs_connection_id", "dgtera_daily_proofs", ["connection_id"])
-    op.create_index("ix_dgtera_daily_proofs_company_id", "dgtera_daily_proofs", ["company_id"])
-    op.create_index("ix_dgtera_daily_proofs_sales_date", "dgtera_daily_proofs", ["sales_date"])
-    op.create_index("ix_dgtera_daily_proofs_strict_reconciled", "dgtera_daily_proofs", ["strict_reconciled"])
-    op.create_index("ix_dgtera_daily_proofs_last_attempt_status", "dgtera_daily_proofs", ["last_attempt_status"])
-    op.create_index("ix_dgtera_daily_proofs_accounting_status", "dgtera_daily_proofs", ["accounting_status"])
-    op.create_index("ix_dgtera_daily_proofs_accounting_journal_id", "dgtera_daily_proofs", ["accounting_journal_id"])
-    op.create_index(
-        "ix_dgtera_daily_proofs_connection_generation_date",
-        "dgtera_daily_proofs",
-        ["connection_id", "proof_generation", "sales_date", "strict_reconciled"],
-    )
-    op.create_index(
-        "ix_dgtera_daily_proofs_accounting_queue",
-        "dgtera_daily_proofs",
-        ["connection_id", "strict_reconciled", "accounting_status", "sales_date"],
-    )
+    bind = op.get_bind()
+    if not sa.inspect(bind).has_table(PROOF_TABLE):
+        op.create_table(
+            PROOF_TABLE,
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("connection_id", sa.Integer(), sa.ForeignKey("dgtera_connections.id", ondelete="CASCADE"), nullable=False),
+            sa.Column("company_id", sa.Integer(), sa.ForeignKey("companies.id", ondelete="CASCADE"), nullable=False),
+            sa.Column("sales_date", sa.Date(), nullable=False),
+            sa.Column("proof_generation", sa.String(length=100), nullable=False),
+            sa.Column("strict_reconciled", sa.Boolean(), nullable=False, server_default=sa.false()),
+            sa.Column("source_orders", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("source_lines", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("source_payments", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column("source_quantity", sa.Numeric(18, 4), nullable=False, server_default="0"),
+            sa.Column("source_subtotal", sa.Numeric(18, 2), nullable=False, server_default="0"),
+            sa.Column("source_vat", sa.Numeric(18, 2), nullable=False, server_default="0"),
+            sa.Column("source_total", sa.Numeric(18, 2), nullable=False, server_default="0"),
+            sa.Column("source_paid", sa.Numeric(18, 2), nullable=False, server_default="0"),
+            sa.Column("source_return", sa.Numeric(18, 2), nullable=False, server_default="0"),
+            sa.Column("source_discount", sa.Numeric(18, 2), nullable=False, server_default="0"),
+            sa.Column("verification_hash", sa.String(length=64)),
+            sa.Column("verified_at", sa.DateTime()),
+            sa.Column("last_attempt_at", sa.DateTime(), nullable=False),
+            sa.Column("last_attempt_status", sa.String(length=30), nullable=False, server_default="PENDING"),
+            sa.Column("last_error", sa.Text()),
+            sa.Column("accounting_status", sa.String(length=30), nullable=False, server_default="PENDING"),
+            sa.Column("accounting_journal_id", sa.Integer(), sa.ForeignKey("journal_entries.id", ondelete="SET NULL")),
+            sa.Column("accounting_error", sa.Text()),
+            sa.Column("accounting_updated_at", sa.DateTime()),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), nullable=False),
+            sa.UniqueConstraint("connection_id", "sales_date", name="uq_dgtera_daily_proof_date"),
+        )
+
+    # SQLite does not roll DDL back. A prior failed backfill can therefore
+    # leave the table and any subset of indexes behind while Alembic remains
+    # on e202. Create only what is missing so the next deploy repairs itself.
+    existing_indexes = {
+        item["name"] for item in sa.inspect(bind).get_indexes(PROOF_TABLE)
+    }
+    for index_name, columns in PROOF_INDEXES.items():
+        if index_name not in existing_indexes:
+            op.create_index(index_name, PROOF_TABLE, columns)
     proof_table = sa.table(
         "dgtera_daily_proofs",
         *[sa.column(name) for name in (
@@ -175,13 +209,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_dgtera_daily_proofs_accounting_queue", table_name="dgtera_daily_proofs")
-    op.drop_index("ix_dgtera_daily_proofs_connection_generation_date", table_name="dgtera_daily_proofs")
-    op.drop_index("ix_dgtera_daily_proofs_accounting_journal_id", table_name="dgtera_daily_proofs")
-    op.drop_index("ix_dgtera_daily_proofs_accounting_status", table_name="dgtera_daily_proofs")
-    op.drop_index("ix_dgtera_daily_proofs_last_attempt_status", table_name="dgtera_daily_proofs")
-    op.drop_index("ix_dgtera_daily_proofs_strict_reconciled", table_name="dgtera_daily_proofs")
-    op.drop_index("ix_dgtera_daily_proofs_sales_date", table_name="dgtera_daily_proofs")
-    op.drop_index("ix_dgtera_daily_proofs_company_id", table_name="dgtera_daily_proofs")
-    op.drop_index("ix_dgtera_daily_proofs_connection_id", table_name="dgtera_daily_proofs")
-    op.drop_table("dgtera_daily_proofs")
+    bind = op.get_bind()
+    if not sa.inspect(bind).has_table(PROOF_TABLE):
+        return
+    existing_indexes = {
+        item["name"] for item in sa.inspect(bind).get_indexes(PROOF_TABLE)
+    }
+    for index_name in reversed(PROOF_INDEXES):
+        if index_name in existing_indexes:
+            op.drop_index(index_name, table_name=PROOF_TABLE)
+    op.drop_table(PROOF_TABLE)
