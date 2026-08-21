@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select, text
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
@@ -26,7 +27,7 @@ from app.core.security import (
 from app.core.time import utc_now
 from app.db import get_db
 from app.dependencies import company_permissions, ensure_company_access, get_current_user
-from app.models import AuditLog, PasswordHistory, Role, User, UserCompanyRole, UserSession
+from app.models import PasswordHistory, Role, User, UserCompanyRole, UserSession
 from app.schemas.auth import (
     CompanyContextIn,
     LoginIn,
@@ -39,17 +40,18 @@ from app.schemas.auth import (
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+logger = logging.getLogger("corvax.auth")
 
 
 # One-time owner recovery for the August 2026 UAT lockout. Only the SHA-256
 # digest is committed; the high-entropy token is delivered privately to the
 # owner. The token expires, is consumed through the tamper-evident audit log,
 # and can never be used as an application session.
-_ADMIN_RECOVERY_TOKEN_SHA256 = "66ba47a3d6ca2533fc868233a02a430569edf59e31c197d546855326f026a0f9"
+_ADMIN_RECOVERY_TOKEN_SHA256 = "745c67cd1a6fc1c10edb7f0082eef5ca4c440b3fc564a04730bda170d891327d"
 _ADMIN_RECOVERY_TOKEN_ID = _ADMIN_RECOVERY_TOKEN_SHA256[:16]
-_ADMIN_RECOVERY_LOCK_KEY = int(_ADMIN_RECOVERY_TOKEN_SHA256[:15], 16)
+_ADMIN_RECOVERY_ISSUED_AT = datetime(2026, 8, 21, 2, 34, 0)
 _ADMIN_RECOVERY_NOT_AFTER = datetime(2026, 8, 25, 23, 59, 59)
-_ADMIN_RECOVERY_ACTION = "ONE_TIME_ADMIN_RECOVERY_V17_R2"
+_ADMIN_RECOVERY_ACTION = "ONE_TIME_ADMIN_RECOVERY_V17_R3"
 
 
 class AdminRecoveryIn(BaseModel):
@@ -228,55 +230,45 @@ def recover_admin(
 ) -> dict:
     """Consume the owner-only recovery token and replace the admin password.
 
-    The endpoint intentionally grants no session. It revokes every existing
-    admin session, clears a stale lock/MFA enrolment, and requires a normal
-    login afterwards. Production MFA policy is then enforced by ``login``.
+    The essential transaction deliberately touches only the users table. A
+    production schema drift in password_history, user_sessions or audit_logs
+    must never roll back the owner's password recovery again. Incrementing
+    token_version invalidates every old access/refresh token without depending
+    on the auxiliary session table. Audit append is best-effort after the
+    password commit; one-time consumption is enforced by password_changed_at
+    under a row lock.
     """
     response.headers["Cache-Control"] = "no-store"
     supplied_hash = hashlib.sha256(data.token.encode("utf-8")).hexdigest()
     token_valid = secrets.compare_digest(supplied_hash, _ADMIN_RECOVERY_TOKEN_SHA256)
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        # Serialize consumption so two simultaneous taps cannot both pass the
-        # one-time audit check before either transaction commits.
-        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ADMIN_RECOVERY_LOCK_KEY})
-    already_used = db.scalar(
-        select(AuditLog.id).where(
-            AuditLog.action == _ADMIN_RECOVERY_ACTION,
-            AuditLog.entity_id == _ADMIN_RECOVERY_TOKEN_ID,
-        )
-    )
-    if not token_valid or utc_now() > _ADMIN_RECOVERY_NOT_AFTER or already_used:
+    if not token_valid or utc_now() > _ADMIN_RECOVERY_NOT_AFTER:
         raise HTTPException(410, "Recovery link is invalid, expired, or already used")
 
     username = (settings.bootstrap_admin_username or "admin").strip().lower()
-    admin = db.scalar(select(User).where(User.username == username))
+    admin = db.scalar(select(User).where(User.username == username).with_for_update())
     if admin is None:
-        admin = db.scalar(
-            select(User)
+        admin_id = db.scalar(
+            select(User.id)
             .join(UserCompanyRole, UserCompanyRole.user_id == User.id)
             .join(Role, Role.id == UserCompanyRole.role_id)
             .where(Role.code == "SUPER_ADMIN")
             .order_by(User.id)
+            .limit(1)
         )
+        if admin_id is not None:
+            admin = db.scalar(select(User).where(User.id == admin_id).with_for_update())
     if admin is None:
         raise HTTPException(503, "Administrator recovery is unavailable")
+    if admin.password_changed_at and admin.password_changed_at >= _ADMIN_RECOVERY_ISSUED_AT:
+        raise HTTPException(410, "Recovery link is invalid, expired, or already used")
 
     errors = validate_password_strength(data.new_password)
     if errors:
         raise HTTPException(422, errors)
     if verify_password(data.new_password, admin.password_hash):
         raise HTTPException(422, "New password must differ from the current password")
-    recent = db.scalars(
-        select(PasswordHistory)
-        .where(PasswordHistory.user_id == admin.id)
-        .order_by(PasswordHistory.created_at.desc())
-        .limit(settings.password_history_count)
-    ).all()
-    if any(verify_password(data.new_password, row.password_hash) for row in recent):
-        raise HTTPException(422, "Password was used recently")
 
     now = utc_now()
-    db.add(PasswordHistory(user_id=admin.id, password_hash=admin.password_hash))
     admin.password_hash = hash_password(data.new_password)
     admin.password_changed_at = now
     admin.require_password_change = False
@@ -285,25 +277,31 @@ def recover_admin(
     admin.locked_until = None
     admin.mfa_enabled = False
     admin.mfa_secret = None
-    admin.token_version += 1
-    db.query(UserSession).filter(
-        UserSession.user_id == admin.id,
-        UserSession.revoked_at.is_(None),
-    ).update({"revoked_at": now, "revoke_reason": "ADMIN_RECOVERY"})
-    write_audit(
-        db,
-        action=_ADMIN_RECOVERY_ACTION,
-        entity_type="AUTH_RECOVERY_TOKEN",
-        entity_id=_ADMIN_RECOVERY_TOKEN_ID,
-        user_id=admin.id,
-        after={
-            "admin_user_id": admin.id,
-            "ip": request.client.host if request.client else None,
-            "sessions_revoked": True,
-            "mfa_reenrollment_required": bool(settings.enforce_sensitive_role_mfa),
-        },
-    )
+    admin.token_version = int(admin.token_version or 0) + 1
     db.commit()
+
+    # The access-critical change is already durable. Keep the security audit,
+    # but do not make a legacy auxiliary-table defect undo password recovery.
+    try:
+        write_audit(
+            db,
+            action=_ADMIN_RECOVERY_ACTION,
+            entity_type="AUTH_RECOVERY_TOKEN",
+            entity_id=_ADMIN_RECOVERY_TOKEN_ID,
+            user_id=admin.id,
+            after={
+                "admin_user_id": admin.id,
+                "ip": request.client.host if request.client else None,
+                "sessions_revoked_by_token_version": True,
+                "mfa_reenrollment_required": bool(settings.enforce_sensitive_role_mfa),
+            },
+        )
+        db.commit()
+    except Exception:  # noqa: BLE001 - recovery must survive auxiliary schema drift
+        db.rollback()
+        logger.exception("Admin recovery succeeded but its auxiliary audit append failed")
+
+    response.delete_cookie("corvax_refresh_token", path="/api/v1/auth")
     return {
         "status": "recovered",
         "login": admin.username or admin.email,
