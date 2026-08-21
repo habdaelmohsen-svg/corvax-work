@@ -58,12 +58,14 @@ def check_route_authentication() -> None:
     """Reject API handlers that accidentally omit an authentication dependency.
 
     Health endpoints live in main.py and are deliberately outside this scan.
-    Login/refresh/MFA bootstrap endpoints are the only public API handlers.
+    Login/refresh/MFA bootstrap and the expiring one-time owner recovery are the
+    only public API handlers.
     """
     public = {
         ("auth.py", "login"),
         ("auth.py", "refresh_session"),
         ("auth.py", "enable_mfa_preauth"),
+        ("auth.py", "recover_admin"),
     }
     failures: list[str] = []
     for path in sorted((BACKEND / "app" / "api").glob("*.py")):
