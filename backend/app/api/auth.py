@@ -45,11 +45,11 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 # digest is committed; the high-entropy token is delivered privately to the
 # owner. The token expires, is consumed through the tamper-evident audit log,
 # and can never be used as an application session.
-_ADMIN_RECOVERY_TOKEN_SHA256 = "ecb85eb6bfffdce991aaf4a5caf8e9cdf952ee32f0f19240ff859ca0f61c3fe2"
+_ADMIN_RECOVERY_TOKEN_SHA256 = "66ba47a3d6ca2533fc868233a02a430569edf59e31c197d546855326f026a0f9"
 _ADMIN_RECOVERY_TOKEN_ID = _ADMIN_RECOVERY_TOKEN_SHA256[:16]
 _ADMIN_RECOVERY_LOCK_KEY = int(_ADMIN_RECOVERY_TOKEN_SHA256[:15], 16)
-_ADMIN_RECOVERY_NOT_AFTER = datetime(2026, 8, 23, 23, 59, 59)
-_ADMIN_RECOVERY_ACTION = "ONE_TIME_ADMIN_RECOVERY_V17"
+_ADMIN_RECOVERY_NOT_AFTER = datetime(2026, 8, 25, 23, 59, 59)
+_ADMIN_RECOVERY_ACTION = "ONE_TIME_ADMIN_RECOVERY_V17_R2"
 
 
 class AdminRecoveryIn(BaseModel):
