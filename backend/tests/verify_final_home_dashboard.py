@@ -95,7 +95,7 @@ assert 'className="navigation-notice" role="alert"' in SHELL
 assert "/api/v1/system/release" in SHELL
 assert "version-line version-full" in SHELL
 assert all(field in SHELL for field in ("apiVersion", "releaseId", "buildCommit"))
-assert "CORVAX-RC27.4-R9.4-CORE-V17-20260821" in CONFIG
+assert "CORVAX-RC27.4-R9.4-CORE-V17-AUTH-R1-20260821" in CONFIG
 assert "CorvaxThemeProvider" in APP
 assert "@mui/material" in PACKAGE and "@mui/stylis-plugin-rtl" in PACKAGE
 assert "createTheme" in MUI_THEME and "rtlPlugin" in MUI_THEME and "CssBaseline" in MUI_THEME

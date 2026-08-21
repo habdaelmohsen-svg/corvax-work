@@ -38,7 +38,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _policy(request: Request) -> RatePolicy:
         path = request.url.path
-        if path == "/api/v1/auth/login":
+        if path in {"/api/v1/auth/login", "/api/v1/auth/recover-admin"}:
             return RatePolicy("login", settings.rate_limit_login_per_minute)
         if path == "/api/v1/auth/refresh":
             return RatePolicy("refresh", settings.rate_limit_refresh_per_minute)

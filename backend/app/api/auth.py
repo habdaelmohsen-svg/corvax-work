@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select, or_
+from sqlalchemy import or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
@@ -25,7 +26,7 @@ from app.core.security import (
 from app.core.time import utc_now
 from app.db import get_db
 from app.dependencies import company_permissions, ensure_company_access, get_current_user
-from app.models import PasswordHistory, Role, User, UserCompanyRole, UserSession
+from app.models import AuditLog, PasswordHistory, Role, User, UserCompanyRole, UserSession
 from app.schemas.auth import (
     CompanyContextIn,
     LoginIn,
@@ -38,6 +39,22 @@ from app.schemas.auth import (
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+# One-time owner recovery for the August 2026 UAT lockout. Only the SHA-256
+# digest is committed; the high-entropy token is delivered privately to the
+# owner. The token expires, is consumed through the tamper-evident audit log,
+# and can never be used as an application session.
+_ADMIN_RECOVERY_TOKEN_SHA256 = "ecb85eb6bfffdce991aaf4a5caf8e9cdf952ee32f0f19240ff859ca0f61c3fe2"
+_ADMIN_RECOVERY_TOKEN_ID = _ADMIN_RECOVERY_TOKEN_SHA256[:16]
+_ADMIN_RECOVERY_LOCK_KEY = int(_ADMIN_RECOVERY_TOKEN_SHA256[:15], 16)
+_ADMIN_RECOVERY_NOT_AFTER = datetime(2026, 8, 23, 23, 59, 59)
+_ADMIN_RECOVERY_ACTION = "ONE_TIME_ADMIN_RECOVERY_V17"
+
+
+class AdminRecoveryIn(BaseModel):
+    token: str = Field(min_length=40, max_length=160)
+    new_password: str = Field(min_length=12, max_length=200)
 
 
 def _role_codes(db: Session, user_id: int) -> set[str]:
@@ -200,6 +217,98 @@ def login(data: LoginIn, request: Request, response: Response, db: Session = Dep
         refresh_expires_at=refresh_expires,
         user=user_to_out(db, user),
     )
+
+
+@router.post("/recover-admin")
+def recover_admin(
+    data: AdminRecoveryIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Consume the owner-only recovery token and replace the admin password.
+
+    The endpoint intentionally grants no session. It revokes every existing
+    admin session, clears a stale lock/MFA enrolment, and requires a normal
+    login afterwards. Production MFA policy is then enforced by ``login``.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    supplied_hash = hashlib.sha256(data.token.encode("utf-8")).hexdigest()
+    token_valid = secrets.compare_digest(supplied_hash, _ADMIN_RECOVERY_TOKEN_SHA256)
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        # Serialize consumption so two simultaneous taps cannot both pass the
+        # one-time audit check before either transaction commits.
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ADMIN_RECOVERY_LOCK_KEY})
+    already_used = db.scalar(
+        select(AuditLog.id).where(
+            AuditLog.action == _ADMIN_RECOVERY_ACTION,
+            AuditLog.entity_id == _ADMIN_RECOVERY_TOKEN_ID,
+        )
+    )
+    if not token_valid or utc_now() > _ADMIN_RECOVERY_NOT_AFTER or already_used:
+        raise HTTPException(410, "Recovery link is invalid, expired, or already used")
+
+    username = (settings.bootstrap_admin_username or "admin").strip().lower()
+    admin = db.scalar(select(User).where(User.username == username))
+    if admin is None:
+        admin = db.scalar(
+            select(User)
+            .join(UserCompanyRole, UserCompanyRole.user_id == User.id)
+            .join(Role, Role.id == UserCompanyRole.role_id)
+            .where(Role.code == "SUPER_ADMIN")
+            .order_by(User.id)
+        )
+    if admin is None:
+        raise HTTPException(503, "Administrator recovery is unavailable")
+
+    errors = validate_password_strength(data.new_password)
+    if errors:
+        raise HTTPException(422, errors)
+    if verify_password(data.new_password, admin.password_hash):
+        raise HTTPException(422, "New password must differ from the current password")
+    recent = db.scalars(
+        select(PasswordHistory)
+        .where(PasswordHistory.user_id == admin.id)
+        .order_by(PasswordHistory.created_at.desc())
+        .limit(settings.password_history_count)
+    ).all()
+    if any(verify_password(data.new_password, row.password_hash) for row in recent):
+        raise HTTPException(422, "Password was used recently")
+
+    now = utc_now()
+    db.add(PasswordHistory(user_id=admin.id, password_hash=admin.password_hash))
+    admin.password_hash = hash_password(data.new_password)
+    admin.password_changed_at = now
+    admin.require_password_change = False
+    admin.active = True
+    admin.failed_login_attempts = 0
+    admin.locked_until = None
+    admin.mfa_enabled = False
+    admin.mfa_secret = None
+    admin.token_version += 1
+    db.query(UserSession).filter(
+        UserSession.user_id == admin.id,
+        UserSession.revoked_at.is_(None),
+    ).update({"revoked_at": now, "revoke_reason": "ADMIN_RECOVERY"})
+    write_audit(
+        db,
+        action=_ADMIN_RECOVERY_ACTION,
+        entity_type="AUTH_RECOVERY_TOKEN",
+        entity_id=_ADMIN_RECOVERY_TOKEN_ID,
+        user_id=admin.id,
+        after={
+            "admin_user_id": admin.id,
+            "ip": request.client.host if request.client else None,
+            "sessions_revoked": True,
+            "mfa_reenrollment_required": bool(settings.enforce_sensitive_role_mfa),
+        },
+    )
+    db.commit()
+    return {
+        "status": "recovered",
+        "login": admin.username or admin.email,
+        "mfa_reenrollment_required": bool(settings.enforce_sensitive_role_mfa),
+    }
 
 
 @router.post("/refresh", response_model=RefreshTokenOut)
