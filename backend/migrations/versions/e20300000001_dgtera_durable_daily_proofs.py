@@ -6,6 +6,7 @@ Revises: e20200000001
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timezone
 
 import sqlalchemy as sa
@@ -19,6 +20,7 @@ depends_on = None
 
 LEGACY_PROOF_MARKER = "dgtera-source-date-line-report-strict-v10"
 CURRENT_PROOF_MARKER = "dgtera-source-date-line-report-strict-v11-durable"
+LOGGER = logging.getLogger("alembic.runtime.migration")
 
 PROOF_TABLE = "dgtera_daily_proofs"
 PROOF_INDEXES = {
@@ -40,6 +42,28 @@ PROOF_INDEXES = {
 
 def _decimal_value(metrics: dict, key: str) -> str:
     return str(metrics.get(key) or "0")
+
+
+def _insert_proofs_resiliently(bind, proof_table: sa.Table, inserts: list[dict]) -> None:
+    """Keep one bad retained proof from taking the service offline.
+
+    The rows are historical evidence recovered from a short-lived diagnostic
+    table.  They must never make the schema migration unavailable.  A nested
+    transaction gives every retained day its own savepoint on both SQLite and
+    PostgreSQL: an integrity/data conflict skips only that day while valid
+    proofs and the e203 schema still commit.
+    """
+    for values in inserts:
+        try:
+            with bind.begin_nested():
+                bind.execute(proof_table.insert().values(**values))
+        except (sa.exc.IntegrityError, sa.exc.DataError) as exc:
+            LOGGER.warning(
+                "Skipping conflicting legacy DGTERA proof connection=%s date=%s: %s",
+                values["connection_id"],
+                values["sales_date"],
+                getattr(exc, "orig", exc),
+            )
 
 
 def _backfill_recent_verified_days(bind, proof_table: sa.Table) -> None:
@@ -147,8 +171,7 @@ def _backfill_recent_verified_days(bind, proof_table: sa.Table) -> None:
             "updated_at": attempted_at,
         })
         existing_keys.add(proof_key)
-    if inserts:
-        bind.execute(proof_table.insert(), inserts)
+    _insert_proofs_resiliently(bind, proof_table, inserts)
 
 
 def upgrade() -> None:
