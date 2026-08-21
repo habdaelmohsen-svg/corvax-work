@@ -45,13 +45,13 @@ logger = logging.getLogger("corvax.auth")
 
 # One-time owner recovery for the August 2026 UAT lockout. Only the SHA-256
 # digest is committed; the high-entropy token is delivered privately to the
-# owner. The token expires, is consumed through the tamper-evident audit log,
-# and can never be used as an application session.
-_ADMIN_RECOVERY_TOKEN_SHA256 = "745c67cd1a6fc1c10edb7f0082eef5ca4c440b3fc564a04730bda170d891327d"
+# owner. The token expires, becomes consumed when the administrator password is
+# changed after its issue time, and can never be used as an application session.
+_ADMIN_RECOVERY_TOKEN_SHA256 = "2d32292c5f50b579f1fe81675d19b88e4f8488410faeeb1279d272c987f7b0bb"
 _ADMIN_RECOVERY_TOKEN_ID = _ADMIN_RECOVERY_TOKEN_SHA256[:16]
-_ADMIN_RECOVERY_ISSUED_AT = datetime(2026, 8, 21, 2, 34, 0)
-_ADMIN_RECOVERY_NOT_AFTER = datetime(2026, 8, 25, 23, 59, 59)
-_ADMIN_RECOVERY_ACTION = "ONE_TIME_ADMIN_RECOVERY_V17_R3"
+_ADMIN_RECOVERY_ISSUED_AT = datetime(2026, 8, 21, 2, 56, 43)
+_ADMIN_RECOVERY_NOT_AFTER = datetime(2026, 8, 26, 23, 59, 59)
+_ADMIN_RECOVERY_ACTION = "ONE_TIME_ADMIN_RECOVERY_V17_R4"
 
 
 class AdminRecoveryIn(BaseModel):

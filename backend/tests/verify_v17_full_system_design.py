@@ -28,7 +28,7 @@ assert 'className="mobile-tabbar"' in shell
 assert 'className="mobile-brand"' in shell
 assert 'className="page-heading-icon"' in shell
 assert "mobilePrimary" in shell
-assert "CORVAX-RC27.4-R9.4-CORE-V17-AUTH-R3-20260821" in shell
+assert "CORVAX-RC27.4-R9.4-CORE-V17-AUTH-R4-20260821" in shell
 
 route_keys = set(re.findall(r"\s+([A-Za-z]+):<", routes))
 assert len(route_keys) >= 45, f"expected the full route catalog, found {len(route_keys)}"
