@@ -20,7 +20,13 @@ type Enrollment = {
   token: string;
 };
 
-type ApiDetail = string | string[] | {
+type ApiDetailItem = string | {
+  msg?: string;
+  message?: string;
+  loc?: Array<string | number>;
+};
+
+type ApiDetail = string | ApiDetailItem[] | {
   message?: string;
   enrollment_required?: boolean;
   secret?: string;
@@ -30,7 +36,9 @@ type ApiDetail = string | string[] | {
 
 function localizedMessage(detail: ApiDetail | undefined, ar: boolean): string {
   const raw = Array.isArray(detail)
-    ? detail.join(' · ')
+    ? detail.map((item) => typeof item === 'string'
+      ? item
+      : String(item.message || item.msg || '')).filter(Boolean).join(' · ')
     : typeof detail === 'object'
       ? String(detail.message || '')
       : String(detail || '');
@@ -49,6 +57,8 @@ function localizedMessage(detail: ApiDetail | undefined, ar: boolean): string {
     ['Password must include a special character', 'يجب أن تحتوي كلمة المرور على رمز خاص مثل ! أو @.'],
     ['Password was used recently', 'تم استخدام كلمة المرور هذه مؤخرًا؛ اختر كلمة مختلفة.'],
     ['New password must differ from the current password', 'يجب أن تختلف كلمة المرور الجديدة عن الحالية.'],
+    ['String should have at least 12 characters', 'يجب ألا تقل كلمة المرور عن 12 حرفًا.'],
+    ['Method Not Allowed', 'هذه نسخة قديمة من شاشة الاستعادة. افتح رابط الاستعادة الجديد ثم حاول مرة أخرى.'],
     ['Rate limit exceeded', 'تمت محاولات كثيرة. انتظر دقيقة واحدة ثم حاول مجددًا.'],
   ];
   const translated = messages.find(([source]) => raw.includes(source));
@@ -80,6 +90,15 @@ export function Login({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const recoveryChecks = [
+    { key: 'length', valid: newPassword.length >= 12, ar: '12 حرفًا على الأقل', en: 'At least 12 characters' },
+    { key: 'upper', valid: /[A-Z]/.test(newPassword), ar: 'حرف إنجليزي كبير A–Z', en: 'An uppercase English letter A-Z' },
+    { key: 'lower', valid: /[a-z]/.test(newPassword), ar: 'حرف إنجليزي صغير a–z', en: 'A lowercase English letter a-z' },
+    { key: 'number', valid: /\d/.test(newPassword), ar: 'رقم واحد على الأقل', en: 'At least one number' },
+    { key: 'symbol', valid: /[^A-Za-z0-9]/.test(newPassword), ar: 'رمز خاص مثل ! أو @', en: 'A symbol such as ! or @' },
+    { key: 'match', valid: confirmPassword.length > 0 && newPassword === confirmPassword, ar: 'التأكيد مطابق تمامًا', en: 'Confirmation matches exactly' },
+  ];
+  const recoveryReady = recoveryChecks.every((check) => check.valid);
 
   function clearRecoveryUrl() {
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
@@ -161,8 +180,9 @@ export function Login({
     event.preventDefault();
     setError('');
     setNotice('');
-    if (newPassword !== confirmPassword) {
-      setError(ar ? 'كلمتا المرور غير متطابقتين.' : 'Passwords do not match.');
+    if (!recoveryReady) {
+      const missing = recoveryChecks.filter((check) => !check.valid).map((check) => ar ? check.ar : check.en);
+      setError(ar ? `كلمة المرور غير مقبولة بعد: ${missing.join('، ')}.` : `Password is not ready: ${missing.join(', ')}.`);
       return;
     }
     setLoading(true);
@@ -173,7 +193,10 @@ export function Login({
         body: JSON.stringify({ token: recoveryToken, new_password: newPassword }),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(localizedMessage(payload.detail, ar));
+      if (!response.ok) {
+        const message = localizedMessage(payload.detail, ar);
+        throw new Error(message || `${ar ? 'تعذر تغيير كلمة المرور' : 'Could not change password'} (HTTP ${response.status}).`);
+      }
       setEmail(String(payload.login || 'admin'));
       setPassword('');
       setNewPassword('');
@@ -201,14 +224,18 @@ export function Login({
         </div>
         <form onSubmit={submitRecovery}>
           <label>{ar ? 'كلمة المرور الجديدة' : 'New password'}
-            <div className="field"><KeyRound size={18}/><input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} type="password" autoComplete="new-password" required/></div>
+            <div className="field"><KeyRound size={18}/><input value={newPassword} onChange={(event) => setNewPassword(event.target.value)} type="password" autoComplete="new-password" autoCapitalize="none" spellCheck={false} minLength={12} maxLength={200} required/></div>
           </label>
           <label>{ar ? 'تأكيد كلمة المرور' : 'Confirm password'}
-            <div className="field"><LockKeyhole size={18}/><input value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} type="password" autoComplete="new-password" required/></div>
+            <div className="field"><LockKeyhole size={18}/><input value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} type="password" autoComplete="new-password" autoCapitalize="none" spellCheck={false} minLength={12} maxLength={200} required/></div>
           </label>
-          <p className="auth-help">{ar ? '12 حرفًا على الأقل، وحرف كبير وصغير، ورقم، ورمز خاص.' : 'At least 12 characters with upper/lower case, a number and a symbol.'}</p>
+          <div className="password-checks" aria-live="polite">
+            {recoveryChecks.map((check) => <span key={check.key} className={check.valid ? 'passed' : ''}>
+              <b>{check.valid ? '✓' : '○'}</b>{ar ? check.ar : check.en}
+            </span>)}
+          </div>
           {error && <div className="error">{error}</div>}
-          <button className="primary-btn" disabled={loading}>{loading ? (ar ? 'جارٍ الحفظ...' : 'Saving...') : (ar ? 'تغيير كلمة المرور وفتح الحساب' : 'Change password and unlock')}<Arrow size={18}/></button>
+          <button className="primary-btn" disabled={loading || !recoveryReady}>{loading ? (ar ? 'جارٍ الحفظ...' : 'Saving...') : (ar ? 'تغيير كلمة المرور وفتح الحساب' : 'Change password and unlock')}<Arrow size={18}/></button>
         </form>
       </>;
     }
