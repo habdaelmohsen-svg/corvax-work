@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import sys
 import time
@@ -37,6 +38,8 @@ from app.models import AuditLog, Company, Role, User, UserCompanyRole
 
 RECOVERY_TOKEN = "test-only-admin-recovery-token-2026-08-21"
 NEW_PASSWORD = "RecoveredAdmin@2026!"
+FAILSAFE_TOKEN = "test-only-admin-recovery-failsafe-2026-08-21"
+FAILSAFE_PASSWORD = "FailsafeAdmin@2026!"
 
 
 def ok(response, status: int = 200):
@@ -45,10 +48,16 @@ def ok(response, status: int = 200):
 
 
 def main() -> None:
+    recovery_source = inspect.getsource(auth_api.recover_admin)
+    assert "PasswordHistory" not in recovery_source
+    assert "UserSession" not in recovery_source
+    assert "with_for_update" in recovery_source
+
     # Keep the deterministic production expiry while making this verification
     # stable when it is rerun after the emergency window has closed.
     auth_api._ADMIN_RECOVERY_TOKEN_SHA256 = hashlib.sha256(RECOVERY_TOKEN.encode()).hexdigest()
     auth_api._ADMIN_RECOVERY_TOKEN_ID = auth_api._ADMIN_RECOVERY_TOKEN_SHA256[:16]
+    auth_api._ADMIN_RECOVERY_ISSUED_AT = utc_now() - timedelta(minutes=10)
     auth_api._ADMIN_RECOVERY_NOT_AFTER = utc_now() + timedelta(minutes=10)
 
     with TestClient(app) as client:
@@ -61,6 +70,7 @@ def main() -> None:
                 email="admin@corvaxplatform.com",
                 username="admin",
                 password_hash=hash_password("OldAdmin@2026!"),
+                password_changed_at=utc_now() - timedelta(days=1),
                 active=True,
                 failed_login_attempts=4,
                 locked_until=utc_now() + timedelta(minutes=15),
@@ -101,6 +111,7 @@ def main() -> None:
             assert admin.failed_login_attempts == 0
             assert admin.locked_until is None
             assert admin.mfa_enabled is False and admin.mfa_secret is None
+            assert admin.token_version == 2
             assert db.scalar(select(func.count(AuditLog.id)).where(
                 AuditLog.action == auth_api._ADMIN_RECOVERY_ACTION
             )) == 1
@@ -136,6 +147,33 @@ def main() -> None:
         }))
         assert logged_in["user"]["mfa_enabled"] is True
         assert logged_in["user"]["username"] == "admin"
+
+        # PostgreSQL/UAT has previously contained partial auxiliary schema.
+        # Prove an audit-table failure can no longer roll back the essential
+        # users-table password change.
+        original_write_audit = auth_api.write_audit
+        auth_api._ADMIN_RECOVERY_TOKEN_SHA256 = hashlib.sha256(FAILSAFE_TOKEN.encode()).hexdigest()
+        auth_api._ADMIN_RECOVERY_TOKEN_ID = auth_api._ADMIN_RECOVERY_TOKEN_SHA256[:16]
+        auth_api._ADMIN_RECOVERY_ACTION = "ONE_TIME_ADMIN_RECOVERY_FAILSAFE_TEST"
+        auth_api._ADMIN_RECOVERY_ISSUED_AT = utc_now()
+
+        def fail_auxiliary_audit(*_args, **_kwargs):
+            raise RuntimeError("simulated auxiliary audit schema drift")
+
+        auth_api.write_audit = fail_auxiliary_audit
+        try:
+            failsafe = ok(client.post("/api/v1/auth/recover-admin", json={
+                "token": FAILSAFE_TOKEN,
+                "new_password": FAILSAFE_PASSWORD,
+            }))
+            assert failsafe["status"] == "recovered"
+        finally:
+            auth_api.write_audit = original_write_audit
+
+        with SessionLocal() as db:
+            admin = db.scalar(select(User).where(User.username == "admin"))
+            assert admin and verify_password(FAILSAFE_PASSWORD, admin.password_hash)
+            assert admin.token_version == 3
 
     print("Admin recovery, unlock and mandatory MFA enrolment: PASSED")
     DB_PATH.unlink(missing_ok=True)

@@ -194,8 +194,11 @@ export function Login({
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const message = localizedMessage(payload.detail, ar);
-        throw new Error(message || `${ar ? 'تعذر تغيير كلمة المرور' : 'Could not change password'} (HTTP ${response.status}).`);
+        const requestId = response.headers.get('X-Request-ID') || '';
+        const message = payload.detail !== undefined
+          ? localizedMessage(payload.detail, ar)
+          : `${ar ? 'فشل داخلي في الخادم' : 'Internal server failure'} (HTTP ${response.status})${requestId ? ` · ${ar ? 'رقم التتبع' : 'Request ID'}: ${requestId}` : ''}.`;
+        throw new Error(message);
       }
       setEmail(String(payload.login || 'admin'));
       setPassword('');
