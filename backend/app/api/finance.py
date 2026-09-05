@@ -12,13 +12,12 @@ from app.core.time import utc_now
 from app.db import get_db
 from app.dependencies import ensure_permission, get_current_user, branch_scope_condition
 from app.models import (
-    Account, Branch, Company, CostCenter, DgteraConnection, DgteraSalesOrder,
+    Account, Branch, Company, CostCenter,
     FiscalPeriod, FiscalYear, JournalEntry, JournalLine, User,
 )
 from app.schemas.finance import JournalCreate, JournalLineOut, JournalOut
 from app.services.audit import write_audit
 from app.services.posting import next_journal_number
-from app.services import dgtera_sales_sync
 
 router = APIRouter(prefix="/finance", tags=["financial engine"])
 POSTED_STATUSES = ("POSTED", "REVERSED")
@@ -473,69 +472,6 @@ def sum_groups(rows: list[dict], groups: set[str]) -> Decimal:
     return sum((natural_amount(row) for row in rows if row["statement_group"] in groups), Decimal("0"))
 
 
-def verified_dgtera_revenue_source(
-    db: Session,
-    company_id: int,
-    start_date: date,
-    end_date: date,
-) -> dict | None:
-    """Return the authoritative net-sales value for restaurant management P&L.
-
-    The holding workspace is a view of the same source connection, not a second
-    accounting entity.  If journal posting is still pending because a period is
-    closed, the management P&L can show the verified source value transparently
-    without pretending that it came from the posted ledger.
-    """
-    company = db.get(Company, company_id)
-    if not company or str(company.company_type or "").upper() not in {"HOLDING", "RESTAURANT"}:
-        return None
-    connection = db.scalar(select(DgteraConnection).where(
-        DgteraConnection.company_id == company_id,
-        DgteraConnection.active.is_(True),
-    ))
-    if connection is None:
-        linked_type = "RESTAURANT" if str(company.company_type).upper() == "HOLDING" else "HOLDING"
-        connection = db.scalar(select(DgteraConnection).join(
-            Company, Company.id == DgteraConnection.company_id,
-        ).where(
-            Company.company_type == linked_type,
-            Company.active.is_(True),
-            DgteraConnection.active.is_(True),
-        ).order_by(DgteraConnection.id))
-    if connection is None:
-        return None
-    evidence = dgtera_sales_sync.strict_range_reconciliation_evidence(
-        db, connection, start_date, end_date
-    )
-    coverage = dgtera_sales_sync.strict_range_coverage_status(
-        db, connection, start_date, end_date
-    )
-    complete = bool(evidence.get("verified_from_live_source") and evidence.get("matched"))
-    totals = db.execute(select(
-        func.count(DgteraSalesOrder.id),
-        func.coalesce(func.sum(DgteraSalesOrder.subtotal), 0),
-        func.coalesce(func.sum(DgteraSalesOrder.vat_amount), 0),
-        func.coalesce(func.sum(DgteraSalesOrder.total), 0),
-    ).where(
-        DgteraSalesOrder.connection_id == connection.id,
-        DgteraSalesOrder.sales_date >= start_date,
-        DgteraSalesOrder.sales_date <= end_date,
-    )).one()
-    return {
-        "required": True,
-        "complete": complete,
-        "connection_id": connection.id,
-        "connection_company_id": connection.company_id,
-        "orders": int(totals[0] or 0) if complete else None,
-        "net_sales": Decimal(totals[1] or 0) if complete else None,
-        "vat": Decimal(totals[2] or 0) if complete else None,
-        "gross_sales": Decimal(totals[3] or 0) if complete else None,
-        "verification_hash": evidence.get("verification_hash") if complete else None,
-        "first_missing_date": coverage.get("first_missing_date"),
-        "proof_mode": evidence.get("proof_mode"),
-    }
-
-
 def sum_account_codes(rows: list[dict], codes: set[str]) -> Decimal:
     """Return the natural balance of a controlled set of posting accounts.
 
@@ -582,30 +518,9 @@ def financial_statements(
     cumulative_rows = account_balances(db, company_id, end_date)
 
     ledger_revenue = sum_groups(period_rows, {"OPERATING_REVENUE"})
-    sales_revenue_source = verified_dgtera_revenue_source(
-        db, company_id, start_date, end_date
-    )
-    # DGTERA is the authoritative restaurant-sales source.  Replace rather
-    # than add, so a manually posted or previously imported sale can never be
-    # counted twice.  The ledger value and difference remain explicit for
-    # accounting follow-up and audit.
-    revenue = (
-        Decimal(sales_revenue_source["net_sales"])
-        if sales_revenue_source and sales_revenue_source["complete"]
-        else ledger_revenue
-    )
-    if sales_revenue_source:
-        sales_revenue_source["ledger_revenue"] = ledger_revenue
-        sales_revenue_source["unposted_difference"] = (
-            revenue - ledger_revenue if sales_revenue_source["complete"] else None
-        )
-        sales_revenue_source["reporting_basis"] = (
-            "POSTED_LEDGER_RECONCILED_TO_DGTERA"
-            if sales_revenue_source["complete"] and revenue == ledger_revenue
-            else "VERIFIED_DGTERA_MANAGEMENT_OVERRIDE"
-            if sales_revenue_source["complete"]
-            else "INCOMPLETE_DGTERA_HISTORY_LEDGER_ONLY"
-        )
+    # All statements use the same posted ledger as the trial balance.
+    sales_revenue_source = None
+    revenue = ledger_revenue
     other_income = sum_groups(period_rows, {"OTHER_INCOME"})
     cost_of_revenue = sum_groups(period_rows, {"COST_OF_REVENUE"})
     operating_expenses = sum_groups(period_rows, {"OPERATING_EXPENSES"})

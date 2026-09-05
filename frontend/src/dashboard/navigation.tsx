@@ -48,7 +48,6 @@ export const navItems: NavItem[] = [
   { key: 'inventoryTraceability', ar: 'تتبع المخزون والشحنات', en: 'Inventory Traceability', icon: Boxes, scope: allScopes, group: 'procurement' },
   { key: 'operationalControls', ar: 'الاستيراد والجمارك والتكلفة', en: 'Import, Customs & Costing', icon: FileCheck2, scope: allScopes, group: 'procurement' },
   { key: 'sales', ar: 'المبيعات', en: 'Sales', icon: ShoppingCart, scope: allScopes, requires: ['subledgers'] , group: 'sales' },
-  { key: 'dgtera', ar: 'مبيعات DGTERA', en: 'DGTERA Sales', icon: DatabaseZap, scope: ['holding', 'restaurant'], requires: ['pos'], group: 'sales' },
   { key: 'purchases', ar: 'المشتريات', en: 'Purchases', icon: ShoppingCart, scope: allScopes, group: 'procurement', requires: ['subledgers'] },
   { key: 'maintenance', ar: 'الصيانة', en: 'Maintenance', icon: Wrench, scope: allScopes, group: 'operations', requires: ['maintenance'] },
   { key: 'fleet', ar: 'اللوجستيك وحركة السيارات', en: 'Logistics & Fleet', icon: Truck, scope: allScopes, group: 'operations', requires: ['fleet'] },

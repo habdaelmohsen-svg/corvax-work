@@ -59,7 +59,7 @@ services:
       - key: ENFORCE_SENSITIVE_ROLE_MFA
         value: true
       - key: DGTERA_SCHEDULER_ENABLED
-        value: true
+        value: false
       - key: DGTERA_SCHEDULER_POLL_SECONDS
         value: 60
       - key: DGTERA_HISTORY_DAYS_PER_CYCLE

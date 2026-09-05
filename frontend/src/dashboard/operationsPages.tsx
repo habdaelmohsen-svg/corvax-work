@@ -111,7 +111,7 @@ export function RestaurantPage({ ar, companyId }: { ar: boolean; companyId:numbe
 
   const safeJson=async(url:string,fallback:any)=>{
     const response=await fetch(url,{headers:authHeaders()});
-    if(!response.ok)return fallback;
+    if(!response.ok)throw new Error(`${ar?"تعذر تحميل بيانات المطعم":"Restaurant data could not be loaded"} (${response.status})`);
     const body=await response.json();
     return body;
   };

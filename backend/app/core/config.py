@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "CORVAX — The Core Business Platform"
     app_version: str = "1.0.0-agreement-completion-rc27.4-r9.4"
-    release_id: str = "CORVAX-RC27.4-R9.4-CORE-V17-AUTH-R4-20260821"
+    release_id: str = "CORVAX-RC27.4-R9.4-CORE-V17-STANDALONE-R1-20260905"
     # Render injects RENDER_GIT_COMMIT for every deployment.  Keeping it in the
     # runtime release contract lets the UI show the exact deployed revision
     # instead of a hard-coded label that can survive an old browser cache.
@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     dgtera_max_orders_per_sync: int = 10000
     dgtera_max_order_lines_per_sync: int = 100000
     dgtera_max_payments_per_sync: int = 50000
-    dgtera_scheduler_enabled: bool = True
+    dgtera_scheduler_enabled: bool = False
     dgtera_scheduler_poll_seconds: int = 60
     # Historical imports are intentionally drained in small, independently
     # committed business-day units.  A web process must remain responsive
