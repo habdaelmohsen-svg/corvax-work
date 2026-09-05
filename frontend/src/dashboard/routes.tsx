@@ -27,7 +27,6 @@ const InventoryPage = lazy(() => import('./inventoryRealPage').then((module) => 
 const InventoryTraceabilityPage = lazy(() => import('./inventoryTraceabilityPage').then((module) => ({default: module.InventoryTraceabilityPage})));
 const OperationalControlsPage = lazy(() => import('./operationalControlsPage').then((module) => ({default: module.OperationalControlsPage})));
 const SalesPage = lazy(() => import('./salesPage').then((module) => ({default: module.SalesPage})));
-const DgteraIntegrationPage = lazy(() => import('./dgteraIntegrationPage').then((module) => ({default: module.DgteraIntegrationPage})));
 const PurchasesPage = lazy(() => import('./purchasesPage').then((module) => ({default: module.PurchasesPage})));
 const MaintenancePage = lazy(() => import('./maintenancePage').then((module) => ({default: module.MaintenancePage})));
 const FleetPage = lazy(() => import('./fleetPage').then((module) => ({default: module.FleetPage})));
@@ -40,7 +39,7 @@ const ItemsPage = lazy(() => import('./itemsPage').then((module) => ({default: m
 const UsersPage = lazy(() => import('./usersPage').then((module) => ({default: module.UsersPage})));
 const ReportsCenterPage = lazy(() => import('./reportsCenterPage').then((module) => ({default: module.ReportsCenterPage})));
 const GymPage = lazy(() => import('./gymRealPage').then((module) => ({default: module.GymPage})));
-const RestaurantPage = lazy(() => import('./restaurantRealPage').then((module) => ({default: module.RestaurantPage})));
+const RestaurantPage = lazy(() => import('./operationsPages').then((module) => ({default: module.RestaurantPage})));
 const ManufacturingPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.ManufacturingPage})));
 const QualityPage = lazy(() => import('./operationsRealPages').then((module) => ({default: module.QualityPage})));
 const FoodSafetyPage = lazy(() => import('./foodSafetyRealPage').then((module) => ({default: module.FoodSafetyPage})));
@@ -60,7 +59,6 @@ export function DashboardRoutes({ar, companyId, scope, view, onNavigate}: {ar: b
     budget:<BudgetPage ar={ar} companyId={companyId}/>, transactions:<ManualJournalsPage ar={ar} companyId={companyId}/>,
     inventory:<InventoryPage ar={ar} companyId={companyId}/>, inventoryTraceability:<InventoryTraceabilityPage ar={ar} companyId={companyId}/>,
     operationalControls:<OperationalControlsPage ar={ar} companyId={companyId}/>, sales:<SalesPage ar={ar} companyId={companyId}/>,
-    dgtera:<DgteraIntegrationPage ar={ar} companyId={companyId}/>,
     purchases:<PurchasesPage ar={ar} companyId={companyId}/>, maintenance:<MaintenancePage ar={ar} companyId={companyId}/>,
     fleet:<FleetPage ar={ar} companyId={companyId}/>, legal:<LegalPage ar={ar} companyId={companyId}/>,
     cipProjects:<CipProjectsPage ar={ar} companyId={companyId}/>, manualJournals:<ManualJournalsPage ar={ar} companyId={companyId}/>,

@@ -236,13 +236,7 @@ class Odoo14Client:
     """Minimal JSON-RPC client. The API key is used as the Odoo password."""
 
     def __init__(self, *, base_url: str, database: str, login: str, api_key: str):
-        self.base_url = validate_dgtera_url(base_url)
-        self.database = database
-        self.login = login
-        self.api_key = api_key
-        self.uid: int | None = None
-        self._rpc_id = 0
-        self._field_cache: dict[str, dict[str, dict[str, object]]] = {}
+        raise DgteraRemoteError("DGTERA integration has been permanently retired")
 
     @property
     def endpoint(self) -> str:

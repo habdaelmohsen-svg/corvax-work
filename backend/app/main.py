@@ -71,7 +71,6 @@ from app.api.excise_tax import router as excise_tax_router
 from app.api.zakat_income_tax import router as zakat_income_tax_router
 from app.api.internal_completion import router as internal_completion_router
 from app.api.ai_assistant import router as ai_assistant_router
-from app.api.dgtera_integration import router as dgtera_integration_router
 from app.core.config import settings
 from app.core.migration_head import expected_migration_head
 from app.core.middleware import RateLimitMiddleware, RequestContextMiddleware
@@ -99,18 +98,8 @@ async def lifespan(_: FastAPI):
 
         with SessionLocal() as db:
             bootstrap_first_admin(db)
-    dgtera_task = None
-    if settings.dgtera_scheduler_enabled:
-        from app.workers.dgtera_daily_sync import scheduler_loop
-
-        dgtera_task = asyncio.create_task(scheduler_loop(), name="dgtera-daily-sales-sync")
-    try:
-        yield
-    finally:
-        if dgtera_task:
-            dgtera_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await dgtera_task
+    # The external sales integration has been retired.
+    yield
 
 
 app = FastAPI(
@@ -196,7 +185,6 @@ app.include_router(workspace_router, prefix="/api/v1")
 app.include_router(operational_controls_router, prefix="/api/v1")
 app.include_router(internal_completion_router, prefix="/api/v1")
 app.include_router(ai_assistant_router, prefix="/api/v1")
-app.include_router(dgtera_integration_router, prefix="/api/v1")
 
 
 @app.get("/health")
@@ -246,11 +234,11 @@ def readiness() -> dict:
         "database": "reachable",
         "migration_head": current_head,
         "dgtera": {
-            "scheduler_enabled": settings.dgtera_scheduler_enabled,
+            "scheduler_enabled": False,
             "poll_seconds": settings.dgtera_scheduler_poll_seconds,
             "sync_interval_minutes": 2,
             "history_days_per_cycle": settings.dgtera_history_days_per_cycle,
-            "durable_daily_proof": True,
+            "retired": True,
         },
     }
 
